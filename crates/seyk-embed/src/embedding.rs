@@ -2,34 +2,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
-/// Output dimensions supported by Matryoshka-trained models such as EmbeddingGemma 2.
-///
-/// Smaller dimensions keep the leading components of the full vector and are
-/// re-normalised afterwards. Queries and resources must always share a dimension.
+/// A nonzero embedding width, independent of any model's supported dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "usize", try_from = "usize")]
-pub enum Dimension {
-    D128,
-    D256,
-    D512,
-    D768,
-}
+pub struct Dimension(usize);
 
 impl Dimension {
-    pub const ALL: [Dimension; 4] = [Self::D128, Self::D256, Self::D512, Self::D768];
-
+    pub const D128: Self = Self(128);
+    pub const D256: Self = Self(256);
+    pub const D512: Self = Self(512);
+    pub const D768: Self = Self(768);
+    /// Common Matryoshka widths. Individual backends validate their own support.
+    pub const ALL: [Self; 4] = [Self::D128, Self::D256, Self::D512, Self::D768];
     pub fn get(self) -> usize {
-        match self {
-            Self::D128 => 128,
-            Self::D256 => 256,
-            Self::D512 => 512,
-            Self::D768 => 768,
-        }
+        self.0
     }
 }
 
-/// 256 is close to lossless on the official MTEB/MIEB numbers (60.41 vs 61.36
-/// multilingual MTEB at 768) while storing a third of the bytes.
+/// The historical default width; backends may choose a different default.
 impl Default for Dimension {
     fn default() -> Self {
         Self::D256
@@ -46,14 +36,11 @@ impl TryFrom<usize> for Dimension {
     type Error = Error;
 
     fn try_from(value: usize) -> Result<Self> {
-        Dimension::ALL
-            .into_iter()
-            .find(|d| d.get() == value)
-            .ok_or_else(|| {
-                Error::Config(format!(
-                    "unsupported dimension {value}; use 128, 256, 512 or 768"
-                ))
-            })
+        if value == 0 {
+            Err(Error::Config("embedding dimension must be nonzero".into()))
+        } else {
+            Ok(Self(value))
+        }
     }
 }
 
@@ -74,7 +61,8 @@ impl std::str::FromStr for Dimension {
     }
 }
 
-/// A unit-length embedding vector.
+/// A finite vector, truncated and L2-normalized on construction.
+/// A zero vector remains zero and reports `normalized() == false`.
 ///
 /// Constructed only through [`Embedding::from_raw`], which truncates and
 /// L2-normalises, so cosine similarity reduces to a dot product.
@@ -112,6 +100,17 @@ impl Embedding {
         self.0.len()
     }
 
+    /// Width derived from the vector, never duplicated mutable metadata.
+    pub fn dimension(&self) -> usize {
+        self.dim()
+    }
+
+    /// Whether this vector has unit L2 norm (within 1e-5).
+    pub fn normalized(&self) -> bool {
+        let norm = self.0.iter().map(|v| v * v).sum::<f32>().sqrt();
+        norm.is_finite() && (norm - 1.0).abs() < 1e-5
+    }
+
     pub fn into_vec(self) -> Vec<f32> {
         self.0
     }
@@ -122,6 +121,7 @@ impl Embedding {
     }
 }
 
+// Preserve the historical model-output arithmetic and cached vector bytes.
 pub(crate) fn l2_normalize(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
@@ -148,16 +148,56 @@ pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     acc.iter().sum::<f32>() + tail
 }
 
-pub(crate) fn to_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+/// Dot product. Unequal dimensions are errors, including in release builds.
+pub fn dot_product(a: &[f32], b: &[f32]) -> Result<f32> {
+    if a.len() != b.len() {
+        return Err(Error::DimensionMismatch {
+            expected: a.len(),
+            actual: b.len(),
+        });
+    }
+    let value = dot(a, b);
+    if !value.is_finite() {
+        return Err(Error::Embedding("non-finite dot product".into()));
+    }
+    Ok(value)
 }
 
-pub(crate) fn from_bytes(b: &[u8]) -> Vec<f32> {
-    b.as_chunks::<4>()
-        .0
+/// Cosine similarity, including for vectors deserialized without normalization.
+/// Zero vectors have no cosine and return an error.
+pub fn cosine_similarity(a: &Embedding, b: &Embedding) -> Result<f32> {
+    let product = dot_product(a.as_slice(), b.as_slice())?;
+    let norm_a = a.as_slice().iter().map(|v| v * v).sum::<f32>().sqrt();
+    let norm_b = b.as_slice().iter().map(|v| v * v).sum::<f32>().sqrt();
+    let denominator = norm_a * norm_b;
+    if denominator == 0.0 || !denominator.is_finite() {
+        return Err(Error::Embedding(
+            "cosine requires finite nonzero norms".into(),
+        ));
+    }
+    Ok(product / denominator)
+}
+
+/// L2-normalize in place using f64 accumulation to avoid f32 overflow/underflow.
+/// Zero (including empty) and non-finite inputs fail without modifying the input.
+pub fn normalize(values: &mut [f32]) -> Result<()> {
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(Error::Embedding(
+            "cannot normalize non-finite values".into(),
+        ));
+    }
+    let norm = values
         .iter()
-        .map(|c| f32::from_le_bytes(*c))
-        .collect()
+        .map(|&v| f64::from(v).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 {
+        return Err(Error::Embedding("cannot normalize a zero vector".into()));
+    }
+    for value in values {
+        *value = (f64::from(*value) / norm) as f32;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,14 +229,9 @@ mod tests {
     }
 
     #[test]
-    fn byte_roundtrip() {
-        let v = vec![0.5, -1.25, 3.0];
-        assert_eq!(from_bytes(&to_bytes(&v)), v);
-    }
-
-    #[test]
     fn dimension_parse() {
         assert_eq!("512".parse::<Dimension>().unwrap(), Dimension::D512);
-        assert!("300".parse::<Dimension>().is_err());
+        assert_eq!("300".parse::<Dimension>().unwrap().get(), 300);
+        assert!("0".parse::<Dimension>().is_err());
     }
 }

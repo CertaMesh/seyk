@@ -503,7 +503,7 @@ mod tests {
     struct WordHash(ModelIdentity);
 
     impl WordHash {
-        fn vector(&self, text: &str) -> seyk::Result<Embedding> {
+        fn vector(&self, text: &str) -> seyk_embed::Result<Embedding> {
             let mut v = vec![0.0; 128];
             for w in text.split_whitespace() {
                 v[blake3::hash(w.to_lowercase().as_bytes()).as_bytes()[0] as usize % 128] += 1.0;
@@ -519,15 +519,44 @@ mod tests {
         fn supports(&self, m: Modality) -> bool {
             m == Modality::Text
         }
-        fn embed_query(&self, q: &str) -> seyk::Result<Embedding> {
+        fn embed_query(&self, q: &str) -> seyk_embed::Result<Embedding> {
             self.vector(q)
         }
-        fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> seyk::Result<Vec<Embedding>> {
+        fn embed_resources(
+            &self,
+            inputs: &[ResourceInput<'_>],
+        ) -> seyk_embed::Result<Vec<Embedding>> {
             inputs
                 .iter()
                 .map(|i| match i {
                     ResourceInput::Text { text, .. } => self.vector(text),
                     _ => unreachable!(),
+                })
+                .collect()
+        }
+
+        fn embed_batch(
+            &self,
+            requests: &[seyk_embed::EmbeddingRequest<'_>],
+        ) -> seyk_embed::Result<Vec<Embedding>> {
+            if requests
+                .iter()
+                .all(|r| r.task == seyk_embed::EmbeddingTask::SearchDocument)
+            {
+                let inputs: Vec<_> = requests.iter().map(|r| r.input.clone()).collect();
+                return self.embed_resources(&inputs);
+            }
+            requests
+                .iter()
+                .map(|r| match &r.input {
+                    ResourceInput::Text { text, .. }
+                        if r.task == seyk_embed::EmbeddingTask::SearchQuery =>
+                    {
+                        self.embed_query(text)
+                    }
+                    _ => self
+                        .embed_resources(std::slice::from_ref(&r.input))
+                        .map(|mut v| v.remove(0)),
                 })
                 .collect()
         }

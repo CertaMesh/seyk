@@ -6,8 +6,8 @@
 mod model_support;
 
 use serde::Deserialize;
-use seyk::embedder::gemma::{GemmaEmbedder, Precision};
-use seyk::{Dimension, Embedder};
+use seyk_embed::{Dimension, Embedder};
+use seyk_embeddinggemma::{GemmaEmbedder, Precision};
 
 #[derive(Deserialize)]
 struct Item {
@@ -33,6 +33,7 @@ fn min_cosine() -> f32 {
         Precision::Fp32 => 0.999,
         // The export reports worst-case cosine 0.9997 for q8 against fp32.
         Precision::Q8 => 0.995,
+        precision => panic!("no parity threshold for {precision:?}"),
     }
 }
 
@@ -99,7 +100,7 @@ fn batching_does_not_change_vectors() {
     let inputs: Vec<_> = r
         .docs
         .iter()
-        .map(|d| seyk::ResourceInput::Text {
+        .map(|d| seyk_embed::ResourceInput::Text {
             title: d.title.as_deref(),
             text: &d.text,
         })

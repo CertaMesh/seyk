@@ -1,16 +1,8 @@
-//! The embedding backend abstraction.
-//!
-//! The search engine only talks to [`Embedder`]. EmbeddingGemma 2 is one
-//! implementation; another backend can be plugged in without touching search code.
-
-#[cfg(feature = "onnx")]
-pub mod gemma;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{Dimension, Embedding, Modality, Result};
+use crate::{Dimension, Embedding, EmbeddingTask, Modality, Result};
 
-/// Something to embed as a searchable resource (the "document" side of retrieval).
+/// A borrowed input to embed. The request selects its task independently.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ResourceInput<'a> {
@@ -71,29 +63,57 @@ pub struct ModelIdentity {
     pub max_tokens: usize,
 }
 
-/// A backend that maps queries and resources into one shared vector space.
+/// One borrowed input and its embedding purpose.
+#[derive(Debug, Clone)]
+pub struct EmbeddingRequest<'a> {
+    pub input: ResourceInput<'a>,
+    pub task: EmbeddingTask,
+}
+
+/// Synchronous, task-aware local embedding interface.
+/// Successful batches return one result per request, in input order.
+/// Async callers can use their executor's blocking pool.
 pub trait Embedder: Send + Sync {
     fn identity(&self) -> &ModelIdentity;
-
     fn dimension(&self) -> Dimension {
         self.identity().dimension
     }
-
-    /// Whether [`Embedder::embed_resources`] accepts inputs of this modality.
     fn supports(&self, modality: Modality) -> bool;
+    fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>>;
 
-    /// Embed a natural-language search query (the "query" side of retrieval).
-    fn embed_query(&self, query: &str) -> Result<Embedding>;
-
-    /// Embed searchable resources. Returns one embedding per input, in order.
-    ///
-    /// Implementations should batch internally; callers may pass many inputs.
-    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>>;
-
+    fn embed(&self, input: ResourceInput<'_>, task: EmbeddingTask) -> Result<Embedding> {
+        let mut out = self.embed_batch(&[EmbeddingRequest { input, task }])?;
+        if out.len() != 1 {
+            return Err(crate::Error::Embedding(
+                "embedder returned the wrong number of vectors".into(),
+            ));
+        }
+        Ok(out.remove(0))
+    }
+    fn embed_text(&self, text: &str, task: EmbeddingTask) -> Result<Embedding> {
+        self.embed(ResourceInput::Text { title: None, text }, task)
+    }
+    /// Retrieval convenience adapter.
+    fn embed_query(&self, query: &str) -> Result<Embedding> {
+        self.embed_text(query, EmbeddingTask::SearchQuery)
+    }
+    /// Retrieval convenience adapter. Text titles are preserved.
+    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+        let requests: Vec<_> = inputs
+            .iter()
+            .cloned()
+            .map(|input| EmbeddingRequest {
+                input,
+                task: EmbeddingTask::SearchDocument,
+            })
+            .collect();
+        self.embed_batch(&requests)
+    }
     fn embed_text_document(&self, title: Option<&str>, text: &str) -> Result<Embedding> {
-        let mut out = self.embed_resources(&[ResourceInput::Text { title, text }])?;
-        out.pop()
-            .ok_or_else(|| crate::Error::Embedding("embedder returned no vectors".into()))
+        self.embed(
+            ResourceInput::Text { title, text },
+            EmbeddingTask::SearchDocument,
+        )
     }
 }
 
@@ -104,14 +124,28 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)
     }
+    fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
+        (**self).embed_batch(requests)
+    }
+    fn dimension(&self) -> Dimension {
+        (**self).dimension()
+    }
+    fn embed(&self, input: ResourceInput<'_>, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed(input, task)
+    }
+    fn embed_text(&self, text: &str, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed_text(text, task)
+    }
     fn embed_query(&self, query: &str) -> Result<Embedding> {
         (**self).embed_query(query)
     }
     fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
         (**self).embed_resources(inputs)
     }
+    fn embed_text_document(&self, title: Option<&str>, text: &str) -> Result<Embedding> {
+        (**self).embed_text_document(title, text)
+    }
 }
-
 impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     fn identity(&self) -> &ModelIdentity {
         (**self).identity()
@@ -119,10 +153,25 @@ impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)
     }
+    fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
+        (**self).embed_batch(requests)
+    }
+    fn dimension(&self) -> Dimension {
+        (**self).dimension()
+    }
+    fn embed(&self, input: ResourceInput<'_>, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed(input, task)
+    }
+    fn embed_text(&self, text: &str, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed_text(text, task)
+    }
     fn embed_query(&self, query: &str) -> Result<Embedding> {
         (**self).embed_query(query)
     }
     fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
         (**self).embed_resources(inputs)
+    }
+    fn embed_text_document(&self, title: Option<&str>, text: &str) -> Result<Embedding> {
+        (**self).embed_text_document(title, text)
     }
 }

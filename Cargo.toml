@@ -1,6 +1,17 @@
+[workspace]
+members = [".", "crates/seyk-embed", "crates/seyk-embeddinggemma", "crates/seyk-core"]
+default-members = ["."]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+
 [package]
 name = "seyk"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.89"
 description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"
@@ -11,35 +22,21 @@ categories = ["command-line-utilities", "text-processing"]
 
 [features]
 default = ["onnx", "image", "cli", "mcp", "watch"]
-# EmbeddingGemma 2 inference through ONNX Runtime.
-onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
-# Image resources (needs `onnx` for inference).
-image = ["dep:image", "dep:fast_image_resize"]
-# The `seyk` binary. Library consumers can disable this.
-cli = ["dep:clap", "dep:anyhow"]
-# `seyk mcp`: a stdio MCP server that keeps the model loaded between searches.
+onnx = ["dep:seyk-embeddinggemma", "dep:hf-hub"]
+image = ["seyk-embeddinggemma?/image"]
+cli = ["onnx", "dep:clap", "dep:anyhow"]
 mcp = ["cli", "watch", "dep:rmcp", "dep:tokio", "dep:schemars"]
-# Keep an index fresh as files change (`index --watch`).
-watch = ["dep:notify"]
+watch = ["seyk-core/watch"]
 
 [dependencies]
-thiserror = "2"
+seyk-core = { path = "crates/seyk-core", version = "0.1.0" }
+seyk-embed = { path = "crates/seyk-embed", version = "0.1.0" }
+seyk-embeddinggemma = { path = "crates/seyk-embeddinggemma", version = "0.1.0", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
-walkdir = "2"
-globset = "0.4"
-notify = { version = "8", optional = true }
 dirs = "6"
-url = "2.5.8"
-
-ort = { version = "=2.0.0-rc.13", optional = true }
-tokenizers = { version = "0.23", optional = true, default-features = false, features = ["onig"] }
 hf-hub = { version = "0.4", optional = true, default-features = false, features = ["ureq", "rustls-tls"] }
-image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
-fast_image_resize = { version = "5", optional = true }
-
 clap = { version = "4", optional = true, features = ["derive", "env", "wrap_help"] }
 anyhow = { version = "1", optional = true }
 rmcp = { version = "3.5", optional = true, default-features = false, features = ["server", "macros", "transport-io"] }
@@ -47,8 +44,9 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros
 schemars = { version = "1", optional = true }
 
 [dev-dependencies]
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tempfile = "3"
-criterion = { version = "0.8", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 assert_cmd = "2"
 predicates = "3"
 
@@ -60,10 +58,6 @@ libc = "0.2"
 name = "seyk"
 path = "src/bin/seyk/main.rs"
 required-features = ["cli"]
-
-[[bench]]
-name = "similarity"
-harness = false
 
 [[example]]
 name = "bench_model"

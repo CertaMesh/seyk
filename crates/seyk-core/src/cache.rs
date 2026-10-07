@@ -49,10 +49,6 @@ pub struct CachedSegment {
     pub heading: Option<String>,
     /// Hash of the exact model input for this segment.
     pub input_hash: String,
-    /// Text for the keyword index. Write-only: it is indexed on `put_resource`
-    /// and always `None` when read back, so the cache holds no readable copy.
-    #[serde(skip)]
-    pub lexical_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +58,31 @@ pub struct CachedResource {
     /// Preparation descriptor hash; absent for migrated legacy entries.
     pub descriptor_hash: Option<String>,
     pub segments: Vec<CachedSegment>,
+}
+
+/// Transient keyword input paired with the segment evidence it describes.
+/// The cache consumes the body for indexing and never stores it as source text.
+#[derive(Debug, Clone)]
+pub struct SegmentWrite<'a> {
+    pub segment: &'a CachedSegment,
+    pub lexical_body: &'a str,
+}
+
+/// Explicit ingestion input. Readback evidence alone cannot replace keyword data.
+///
+/// ```compile_fail
+/// use seyk_core::{EmbeddingCache, ResourceId, Result};
+/// use seyk_core::cache::CachedResource;
+/// fn rewrite(cache: &mut dyn EmbeddingCache, id: &ResourceId, read: &CachedResource) -> Result<()> {
+///     cache.put_resource("profile", id, read)
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ResourceWrite<'a> {
+    pub metadata: &'a ResourceMetadata,
+    pub version: &'a ResourceVersion,
+    pub descriptor_hash: Option<&'a str>,
+    pub segments: Vec<SegmentWrite<'a>>,
 }
 
 /// Resource metadata and the provider token used to index it.
@@ -128,7 +149,7 @@ pub trait EmbeddingCache: Send {
         &mut self,
         profile: &str,
         path: &ResourceId,
-        resource: &CachedResource,
+        resource: &ResourceWrite<'_>,
     ) -> Result<()>;
 
     /// Update metadata and version when content is unchanged.
@@ -227,14 +248,20 @@ impl EmbeddingCache for MemoryCache {
         &mut self,
         profile: &str,
         path: &ResourceId,
-        resource: &CachedResource,
+        resource: &ResourceWrite<'_>,
     ) -> Result<()> {
         let docs = lexical_docs(path, resource);
         // Like SQLite, keep no readable text: it is indexed, then dropped.
-        let mut stored = resource.clone();
-        for s in &mut stored.segments {
-            s.lexical_text = None;
-        }
+        let stored = CachedResource {
+            metadata: resource.metadata.clone(),
+            version: resource.version.clone(),
+            descriptor_hash: resource.descriptor_hash.map(str::to_owned),
+            segments: resource
+                .segments
+                .iter()
+                .map(|s| s.segment.clone())
+                .collect(),
+        };
         self.resources
             .entry(profile.to_string())
             .or_default()
@@ -404,19 +431,12 @@ impl EmbeddingCache for MemoryCache {
 }
 
 /// One keyword-index document per segment: file name, path, heading and text.
-fn lexical_docs(path: &ResourceId, resource: &CachedResource) -> Vec<LexicalDoc> {
+fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalDoc> {
     let (name, full) = path.labels();
     resource
         .segments
         .iter()
-        .map(|s| {
-            LexicalDoc::new(
-                &name,
-                &full,
-                s.heading.as_deref(),
-                s.lexical_text.as_deref().unwrap_or(""),
-            )
-        })
+        .map(|s| LexicalDoc::new(&name, &full, s.segment.heading.as_deref(), s.lexical_body))
         .collect()
 }
 
@@ -764,7 +784,6 @@ impl EmbeddingCache for SqliteCache {
                     locator: serde_json::from_str(&loc).map_err(json_err)?,
                     heading,
                     input_hash,
-                    lexical_text: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -780,7 +799,7 @@ impl EmbeddingCache for SqliteCache {
         &mut self,
         profile: &str,
         path: &ResourceId,
-        resource: &CachedResource,
+        resource: &ResourceWrite<'_>,
     ) -> Result<()> {
         let key = resource_key(path);
         let tx = self.conn.transaction()?;
@@ -820,16 +839,16 @@ impl EmbeddingCache for SqliteCache {
                     profile,
                     key,
                     i as i64,
-                    serde_json::to_string(&s.locator).map_err(json_err)?,
-                    s.heading,
-                    s.input_hash
+                    serde_json::to_string(&s.segment.locator).map_err(json_err)?,
+                    s.segment.heading,
+                    s.segment.input_hash
                 ])?;
                 fts.execute(params![
                     tx.last_insert_rowid(),
                     name,
                     full,
-                    order_free_text(s.heading.as_deref().unwrap_or("")),
-                    order_free_text(s.lexical_text.as_deref().unwrap_or(""))
+                    order_free_text(s.segment.heading.as_deref().unwrap_or("")),
+                    order_free_text(s.lexical_body)
                 ])?;
             }
         }
@@ -915,7 +934,6 @@ impl EmbeddingCache for SqliteCache {
                     locator: serde_json::from_str(&locator).map_err(json_err)?,
                     heading: r.get(2)?,
                     input_hash: r.get(3)?,
-                    lexical_text: None,
                 },
                 vector: from_bytes(&r.get::<_, Vec<u8>>(4)?),
             });

@@ -232,14 +232,15 @@ fn image_preprocessing_and_embedding_matches_python_reference() {
         .parse()
         .unwrap();
     let reference = load_reference();
-    let embedder = GemmaEmbedder::load(GemmaConfig {
-        source: ModelSource::Directory(model_dir.clone().into()),
-        dimension: Dimension::D768,
-        precision,
-        vision: true,
-        threads: Some(1),
-        batch_size: 1,
-        ..GemmaConfig::default()
+    let embedder = GemmaEmbedder::load({
+        let mut config = GemmaConfig::default();
+        config.source = ModelSource::Directory(model_dir.clone().into());
+        config.dimension = Dimension::D768;
+        config.precision = precision;
+        config.vision = true;
+        config.threads = Some(1);
+        config.batch_size = 1;
+        config
     })
     .unwrap();
     let tokenizer = load_tokenizer(&model_dir);
@@ -294,10 +295,11 @@ fn text_queries_retrieve_generated_images_and_mixed_content() {
     )
     .unwrap();
 
-    let embedder = GemmaEmbedder::load(GemmaConfig {
-        threads: Some(1),
-        batch_size: 1,
-        ..GemmaConfig::default()
+    let embedder = GemmaEmbedder::load({
+        let mut config = GemmaConfig::default();
+        config.threads = Some(1);
+        config.batch_size = 1;
+        config
     })
     .unwrap();
     let engine = SearchEngine::builder().embedder(embedder).build().unwrap();

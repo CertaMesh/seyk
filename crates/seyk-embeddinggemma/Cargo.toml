@@ -1,0 +1,29 @@
+[package]
+name = "seyk-embeddinggemma"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Local EmbeddingGemma 2 inference"
+
+[features]
+default = []
+image = ["dep:image", "dep:fast_image_resize"]
+
+[dependencies]
+seyk-embed = { path = "../seyk-embed", version = "0.1.0" }
+ort = "=2.0.0-rc.13"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+dirs = "6"
+blake3 = "1"
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+fast_image_resize = { version = "5", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[example]]
+name = "image_text"
+required-features = ["image"]

@@ -1,5 +1,26 @@
 # Architecture and roadmap notes
 
+## Embedding crate split: pre-change audit (main @00c1038)
+### Current embedding architecture
+- One package, `seyk`, owns the library and binary. `src/embedder/mod.rs` defines a synchronous, object-safe `Embedder: Send + Sync`, `ModelIdentity`, `ResourceInput`, and `VideoFrame`; `src/embedding.rs` supplies `Dimension`, normalized vectors, dot products and cache byte conversion.
+- `src/embedder/gemma.rs` implements text AND images using tokenizers + mutex-protected ONNX sessions. Text batches sort by token length, run padded sub-batches, then restore input order. Images currently run individually through vision + text models; audio/video return UnsupportedModality.
+- Loading is already offline: HF cache or local directory; explicit `download` uses hf-hub. Defaults: q8, 256 dimensions, 2048-token limit, batch 16, vision when image feature enabled. Local model fingerprinting and ONNX external-data hard-link/copy handling exist.
+- ONNX returns pooled 768-wide sentence embeddings. Existing code truncates to 128/256/512/768 and then L2-normalizes. Zero vectors remain zero; do not falsely label those normalized. There is no current general task API.
+### Existing coupling
+- The trait speaks only query/resources, uses search's Error/Result, and imports Modality from a module containing ResourceId/url. Even disabling CLI leaves SQLite, walkers and search in the package.
+- Gemma's missing-weight error prescribes the Seyk CLI. hf-hub brings ureq 2 -> url: confirmed by `rustup run 1.99.0 cargo tree --locked --offline -e normal -i url`. Moving gemma.rs unchanged would fail the binding dependency constraint.
+- Engine already stores `Arc<dyn Embedder>`; no concrete backend import is needed. Cache profile JSON includes ModelIdentity; input hashes use length-prefixed modality/title/model-text parts, not a newly reconstructed prompt.
+- CachedSegment currently owns optional write-only lexical_text. Both caches map absent text to empty; writing a read result back can erase body keywords. No production failure is asserted.
+### What can be extracted cleanly
+- Traits/input types/Modality/vector math/errors and model identity move to a lightweight crate. Runtime, prompt formatting, tokenizer, image preprocessing, model location/fingerprint and inference move to the backend.
+- Cache vector byte serialization remains in core. Segmentation, title selection, Markdown link-target stripping, providers, extraction, ranking and index/cache remain search concerns.
+### Proposed crate boundaries
+- Four packages: `crates/seyk-embed`, `crates/seyk-embeddinggemma`, `crates/seyk-core`, and root `seyk`. Root is the compatibility facade PLUS existing thin CLI/MCP/daemon composition package (the seyk-cli role).
+- Graph: `seyk -> seyk-core -> seyk-embed`; `seyk -> seyk-embeddinggemma -> seyk-embed`. Core has no backend dependency, including its mock-based tests. No fifth facade/CLI package solely to achieve a directory diagram.
+### Migration impact
+- Keep `use seyk::SearchEngine`, existing public search module paths, CLI commands/binary name, and root release/install behavior. Root re-exports core and embedding types; optional `seyk::embedder::gemma` re-exports backend types with GemmaEmbedder alias.
+- Custom Embedder implementations migrate to task-aware batches and embedding-specific Result; cache implementors/struct literals migrate once to ResourceWrite/SegmentWrite. Document error matching changes, Dimension generalization and download ownership.
+
 This file records the architecture as audited before each development phase, so
 later phases can see what was deliberately left alone and why.
 
@@ -525,3 +546,47 @@ Evaluate the extraction API with downstream CLI consumers, then implement text
 PDF extraction in Phase 4 behind the same explicit boundary. Resolve media
 metadata and MCP hit references with their first real consumers. Keep search,
 extraction and downstream reasoning separate.
+
+## Embedding split implementation (0.1.0)
+
+The workspace now separates `seyk-embed` (generic embedding inputs, tasks, values
+and errors), `seyk-embeddinggemma` (local runtime/preprocessing), and `seyk-core`
+(search, evidence, cache, provider and extraction). The root `seyk` package is the
+compatibility facade plus thin CLI/MCP composition layer. There is no separate
+`seyk-cli` package: a fifth package would only mirror the diagram while requiring
+an extra facade to preserve `use seyk::SearchEngine` and source installation.
+
+Core has no concrete backend dependency. It submits SearchQuery/SearchDocument
+requests through the generic trait. Exact query/document formatting, ModelIdentity
+serialization, cache profiles, input hashes, schema v4 and vector encoding remain
+unchanged. Other standalone tasks never enter the search cache. Downloading remains
+an explicit operation in the root package; the backend resolves only local files.
+
+The cache write API now borrows explicit source bodies paired with stored segment
+evidence. Readback types have no source-body field and cannot be used as complete
+write input. Preparation retains original source text until keyword indexing;
+only the processed text goes to embedding. Image bodies are explicitly empty.
+No ranking, extraction, keyword tokenization, field weight or schema change is
+part of this refactor. SQLite's registration requirement and MemoryCache's
+pre-registration behavior are both retained.
+
+The default test suite exercises both caches, unchanged vector reuse, typed error
+compatibility, backend-free mocks and a golden profile captured from the pre-split
+binary. On a synthetic two-note cache, the new binary reused both embeddings and
+returned identical hits, profile rows, input hashes and vector bytes. Local q8
+model tests passed token/vector parity at all four widths, batch ordering,
+retrieval and generated-image search. CI covers Linux, macOS and Windows; the PR
+records final-head results and dependency-tree evidence. No private corpus was
+accessed or evaluated.
+
+All packages and internal path dependencies retain version `0.1.0`, inherited
+by packages from `workspace.package.version`. Release archive and binary names
+remain unchanged. The new crates are not published to crates.io.
+See [embedding usage and migration](embedding.md) for Git dependencies, offline
+files, supported prompts/modalities, feature flags, examples and API changes.
+
+Remaining limitations: image inference is sequential, session locks serialize
+calls, the token default remains 2048, and audio/video are unsupported. Local
+model identity still fingerprints graph bytes plus weight-file sizes; staging
+still reuses equal-size targets. Changing those existing rules would require a
+separate cache-identity migration.

@@ -10,6 +10,23 @@
 //! log-mel feature extractor, and video needs frame decoding; both are
 //! reported as unsupported rather than approximated.
 
+//! # Standalone text embedding
+//!
+//! ```no_run
+//! use seyk_embed::{Embedder, EmbeddingRequest, EmbeddingTask, ResourceInput};
+//! use seyk_embeddinggemma::EmbeddingGemma2;
+//! # fn main() -> seyk_embed::Result<()> {
+//! let model = EmbeddingGemma2::builder().dimension(256).vision(false).build()?;
+//! let query = model.embed_text("account access", EmbeddingTask::SearchQuery)?;
+//! let batch = model.embed_batch(&[EmbeddingRequest {
+//!     input: ResourceInput::Text { title: Some("Support"), text: "Reset your password." },
+//!     task: EmbeddingTask::SearchDocument,
+//! }])?;
+//! assert_eq!(query.dim(), batch[0].dim());
+//! # Ok(())
+//! # }
+//! ```
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -18,8 +35,10 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
-use crate::embedder::{Embedder, ModelIdentity, ResourceInput};
-use crate::{Dimension, Embedding, Error, Modality, Result};
+pub use seyk_embed::{
+    Dimension, Embedder, Embedding, EmbeddingRequest, EmbeddingTask, Error, Modality,
+    ModelIdentity, ResourceInput, Result, cosine_similarity, dot_product, normalize,
+};
 
 /// The upstream model the ONNX export was converted from.
 pub const MODEL_ID: &str = "google/embeddinggemma-2";
@@ -37,13 +56,17 @@ const NATIVE_DIM: usize = 768;
 const FEATURE_DIM: usize = 512;
 
 // Gemma 4 image processor settings from `processor_config.json`.
+#[cfg(feature = "image")]
 const PATCH_SIZE: usize = 16;
+#[cfg(feature = "image")]
 const POOLING_KERNEL: usize = 3;
+#[cfg(feature = "image")]
 const MAX_SOFT_TOKENS: usize = 280;
 
 /// Weight precision. `float16` is deliberately absent: the model card warns
 /// that its activations overflow fp16 and silently produce NaN or degraded vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Precision {
     /// Full precision (~1.1 GB text model).
     Fp32,
@@ -84,6 +107,7 @@ impl std::str::FromStr for Precision {
 
 /// Where model files come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ModelSource {
     /// A Hugging Face repository in the standard HF cache (`$HF_HOME`, default `~/.cache/huggingface`).
     HuggingFace { repo: String, revision: String },
@@ -101,6 +125,7 @@ impl Default for ModelSource {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GemmaConfig {
     pub source: ModelSource,
     pub dimension: Dimension,
@@ -130,7 +155,7 @@ impl Default for GemmaConfig {
 }
 
 impl GemmaConfig {
-    fn files(&self) -> Vec<String> {
+    pub fn files(&self) -> Vec<String> {
         let s = self.precision.suffix();
         let mut f = vec![
             "tokenizer.json".to_string(),
@@ -143,35 +168,6 @@ impl GemmaConfig {
         }
         f
     }
-}
-
-/// Download the files `config` needs into the Hugging Face cache.
-///
-/// This is the only function in the crate that uses the network. It sends
-/// nothing but file requests for public model weights.
-pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
-    let ModelSource::HuggingFace { repo, revision } = &config.source else {
-        return Err(Error::Config(
-            "model source is a local directory; nothing to download".into(),
-        ));
-    };
-    let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .with_progress(true)
-        .build()
-        .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
-    let repo_handle = api.repo(hf_hub::Repo::with_revision(
-        repo.clone(),
-        hf_hub::RepoType::Model,
-        revision.clone(),
-    ));
-    let mut dir = None;
-    for f in config.files() {
-        let p = repo_handle
-            .get(&f)
-            .map_err(|e| Error::Embedding(format!("downloading {f}: {e}")))?;
-        dir.get_or_insert_with(|| snapshot_root(&p, &f));
-    }
-    Ok(dir.expect("at least one file"))
 }
 
 /// Resolve the local model directory without touching the network.
@@ -189,9 +185,7 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
             Ok(dir.clone())
         }
         ModelSource::HuggingFace { repo, revision } => {
-            let repo_dir = hf_hub::Cache::from_env()
-                .path()
-                .join(format!("models--{}", repo.replace('/', "--")));
+            let repo_dir = hf_cache_path()?.join(format!("models--{}", repo.replace('/', "--")));
             // Branch names resolve through refs/. A pinned commit often has no
             // refs/ entry (the Python client never writes one), only snapshots/<sha>,
             // so `hf_hub::CacheRepo::get` cannot be used here.
@@ -202,7 +196,7 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
             for f in config.files() {
                 if !dir.join(&f).exists() {
                     return Err(Error::ModelNotFound(format!(
-                        "{repo}@{} ({f}) is not downloaded; run `seyk model download`",
+                        "{repo}@{} ({f}) is not present; provision the model files or select a local model directory",
                         &revision[..revision.len().min(12)],
                     )));
                 }
@@ -212,17 +206,26 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
     }
 }
 
-fn snapshot_root(file: &Path, rel: &str) -> PathBuf {
-    let depth = Path::new(rel).components().count();
-    let mut p = file.to_path_buf();
-    for _ in 0..depth {
-        p.pop();
+fn hf_cache_path() -> Result<PathBuf> {
+    let home = match std::env::var("HF_HOME") {
+        Ok(home) => PathBuf::from(home),
+        Err(_) => dirs::home_dir()
+            .ok_or_else(|| Error::Config("no home directory".into()))?
+            .join(".cache")
+            .join("huggingface"),
+    };
+    Ok(home.join("hub"))
+}
+
+fn io_error(path: impl Into<PathBuf>, source: std::io::Error) -> Error {
+    Error::Io {
+        path: path.into(),
+        source,
     }
-    p
 }
 
 /// EmbeddingGemma 2 embedder.
-pub struct GemmaEmbedder {
+pub struct EmbeddingGemma2 {
     tokenizer: Tokenizer,
     text: Mutex<Session>,
     vision: Option<Mutex<Session>>,
@@ -235,9 +238,79 @@ fn ort_err(e: impl std::fmt::Display) -> Error {
     Error::Embedding(e.to_string())
 }
 
-impl GemmaEmbedder {
+/// Compatibility name for existing callers.
+pub type GemmaEmbedder = EmbeddingGemma2;
+
+/// Configures a local, synchronous model. Building never downloads weights.
+#[derive(Debug, Default)]
+pub struct EmbeddingGemma2Builder {
+    config: GemmaConfig,
+    dimension: Option<usize>,
+}
+impl EmbeddingGemma2Builder {
+    pub fn model_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.source = ModelSource::Directory(path.into());
+        self
+    }
+    pub fn dimension(mut self, dimension: usize) -> Self {
+        self.dimension = Some(dimension);
+        self
+    }
+    pub fn precision(mut self, precision: Precision) -> Self {
+        self.config.precision = precision;
+        self
+    }
+    pub fn vision(mut self, enabled: bool) -> Self {
+        self.config.vision = enabled;
+        self
+    }
+    pub fn max_tokens(mut self, count: usize) -> Self {
+        self.config.max_tokens = count;
+        self
+    }
+    pub fn batch_size(mut self, count: usize) -> Self {
+        self.config.batch_size = count;
+        self
+    }
+    pub fn threads(mut self, count: usize) -> Self {
+        self.config.threads = Some(count);
+        self
+    }
+    pub fn build(mut self) -> Result<EmbeddingGemma2> {
+        if let Some(dimension) = self.dimension {
+            self.config.dimension = Dimension::try_from(dimension)?;
+        }
+        EmbeddingGemma2::load(self.config)
+    }
+}
+
+impl EmbeddingGemma2 {
+    /// Load the pinned model from the local Hugging Face cache. Never downloads.
+    pub fn load_default() -> Result<Self> {
+        Self::load(GemmaConfig::default())
+    }
+    pub fn builder() -> EmbeddingGemma2Builder {
+        EmbeddingGemma2Builder::default()
+    }
+
     /// Load from local files. Fails with [`Error::ModelNotFound`] if they are not present.
     pub fn load(config: GemmaConfig) -> Result<Self> {
+        if !Dimension::ALL.contains(&config.dimension) {
+            return Err(Error::Config(format!(
+                "unsupported dimension {}; use 128, 256, 512 or 768",
+                config.dimension
+            )));
+        }
+        if config.max_tokens == 0 || config.batch_size == 0 || config.threads == Some(0) {
+            return Err(Error::Config(
+                "max_tokens, batch_size and threads must be nonzero".into(),
+            ));
+        }
+        if config.vision && !cfg!(feature = "image") {
+            return Err(Error::UnsupportedModality {
+                modality: Modality::Image,
+            });
+        }
         let dir = locate(&config)?;
         Self::from_dir(&dir, config)
     }
@@ -306,6 +379,38 @@ impl GemmaEmbedder {
 
     pub fn query_input(query: &str) -> String {
         format!("{QUERY_PROMPT}{query}")
+    }
+
+    /// Exact prompted text passed to tokenization.
+    ///
+    /// Source: [pinned official ONNX prompt config](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/blob/daa72c51243991dfcaf9f9137d2c573d8f7790c0/config_sentence_transformers.json).
+    /// SearchQuery (Retrieval-query/query/Retrieval/Reranking/BitextMining): `task: search result | query: `.
+    /// SearchDocument (Document/document/Retrieval-document): `title: none | text: `, or the supplied title.
+    /// Classification (MultilabelClassification): `task: classification | query: `.
+    /// Clustering: `task: clustering | query: `.
+    /// CodeRetrieval (InstructionRetrieval): `task: code retrieval | query: `.
+    /// FactChecking: `task: fact checking | query: `.
+    /// QuestionAnswering: `task: question answering | query: `.
+    /// SentenceSimilarity (STS/PairClassification/Summarization): `task: sentence similarity | query: `.
+    /// Aliases describe equivalent embedding prompts, not text generation capabilities.
+    pub fn text_input(title: Option<&str>, text: &str, task: EmbeddingTask) -> Result<String> {
+        let prefix = match task {
+            EmbeddingTask::SearchDocument => return Ok(Self::document_input(title, text)),
+            EmbeddingTask::SearchQuery => QUERY_PROMPT,
+            EmbeddingTask::Classification => "task: classification | query: ",
+            EmbeddingTask::Clustering => "task: clustering | query: ",
+            EmbeddingTask::CodeRetrieval => "task: code retrieval | query: ",
+            EmbeddingTask::FactChecking => "task: fact checking | query: ",
+            EmbeddingTask::QuestionAnswering => "task: question answering | query: ",
+            EmbeddingTask::SentenceSimilarity => "task: sentence similarity | query: ",
+            _ => {
+                return Err(Error::UnsupportedTask {
+                    task,
+                    modality: Modality::Text,
+                });
+            }
+        };
+        Ok(format!("{prefix}{text}"))
     }
 
     /// Token ids exactly as the model sees them (for verification against the reference).
@@ -456,22 +561,22 @@ fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf
         .ok_or_else(|| Error::Config("no cache directory on this platform".into()))?;
     let key = blake3::hash(src.to_string_lossy().as_bytes()).to_hex();
     let dst = base.join("seyk").join("models").join(&key[..16]);
-    std::fs::create_dir_all(&dst).map_err(|e| Error::io(&dst, e))?;
+    std::fs::create_dir_all(&dst).map_err(|e| io_error(&dst, e))?;
     for f in &onnx {
         let real = src
             .join(f)
             .canonicalize()
-            .map_err(|e| Error::io(src.join(f), e))?;
+            .map_err(|e| io_error(src.join(f), e))?;
         let target = dst.join(f);
         let real_len = std::fs::metadata(&real)
-            .map_err(|e| Error::io(&real, e))?
+            .map_err(|e| io_error(&real, e))?
             .len();
         if std::fs::metadata(&target).is_ok_and(|m| m.len() == real_len) {
             continue;
         }
         let _ = std::fs::remove_file(&target);
         if std::fs::hard_link(&real, &target).is_err() {
-            std::fs::copy(&real, &target).map_err(|e| Error::io(&target, e))?;
+            std::fs::copy(&real, &target).map_err(|e| io_error(&target, e))?;
         }
     }
     Ok(dst)
@@ -495,16 +600,16 @@ fn fingerprint(dir: &Path, config: &GemmaConfig) -> Result<String> {
     for f in config.files() {
         let p = dir.join(&f);
         if f.ends_with("_data") {
-            let len = std::fs::metadata(&p).map_err(|e| Error::io(&p, e))?.len();
+            let len = std::fs::metadata(&p).map_err(|e| io_error(&p, e))?.len();
             h.update(&len.to_le_bytes());
         } else {
-            h.update(&std::fs::read(&p).map_err(|e| Error::io(&p, e))?);
+            h.update(&std::fs::read(&p).map_err(|e| io_error(&p, e))?);
         }
     }
     Ok(h.finalize().to_hex()[..16].to_string())
 }
 
-impl Embedder for GemmaEmbedder {
+impl Embedder for EmbeddingGemma2 {
     fn identity(&self) -> &ModelIdentity {
         &self.identity
     }
@@ -513,24 +618,32 @@ impl Embedder for GemmaEmbedder {
         match modality {
             Modality::Text => true,
             Modality::Image => cfg!(feature = "image") && self.vision.is_some(),
-            Modality::Audio | Modality::Video => false,
+            _ => false,
         }
     }
 
-    fn embed_query(&self, query: &str) -> Result<Embedding> {
-        let mut v = self.embed_strings(&[Self::query_input(query)])?;
-        Ok(v.pop().expect("one input"))
-    }
-
-    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
-        let mut out: Vec<Option<Embedding>> = vec![None; inputs.len()];
+    fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
+        // Validate the entire batch before doing inference.
+        for request in requests {
+            let modality = request.input.modality();
+            if !self.supports(modality) {
+                return Err(Error::UnsupportedModality { modality });
+            }
+            if modality == Modality::Image && request.task != EmbeddingTask::SearchDocument {
+                return Err(Error::UnsupportedTask {
+                    task: request.task,
+                    modality,
+                });
+            }
+        }
+        let mut out: Vec<Option<Embedding>> = vec![None; requests.len()];
         let mut text_idx = Vec::new();
         let mut text_inputs = Vec::new();
-        for (i, input) in inputs.iter().enumerate() {
-            match input {
+        for (i, request) in requests.iter().enumerate() {
+            match &request.input {
                 ResourceInput::Text { title, text } => {
                     text_idx.push(i);
-                    text_inputs.push(Self::document_input(*title, text));
+                    text_inputs.push(Self::text_input(*title, text, request.task)?);
                 }
                 ResourceInput::Image { bytes } => out[i] = Some(self.embed_image(bytes)?),
                 other => {

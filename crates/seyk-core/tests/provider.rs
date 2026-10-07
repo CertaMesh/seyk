@@ -1,9 +1,9 @@
 mod common;
 
 use common::FakeEmbedder;
-use seyk::discovery::{ResourceKind, discover};
-use seyk::segment::TextFormat;
-use seyk::{
+use seyk_core::discovery::{ResourceKind, discover};
+use seyk_core::segment::TextFormat;
+use seyk_core::{
     Dimension, DiscoveryOptions, Error, FsProvider, MemoryCache, ProvidedResource, ResourceId,
     ResourceProvider, ResourceScope, ResourceVersion, Result, SearchEngine, SearchMode,
 };
@@ -525,7 +525,7 @@ fn memory_extraction_verifies_current_bytes_without_model_or_filesystem() {
     notes.reads.store(0, Ordering::SeqCst);
     fake.reset_resource_count();
     let content = engine.extract(hit).unwrap();
-    let seyk::ResourceLocator::Text {
+    let seyk_core::ResourceLocator::Text {
         byte_start,
         byte_end,
         ..
@@ -538,7 +538,7 @@ fn memory_extraction_verifies_current_bytes_without_model_or_filesystem() {
     assert_eq!(notes.reads.load(Ordering::SeqCst), 1);
     assert_eq!(fake.resource_count(), 0);
     let mut unsupported = hit.clone();
-    unsupported.locator = seyk::ResourceLocator::WholeResource;
+    unsupported.locator = seyk_core::ResourceLocator::WholeResource;
     assert!(matches!(
         engine.extract(&unsupported),
         Err(Error::UnsupportedExtraction { .. })

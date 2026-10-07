@@ -3,27 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-/// The kind of content a resource holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum Modality {
-    Text,
-    Image,
-    Audio,
-    Video,
-}
-
-impl std::fmt::Display for Modality {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Modality::Text => "text",
-            Modality::Image => "image",
-            Modality::Audio => "audio",
-            Modality::Video => "video",
-        })
-    }
-}
+use seyk_embed::Modality;
 
 /// A canonical absolute URI identifying a resource, serialized as a string.
 /// File URIs preserve non-UTF-8 Unix path bytes through percent encoding.

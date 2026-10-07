@@ -7,9 +7,9 @@
 //! one model's memory instead of five. It exits after a quiet period with no
 //! sessions, so the memory is only held while agents use it.
 //!
-//! The socket name includes a hash of the Seyk version and model options. A
-//! session never reaches a daemon running other weights or an older binary; an
-//! old daemon simply idles out after an upgrade.
+//! The socket name hashes the package version, JSON schema version and model
+//! options. Builds with the same values share an endpoint, even when their
+//! implementation differs.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};

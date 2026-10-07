@@ -1,0 +1,157 @@
+use seyk_embeddinggemma::{
+    Dimension, Embedder, EmbeddingGemma2, EmbeddingRequest, EmbeddingTask, Error, GemmaConfig,
+    ModelSource, ResourceInput,
+};
+
+#[test]
+fn exact_official_task_inputs_and_titles() {
+    use EmbeddingTask::*;
+    for (task, prefix) in [
+        (SearchQuery, "task: search result | query: "),
+        (SearchDocument, "title: none | text: "),
+        (Classification, "task: classification | query: "),
+        (Clustering, "task: clustering | query: "),
+        (CodeRetrieval, "task: code retrieval | query: "),
+        (FactChecking, "task: fact checking | query: "),
+        (QuestionAnswering, "task: question answering | query: "),
+        (SentenceSimilarity, "task: sentence similarity | query: "),
+    ] {
+        assert_eq!(
+            EmbeddingGemma2::text_input(None, "example", task).unwrap(),
+            format!("{prefix}example")
+        );
+    }
+    assert_eq!(
+        EmbeddingGemma2::text_input(Some("A\r\nB"), "x", SearchDocument).unwrap(),
+        "title: A  B | text: x"
+    );
+    assert_eq!(
+        EmbeddingGemma2::text_input(Some(" \n"), "x", SearchDocument).unwrap(),
+        "title: none | text: x"
+    );
+    assert_eq!(
+        EmbeddingGemma2::text_input(Some("ignored"), "x", SearchQuery).unwrap(),
+        EmbeddingGemma2::query_input("x")
+    );
+}
+
+#[test]
+fn invalid_config_and_missing_local_files_fail_without_download() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        EmbeddingGemma2::builder()
+            .model_path(dir.path())
+            .dimension(300)
+            .build(),
+        Err(Error::Config(_))
+    ));
+    assert!(matches!(
+        EmbeddingGemma2::builder()
+            .model_path(dir.path())
+            .dimension(0)
+            .build(),
+        Err(Error::Config(_))
+    ));
+    assert!(matches!(
+        EmbeddingGemma2::builder()
+            .model_path(dir.path())
+            .batch_size(0)
+            .build(),
+        Err(Error::Config(_))
+    ));
+    assert!(matches!(
+        EmbeddingGemma2::builder()
+            .model_path(dir.path())
+            .vision(false)
+            .build(),
+        Err(Error::ModelNotFound(_))
+    ));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+#[ignore = "needs local EmbeddingGemma 2 weights"]
+fn batch_tasks_order_stability_and_unsupported_inputs() {
+    let mut config = {
+        let mut config = GemmaConfig::default();
+        config.vision = false;
+        config.dimension = Dimension::D128;
+        config.batch_size = 2;
+        config
+    };
+    if let Some(path) = std::env::var_os("SEYK_MODEL") {
+        config.source = ModelSource::Directory(path.into());
+    }
+    let model = EmbeddingGemma2::load(config).unwrap();
+    let tasks = [
+        EmbeddingTask::SearchQuery,
+        EmbeddingTask::Clustering,
+        EmbeddingTask::Classification,
+        EmbeddingTask::SentenceSimilarity,
+    ];
+    let texts = [
+        "cat",
+        "a much longer text about gardening and growing vegetables",
+        "customer login problem",
+        "cat",
+    ];
+    let requests: Vec<_> = texts
+        .iter()
+        .zip(tasks)
+        .map(|(text, task)| EmbeddingRequest {
+            input: ResourceInput::Text { title: None, text },
+            task,
+        })
+        .collect();
+    let outputs = model.embed_batch(&requests).unwrap();
+    assert_eq!(outputs.len(), requests.len());
+    for ((out, text), task) in outputs.iter().zip(texts).zip(tasks) {
+        assert_eq!(out.dim(), 128);
+        assert!(out.normalized());
+        assert!(out.as_slice().iter().all(|v| v.is_finite()));
+        let single = model.embed_text(text, task).unwrap();
+        assert!(out.cosine(&single) > 0.999);
+    }
+    assert!(model.embed_batch(&[]).unwrap().is_empty());
+    for input in [
+        ResourceInput::Audio {
+            samples: &[],
+            sample_rate: 16000,
+        },
+        ResourceInput::Video { frames: &[] },
+        ResourceInput::Image { bytes: &[] },
+    ] {
+        assert!(matches!(
+            model.embed(input, EmbeddingTask::SearchDocument),
+            Err(Error::UnsupportedModality { .. })
+        ));
+    }
+}
+
+#[cfg(feature = "image")]
+#[test]
+#[ignore = "needs local EmbeddingGemma 2 text and vision weights"]
+fn image_tasks_are_rejected_before_decoding() {
+    let model = EmbeddingGemma2::builder().vision(true).build().unwrap();
+    assert!(matches!(
+        model.embed(
+            ResourceInput::Image { bytes: &[] },
+            EmbeddingTask::Clustering
+        ),
+        Err(Error::UnsupportedTask { .. })
+    ));
+}
+
+#[test]
+fn backend_only_consumers_can_use_vector_helpers() {
+    let mut values = [3.0, 4.0];
+    seyk_embeddinggemma::normalize(&mut values).unwrap();
+    assert!((seyk_embeddinggemma::dot_product(&values, &values).unwrap() - 1.0).abs() < 1e-6);
+    let embedding =
+        seyk_embeddinggemma::Embedding::from_raw(values.to_vec(), Dimension::try_from(2).unwrap())
+            .unwrap();
+    assert!(
+        (seyk_embeddinggemma::cosine_similarity(&embedding, &embedding).unwrap() - 1.0).abs()
+            < 1e-6
+    );
+}

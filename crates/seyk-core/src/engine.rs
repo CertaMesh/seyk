@@ -7,9 +7,11 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, MemoryCache};
+use crate::cache::{
+    CacheProfile, CachedSegment, EmbeddingCache, MemoryCache, ResourceWrite, SegmentWrite,
+};
 use crate::discovery::{DiscoveryOptions, ResourceKind};
-use crate::embedder::{Embedder, ResourceInput};
+use crate::embedder::{Embedder, EmbeddingRequest, EmbeddingTask, ResourceInput};
 use crate::extractor::{
     ExtractedContent, Extractor, ResourceBytes, TextExtractor, extract_resource, text_range,
     unsupported,
@@ -499,11 +501,18 @@ impl SearchEngine {
                 stats.skipped.push(skip(&p.resource, reason.clone()));
                 continue;
             }
-            let resource = CachedResource {
-                metadata: p.metadata.clone(),
-                version: p.version.clone(),
-                descriptor_hash: Some(p.descriptor_hash.clone()),
-                segments: p.jobs.iter().map(|j| j.segment.clone()).collect(),
+            let resource = ResourceWrite {
+                metadata: &p.metadata,
+                version: &p.version,
+                descriptor_hash: Some(&p.descriptor_hash),
+                segments: p
+                    .jobs
+                    .iter()
+                    .map(|j| SegmentWrite {
+                        segment: &j.segment,
+                        lexical_body: &j.lexical_body,
+                    })
+                    .collect(),
             };
             self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
             stats.resources_updated += 1;
@@ -513,8 +522,14 @@ impl SearchEngine {
 
     /// Embed a batch; on failure retry one by one so a single bad input only skips its resource.
     fn embed_batch(&self, batch: &[(usize, &Job)]) -> Vec<Result<Vec<f32>>> {
-        let inputs: Vec<ResourceInput> = batch.iter().map(|(_, j)| j.input.as_input()).collect();
-        match self.embedder.embed_resources(&inputs) {
+        let inputs: Vec<EmbeddingRequest> = batch
+            .iter()
+            .map(|(_, j)| EmbeddingRequest {
+                input: j.input.as_input(),
+                task: EmbeddingTask::SearchDocument,
+            })
+            .collect();
+        match self.embedder.embed_batch(&inputs) {
             Ok(vs) if vs.len() == inputs.len() => {
                 vs.into_iter().map(|v| Ok(v.into_vec())).collect()
             }
@@ -522,18 +537,20 @@ impl SearchEngine {
                 .iter()
                 .map(|i| {
                     self.embedder
-                        .embed_resources(std::slice::from_ref(i))
+                        .embed_batch(std::slice::from_ref(i))
                         .and_then(|mut v| {
-                            v.pop()
-                                .ok_or_else(|| Error::Embedding("no vector returned".into()))
+                            v.pop().ok_or_else(|| {
+                                seyk_embed::Error::Embedding("no vector returned".into())
+                            })
                         })
                         .map(|e| e.into_vec())
+                        .map_err(Error::from)
                 })
                 .collect(),
             Ok(_) => vec![Err(Error::Embedding(
                 "embedder returned the wrong number of vectors".into(),
             ))],
-            Err(e) => vec![Err(e)],
+            Err(e) => vec![Err(e.into())],
         }
     }
 
@@ -572,10 +589,9 @@ impl SearchEngine {
                                 },
                                 heading: s.heading,
                                 input_hash: hash,
-                                // Keywords come from the source as written,
-                                // link targets included: they are names too.
-                                lexical_text: Some(s.text),
                             },
+                            // Index the original source, including link targets.
+                            lexical_body: s.text,
                             input: JobInput::Text {
                                 title,
                                 text: model_text,
@@ -591,9 +607,9 @@ impl SearchEngine {
                         locator: ResourceLocator::WholeResource,
                         heading: None,
                         input_hash: hash,
-                        // Indexed by name and path only.
-                        lexical_text: Some(String::new()),
                     },
+                    // Images are indexed by name and path only.
+                    lexical_body: String::new(),
                     input: JobInput::Image { bytes },
                 }])
             }
@@ -613,6 +629,7 @@ struct Job {
     /// `segment.input_hash` identifies the model input; identical inputs in
     /// different resources are embedded once.
     segment: CachedSegment,
+    lexical_body: String,
     input: JobInput,
 }
 
@@ -845,7 +862,7 @@ impl<'e> SearchRequest<'e> {
             let dim = engine.embedder.dimension().get();
             let mut query_vectors = Vec::with_capacity(self.queries.len());
             for q in &self.queries {
-                let v = engine.embedder.embed_query(q)?;
+                let v = engine.embedder.embed_text(q, EmbeddingTask::SearchQuery)?;
                 if v.dim() != dim {
                     return Err(Error::DimensionMismatch {
                         expected: dim,
@@ -1452,5 +1469,82 @@ mod tests {
             input_hash(&["text", "ab", "c"]),
             input_hash(&["text", "a", "bc"])
         );
+    }
+}
+
+#[cfg(test)]
+mod pre_split_golden {
+    use super::*;
+
+    struct IdentityOnly(crate::ModelIdentity);
+    impl Embedder for IdentityOnly {
+        fn identity(&self) -> &crate::ModelIdentity {
+            &self.0
+        }
+        fn supports(&self, _: crate::Modality) -> bool {
+            true
+        }
+        fn embed_batch(
+            &self,
+            _: &[EmbeddingRequest<'_>],
+        ) -> seyk_embed::Result<Vec<crate::Embedding>> {
+            panic!("preparation must not run inference")
+        }
+    }
+
+    #[test]
+    fn production_profile_and_prepared_input_hashes_match_pre_split() {
+        // Captured by loading Gemma and calling this engine's build/prepare
+        // functions in base 00c1038; see the fixture provenance README.
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/pre_split_preparation.json"))
+                .unwrap();
+        let identity = serde_json::from_value(golden["profile"]["model"].clone()).unwrap();
+        let engine = SearchEngine::builder()
+            .embedder(IdentityOnly(identity))
+            .build()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(engine.profile()).unwrap(),
+            golden["profile"]
+        );
+        assert_eq!(engine.profile_id(), golden["profile_id"].as_str().unwrap());
+        for (name, title, kind, bytes) in [
+            (
+                "titled",
+                Some("Guide"),
+                ResourceKind::Text(TextFormat::Markdown),
+                b"# Setup\n\nRead the [manual](https://example.com/manual) before installing.\n"
+                    .as_slice(),
+            ),
+            (
+                "untitled",
+                None,
+                ResourceKind::Text(TextFormat::Plain),
+                b"A short note with no document title.\n".as_slice(),
+            ),
+            (
+                "image",
+                Some("diagram"),
+                ResourceKind::Image,
+                b"\x89PNG\r\n\x1a\nsynthetic golden bytes".as_slice(),
+            ),
+        ] {
+            let resource = ProvidedResource {
+                id: format!("test://golden/{name}").parse().unwrap(),
+                kind,
+                size_bytes: bytes.len() as u64,
+                modified_ns: None,
+                version: ResourceVersion::unknown(),
+                title: title.map(String::from),
+            };
+            let jobs = engine.prepare(&resource, bytes.to_vec()).unwrap();
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(
+                jobs[0].segment.input_hash,
+                golden["input_hashes"][name].as_str().unwrap(),
+                "{name}"
+            );
+        }
     }
 }

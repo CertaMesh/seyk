@@ -1,0 +1,28 @@
+{
+  "base": "00c1038153d86c2060ed948f57fdc8053c56d643",
+  "input_hashes": {
+    "image": "e4878adf3dfc5c982f183df89e8633384256df7a9d945c4fac91770c9fcb7651",
+    "titled": "38ea2df0740a2765b271028248fd0187b933362a91a889991ccbc31cca352755",
+    "untitled": "70796694f108bc59ac2e83850d0dc6d7ded3649bcddf60725944167216df463a"
+  },
+  "model_output_hashes": {
+    "128": "c1a7ce6a37416ea81c3f9a600de5c1869efb2b92ee1a369dbc44cd4662e93d38",
+    "256": "1ec4eb02bec3b39dfc1b4817c8475e380078d74d6a74775bc8030a7f6b7d42db",
+    "512": "7a70120447df2773faf3e8effebafc9857bc0deedb4c571f7af46f6346abf6d5",
+    "768": "bca78225e7e6b107eb083425a919cc25e4e036792210004cc0b79613e382cfa9"
+  },
+  "profile": {
+    "model": {
+      "dimension": 128,
+      "document_prompt": "title: {title} | text: {text}",
+      "max_tokens": 2048,
+      "model_id": "google/embeddinggemma-2",
+      "normalization": "mean-pool;truncate;l2",
+      "query_prompt": "task: search result | query: ",
+      "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+      "variant": "onnx-q8"
+    },
+    "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+  },
+  "profile_id": "b14d0b2f2629a98e1614b142"
+}

@@ -7,9 +7,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
-use seyk::index::{BruteForceIndex, VectorIndex};
-use seyk::{
+use seyk_core::cache::{CacheProfile, CachedResource, CachedSegment, ResourceWrite, SegmentWrite};
+use seyk_core::index::{BruteForceIndex, VectorIndex};
+use seyk_core::{
     Dimension, EmbeddingCache, Modality, ModelIdentity, ResourceId, ResourceLocator,
     ResourceMetadata, ResourceVersion, SqliteCache,
 };
@@ -148,7 +148,6 @@ fn filled_cache(
                 },
                 heading: Some(format!("Section {s}")),
                 input_hash: format!("{f:06}-{s:02}"),
-                lexical_text: None,
             })
             .collect();
         let vectors: Vec<(String, Vec<f32>)> = segments
@@ -166,7 +165,25 @@ fn filled_cache(
             },
             segments,
         };
-        cache.put_resource(&pid, &path, &resource).unwrap();
+        cache
+            .put_resource(
+                &pid,
+                &path,
+                &ResourceWrite {
+                    metadata: &resource.metadata,
+                    version: &resource.version,
+                    descriptor_hash: resource.descriptor_hash.as_deref(),
+                    segments: resource
+                        .segments
+                        .iter()
+                        .map(|segment| SegmentWrite {
+                            segment,
+                            lexical_body: "",
+                        })
+                        .collect(),
+                },
+            )
+            .unwrap();
         cache.put_embeddings(&pid, &vectors).unwrap();
         paths.insert(path);
     }

@@ -213,16 +213,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let max_batch = args.batch_sizes.iter().copied().max().unwrap_or(1);
-    let config = GemmaConfig {
-        precision: args.precision,
-        source: args
+    let config = {
+        let mut config = GemmaConfig::default();
+        config.precision = args.precision;
+        config.source = args
             .model_dir
             .clone()
-            .map_or_else(ModelSource::default, ModelSource::Directory),
-        threads: args.threads,
-        vision: false,
-        batch_size: max_batch,
-        ..Default::default()
+            .map_or_else(ModelSource::default, ModelSource::Directory);
+        config.threads = args.threads;
+        config.vision = false;
+        config.batch_size = max_batch;
+        config
     };
     let started = Instant::now();
     let embedder = Arc::new(GemmaEmbedder::load(config)?);

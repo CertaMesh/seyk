@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 
 use assert_cmd::Command;
@@ -7,6 +9,15 @@ use tempfile::TempDir;
 
 fn binary() -> Command {
     Command::cargo_bin("seyk").unwrap()
+}
+
+#[test]
+fn version_matches_workspace_package() {
+    binary()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout("seyk 0.1.0\n");
 }
 
 #[test]

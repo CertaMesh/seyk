@@ -44,7 +44,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          version=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
           test "v$version" = "$GITHUB_REF_NAME" || {
             echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version"; exit 1; }
 
@@ -53,7 +53,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          version=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
           name="seyk-$version-${{ matrix.target }}"
           mkdir "$name"
           cp README.md LICENSE "$name/"
