@@ -427,3 +427,145 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
         assert_eq!(check(&mut MemoryCache::new()), expected);
     }
 }
+
+#[test]
+fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() {
+    use rusqlite::Connection;
+    let notes = TempDir::new().unwrap();
+    let db = TempDir::new().unwrap();
+    fs::write(notes.path().join("alpha.md"), "quartz pebble alpha garden").unwrap();
+    fs::write(notes.path().join("beta.md"), "quartz pebble beta workshop").unwrap();
+    let file = db.path().join("cache.sqlite3");
+    let (engine, _) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    let before = engine
+        .search("quartz")
+        .paths([notes.path()])
+        .mode(seyk::SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    drop(engine);
+    let conn = Connection::open(&file).unwrap();
+    let snapshot = |conn: &Connection| {
+        let vectors = conn
+            .prepare("SELECT profile,input_hash,vector FROM embeddings ORDER BY profile,input_hash")
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let segments = conn
+            .prepare(
+                "SELECT rowid,path,ordinal,locator,heading,input_hash FROM segments ORDER BY rowid",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let fts = conn
+            .prepare("SELECT id,block FROM segments_fts_data ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        (vectors, segments, fts)
+    };
+    // Recreate the actual v3 resources layout, with no version column.
+    conn.execute_batch("ALTER TABLE resources DROP COLUMN version; UPDATE meta SET value='3' WHERE key='schema_version';").unwrap();
+    let stored = snapshot(&conn);
+    drop(conn);
+    let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    let after = engine
+        .search("quartz")
+        .paths([notes.path()])
+        .mode(seyk::SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert_eq!(fake.resource_count(), 0);
+    assert_eq!(after.stats.sync.resources_unchanged, 2);
+    assert_eq!(after.hits, before.hits);
+    drop(engine);
+    let conn = Connection::open(&file).unwrap();
+    assert_eq!(snapshot(&conn), stored);
+    assert_eq!(
+        conn.query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "4"
+    );
+    drop(conn);
+    let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    engine
+        .index()
+        .paths([notes.path().join("alpha.md")])
+        .execute()
+        .unwrap();
+    assert_eq!(fake.resource_count(), 0);
+    assert_eq!(
+        engine
+            .with_cache(|c| Ok(c.resource_index(engine.profile_id())?.len()))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn both_caches_store_non_file_identities_and_opaque_versions() {
+    fn check(cache: &mut dyn EmbeddingCache) {
+        let id: ResourceId = "mem://book/note.txt".parse().unwrap();
+        cache.register_profile("p", &profile("r1")).unwrap();
+        let mut value = resource(&["generic"]);
+        value.version = ResourceVersion::known("opaque-revision-42");
+        value.segments[0].lexical_text = Some("quartz pebble".into());
+        cache
+            .put_embeddings("p", &[("generic".into(), vec![1.0])])
+            .unwrap();
+        cache.put_resource("p", &id, &value).unwrap();
+        let found = cache.resource("p", &id).unwrap().unwrap();
+        assert_eq!(found.version, value.version);
+        assert!(found.segments[0].lexical_text.is_none());
+        let wanted = HashSet::from([id.clone()]);
+        assert_eq!(cache.vectors_for("p", &wanted).unwrap()[0].resource, id);
+        let q = seyk::lexical::LexicalQuery::new(["quartz"]);
+        assert_eq!(
+            cache.lexical_search("p", &q, &wanted, 1).unwrap()[0].resource,
+            id
+        );
+        cache
+            .touch_resource("p", &id, &value.metadata, &ResourceVersion::known("next"))
+            .unwrap();
+        assert_eq!(
+            cache.resource_index("p").unwrap()[&id].version,
+            ResourceVersion::known("next")
+        );
+    }
+    check(&mut MemoryCache::new());
+    let temp = TempDir::new().unwrap();
+    let file = temp.path().join("generic.sqlite3");
+    check(&mut SqliteCache::open(&file).unwrap());
+    let cache = SqliteCache::open(&file).unwrap();
+    let id: ResourceId = "mem://book/note.txt".parse().unwrap();
+    assert_eq!(
+        cache.resource("p", &id).unwrap().unwrap().version,
+        ResourceVersion::known("next")
+    );
+}

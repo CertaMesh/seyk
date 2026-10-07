@@ -339,7 +339,7 @@ fn check_partial_root_migration(version: &str) {
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "3"
+        "4"
     );
 
     let assert_unsynced_search = |engine: &SearchEngine| {
