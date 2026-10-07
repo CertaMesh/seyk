@@ -79,8 +79,8 @@ library is downloaded by the `ort` crate **at build time**. For a fully offline
 build, set `ORT_SKIP_DOWNLOAD=1` and point `ORT_LIB_LOCATION` at a local ONNX
 Runtime build.
 
-Older Seyk binaries reset caches written by newer versions. When running old and
-new binaries side by side, use a separate `--cache-path` for each.
+Older Seyk binaries reset caches whose schema they do not recognize. Use separate
+`--cache-path` values when running builds with different cache schemas.
 
 ## Model setup
 
@@ -257,8 +257,9 @@ seyk mcp --standalone ~/notes   # no daemon: one process per session
 
 Sessions only share a daemon when they use the same model options
 (`--model`, `--dimension`, `--precision`, `--text-only`, `--cache-path`) and the
-same Seyk version, so an upgraded binary never talks to an old daemon. The
-daemon is Unix-only; on Windows `seyk mcp` always runs standalone.
+same package and JSON schema versions. Builds with the same values share an
+endpoint, even when their implementation differs. The daemon is Unix-only; on
+Windows `seyk mcp` always runs standalone.
 
 **Privacy.** Seyk itself sends nothing anywhere, but a cloud-hosted agent sends
 the passages it reads to its provider. Point the server only at folders you are

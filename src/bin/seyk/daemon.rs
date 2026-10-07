@@ -7,9 +7,9 @@
 //! one model's memory instead of five. It exits after a quiet period with no
 //! sessions, so the memory is only held while agents use it.
 //!
-//! The socket name includes a hash of the Seyk version and model options. A
-//! session never reaches a daemon running other weights or an older binary; an
-//! old daemon simply idles out after an upgrade.
+//! The socket name hashes the package version, JSON schema version and model
+//! options. Builds with the same values share an endpoint, even when their
+//! implementation differs.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -395,18 +395,6 @@ mod tests {
         assert_ne!(
             endpoint_id(&args, 2),
             endpoint_id(&["--dimension".into(), "128".into()], 2)
-        );
-        let mut previous_version = blake3::Hasher::new();
-        previous_version.update(b"0.1.0");
-        previous_version.update(b"json-schema");
-        previous_version.update(&2u32.to_le_bytes());
-        for a in &args {
-            previous_version.update(&(a.len() as u64).to_le_bytes());
-            previous_version.update(a.as_bytes());
-        }
-        assert_ne!(
-            endpoint_id(&args, 2),
-            &previous_version.finalize().to_hex()[..12]
         );
         let mut legacy = blake3::Hasher::new();
         legacy.update(env!("CARGO_PKG_VERSION").as_bytes());

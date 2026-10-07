@@ -547,7 +547,7 @@ PDF extraction in Phase 4 behind the same explicit boundary. Resolve media
 metadata and MCP hit references with their first real consumers. Keep search,
 extraction and downstream reasoning separate.
 
-## Embedding split implementation (0.2.0-dev)
+## Embedding split implementation (0.1.0)
 
 The workspace now separates `seyk-embed` (generic embedding inputs, tasks, values
 and errors), `seyk-embeddinggemma` (local runtime/preprocessing), and `seyk-core`
@@ -579,9 +579,9 @@ retrieval and generated-image search. CI covers Linux, macOS and Windows; the PR
 records final-head results and dependency-tree evidence. No private corpus was
 accessed or evaluated.
 
-All packages share `workspace.package.version = "0.2.0-dev"`; the binary reports
-that version and its daemon endpoint differs from 0.1.0. Release archive and
-binary names remain unchanged. The new crates are not published to crates.io.
+All packages and internal path dependencies retain version `0.1.0`, inherited
+by packages from `workspace.package.version`. Release archive and binary names
+remain unchanged. The new crates are not published to crates.io.
 See [embedding usage and migration](embedding.md) for Git dependencies, offline
 files, supported prompts/modalities, feature flags, examples and API changes.
 

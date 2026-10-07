@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "seyk"
-version = "0.2.0-dev"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2522,7 +2522,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-core"
-version = "0.2.0-dev"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
@@ -2541,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-embed"
-version = "0.2.0-dev"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-embeddinggemma"
-version = "0.2.0-dev"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "dirs",

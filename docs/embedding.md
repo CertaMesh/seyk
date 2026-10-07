@@ -1,7 +1,7 @@
-# Standalone embeddings and the 0.2 API migration
+# Standalone embeddings and API migration
 
 Seyk's embedding layer is reusable independently of search. The crates are not
-on crates.io yet; all workspace packages currently have version `0.2.0-dev`.
+on crates.io yet; all workspace packages currently have version `0.1.0`.
 
 ```toml
 [dependencies]
@@ -211,8 +211,8 @@ continues to reject them atomically through its foreign key constraint.
 This split keeps schema v4, profile JSON/hash, model identity values, input hashes,
 vector bytes, tokenization, field weights, ranking and extraction behavior.
 Existing valid vectors require no migration or re-embedding. Older Seyk binaries
-can reset caches written by newer ones; use separate `--cache-path` values when
-running both versions.
+reset caches whose schema they do not recognize; use separate `--cache-path`
+values when running builds with different cache schemas.
 
 ## Dependency boundaries
 

@@ -12,12 +12,12 @@ fn binary() -> Command {
 }
 
 #[test]
-fn version_identifies_the_development_release() {
+fn version_matches_workspace_package() {
     binary()
         .arg("--version")
         .assert()
         .success()
-        .stdout("seyk 0.2.0-dev\n");
+        .stdout("seyk 0.1.0\n");
 }
 
 #[test]
