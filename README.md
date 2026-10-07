@@ -58,8 +58,12 @@ gh api repos/CertaMesh/seyk/contents/scripts/install.sh \
 ```
 
 The script picks your platform, checks the SHA-256 checksum and installs to
-`~/.local/bin` (set `SEYK_INSTALL_DIR` to change that). There is no Intel Mac
-build, because ONNX Runtime publishes no prebuilt library for it.
+`~/.local/bin` (set `SEYK_INSTALL_DIR` to change that).
+
+- **Linux needs glibc 2.38 or newer** (Ubuntu 24.04, Debian 13, Fedora 39 and
+  later), because ONNX Runtime's prebuilt library does.
+- **There is no Intel Mac build**, because ONNX Runtime publishes no prebuilt
+  library for it.
 
 From source (Rust 1.88 or newer):
 

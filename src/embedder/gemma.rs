@@ -381,7 +381,9 @@ impl GemmaEmbedder {
                 "unexpected sentence_embedding shape {shape:?}"
             )));
         }
-        data.chunks_exact(NATIVE_DIM)
+        data.as_chunks::<NATIVE_DIM>()
+            .0
+            .iter()
             .map(|row| Embedding::from_raw(row.to_vec(), self.config.dimension))
             .collect()
     }

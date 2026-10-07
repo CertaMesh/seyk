@@ -29,7 +29,8 @@ trap 'rm -rf "$tmp"' EXIT
 gh release download --repo "$repo" --pattern "seyk-*-$target.tar.gz*" --dir "$tmp"
 
 archive=$(ls "$tmp"/seyk-*-"$target".tar.gz)
-(cd "$tmp" && shasum -a 256 -c "$(basename "$archive").sha256" >/dev/null) || {
+if command -v sha256sum >/dev/null; then check="sha256sum -c"; else check="shasum -a 256 -c"; fi
+(cd "$tmp" && $check "$(basename "$archive").sha256" >/dev/null) || {
   echo "Checksum mismatch for $(basename "$archive")" >&2; exit 1; }
 
 tar -xzf "$archive" -C "$tmp"

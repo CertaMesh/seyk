@@ -137,15 +137,10 @@ pub(crate) fn l2_normalize(v: &mut [f32]) {
 #[inline]
 pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
-    let tail: f32 = ca
-        .remainder()
-        .iter()
-        .zip(cb.remainder())
-        .map(|(x, y)| x * y)
-        .sum();
+    let ((ca, ra), (cb, rb)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
+    let tail: f32 = ra.iter().zip(rb).map(|(x, y)| x * y).sum();
     let mut acc = [0.0f32; 8];
-    for (x, y) in ca.zip(cb) {
+    for (x, y) in ca.iter().zip(cb) {
         for i in 0..8 {
             acc[i] += x[i] * y[i];
         }
