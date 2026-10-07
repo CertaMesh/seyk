@@ -19,7 +19,7 @@
 //!
 //! let results = engine
 //!     .search("where did I discuss inherited behaviour?")
-//!     .paths(["~/Writing/Book"])
+//!     .paths(["~/notes"])
 //!     .limit(10)
 //!     .execute()?;
 //!

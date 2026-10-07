@@ -11,18 +11,18 @@ Ask a question in your own words, point it at a folder, and get back the passage
 that mean the same thing, even when they share no words with the question:
 
 ```console
-$ seyk search "grief as something physical" ~/Writing/Book -n 2
-0.766  ideas/inheritance.txt:3
-       Grief: after the funeral her chest felt packed with wet sand. She could not lift her arms to hang up her coat.
+$ seyk search "how I fixed my sleep" ~/notes -n 2
+0.686  habits.md:1
+       Phone stays in the kitchen after ten now. Since then I drift off within minutes instead of scrolling until one.
 
-0.665  ideas/inheritance.txt:1
-       Things passed down without anyone choosing: a temper, a way of folding shirts, the silence at dinner.
+0.620  work.md:1
+       Ship the pricing page before the conference. The old one still lists the beta plan.
 
-Searched 6 segments: 3 files (3 unchanged, 0 new or changed), 0 segments embedded in 0.3s
+Searched 3 segments: 3 files (0 unchanged, 3 new or changed), 3 segments embedded in 0.3s
 ```
 
-(Real output from a small test folder. The best match shares no words with the
-question except "grief".)
+(Real output from a three-note folder. The best match shares no words with the
+question.)
 
 It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
@@ -65,7 +65,7 @@ The script picks your platform, checks the SHA-256 checksum and installs to
 - **There is no Intel Mac build**, because ONNX Runtime publishes no prebuilt
   library for it.
 
-From source (Rust 1.88 or newer):
+From source (Rust 1.89 or newer):
 
 ```bash
 cargo install --locked --git https://github.com/CertaMesh/seyk
@@ -106,16 +106,16 @@ vectors.
 
 ```bash
 # Search a folder (recursively). Embeddings are cached as you go.
-seyk search "fear of becoming like his father" ~/Writing/Book
+seyk search "how I fixed my sleep" ~/notes
 
 # Several paths, files or folders
-seyk search "ideas involving memory and identity" notes.md characters/
+seyk search "ideas for the pricing page" ideas.md projects/
 
 # Several phrasings of the same need; each result keeps its best score
-seyk search "who is the main character" -q "protagonist of the story" ~/Writing/Book
+seyk search "where do we retry failed payments" -q "payment retry logic" ~/code/shop
 
 # Only Markdown, skip drafts, top 5, hide weak matches
-seyk search "grief as something physical" ~/Writing \
+seyk search "advice I got about hiring" ~/notes \
   --include '*.md' --exclude drafts --limit 5 --min-score 0.55
 
 # Nothing written to disk
@@ -125,13 +125,13 @@ seyk search "query" ./notes --no-cache
 seyk search "query" ./notes --json
 
 # Optional: embed everything up front so later searches are instant
-seyk index ~/Writing/Book
+seyk index ~/notes
 
 # Keep the index fresh: index once, then re-index whatever changes
-seyk index --watch ~/Writing/Book
+seyk index --watch ~/notes
 
 # Serve search to AI agents over MCP (see "Agents" below)
-seyk mcp ~/Writing/Book
+seyk mcp ~/notes
 
 # Inspect or wipe the cache
 seyk cache stats
@@ -166,12 +166,17 @@ then reads those lines itself and writes the answer. Seyk never generates text.
 
 ```bash
 # Claude Code: make your notes searchable in every session
-claude mcp add --scope user seyk -- seyk mcp ~/Writing/Book
+claude mcp add --scope user seyk -- seyk mcp ~/notes
 
 # Or per project, for a codebase
 claude mcp add seyk -- seyk mcp .
 ```
 
+- **One model for every session.** `seyk mcp` is a small relay (about 9 MB).
+  The first one starts a shared background daemon that loads the model once,
+  owns the cache and watches every folder any session asked for. Five agent
+  sessions cost one model's memory, not five. The daemon exits after 15 minutes
+  without sessions, and the next `seyk mcp` starts it again.
 - **The model stays loaded.** After the first call, a search takes well under a
   second on a warm cache.
 - **Indexing runs in the background.** On start the server indexes its folders,
@@ -182,6 +187,17 @@ claude mcp add seyk -- seyk mcp .
   server was started with.
 - **For code, it complements grep.** Use Seyk for "where do we retry failed
   payments?" and grep for `retryPayment(`.
+
+```bash
+seyk daemon status    # pid, sessions, and each watched folder's index state
+seyk daemon stop      # connected sessions lose the tool until they restart
+seyk mcp --standalone ~/notes   # no daemon: one process per session
+```
+
+Sessions only share a daemon when they use the same model options
+(`--model`, `--dimension`, `--precision`, `--text-only`, `--cache-path`) and the
+same Seyk version, so an upgraded binary never talks to an old daemon. The
+daemon is Unix-only; on Windows `seyk mcp` always runs standalone.
 
 **Privacy.** Seyk itself sends nothing anywhere, but a cloud-hosted agent sends
 the passages it reads to its provider. Point the server only at folders you are
@@ -204,8 +220,8 @@ let engine = SearchEngine::builder()
     .build()?;
 
 let results = engine
-    .search("where did I discuss inherited behaviour?")
-    .paths(["~/Writing/Book"])
+    .search("what did we decide about pricing?")
+    .paths(["~/notes"])
     .exclude("drafts")
     .limit(10)
     .execute()?;
@@ -221,7 +237,7 @@ for hit in &results.hits {
 }
 
 // Optional cache warming
-engine.index().paths(["~/Writing/Book"]).execute()?;
+engine.index().paths(["~/notes"]).execute()?;
 ```
 
 Each `SearchHit` carries the resource path, a modality-independent
@@ -282,6 +298,7 @@ the old vectors are simply never looked up. `cache stats` lists the profiles.
 | Embedding cache | `~/Library/Caches/seyk/cache.sqlite3` | `~/.cache/seyk/cache.sqlite3` |
 | Model weights | `~/.cache/huggingface/hub/` (or `$HF_HOME/hub`) | same |
 | Hard links to the ONNX files (a copy only if the cache is on another disk) | `~/Library/Caches/seyk/models/` | `~/.cache/seyk/models/` |
+| Daemon socket and log (`seyk mcp`) | `~/Library/Caches/seyk/daemon-*.sock`, `daemon.log` | `~/.cache/seyk/` |
 | Configuration | none: flags plus `SEYK_MODEL`, `SEYK_CACHE` | same |
 
 The hard links exist because ONNX Runtime refuses weight files that live behind the
@@ -314,7 +331,7 @@ Embedding a whole file would average all its ideas into one vector, and a query
 matching one of them would score poorly. So text is split along its own structure:
 
 - Markdown headings start a new segment and stay with their content. The heading
-  path (`Part One > The Kitchen`) is sent to the model as the document title, as the
+  path (`Projects > Pricing`) is sent to the model as the document title, as the
   model card recommends. Lines inside fenced code blocks are never taken for
   headings.
 - Every paragraph of 60 characters or more is its own segment. Shorter fragments
@@ -376,7 +393,7 @@ content words with the question, which is the material only semantic search can 
 
 ```bash
 cargo run --release --example eval_corpus -- \
-  --queries examples/queries.example.txt ~/Writing/Book
+  --queries examples/queries.example.txt ~/notes
 ```
 
 Everything runs locally.
@@ -412,9 +429,11 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   size and modification time to the nanosecond is not re-read until `index` or a
   cache clear. Vectors are still never reused for different text.
 - **Single-writer cache.** Two processes writing the same cache wait on SQLite's
-  lock rather than run in parallel. Two MCP servers started on the same new
-  folder may both embed it during the first index; identical inputs are stored
-  once.
+  lock rather than run in parallel. MCP sessions avoid this by sharing the daemon;
+  a separate `seyk index --watch` on the same folder still duplicates its work.
+- **Searches can wait for an indexing batch.** The daemon runs one model, so a
+  query embedded while a large first index is running waits for the current
+  batch (a few seconds on a busy CPU).
 - **Setext headings** (underlined with `===`/`---`) are not recognised; ATX
   headings (`#`) are.
 

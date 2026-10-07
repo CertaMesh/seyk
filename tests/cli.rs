@@ -73,7 +73,7 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
     .join("\n")
         + "\n";
     let output = binary()
-        .args(["mcp", temp.path().to_str().unwrap()])
+        .args(["mcp", "--standalone", temp.path().to_str().unwrap()])
         .env("SEYK_MODEL", temp.path().join("no-model"))
         .write_stdin(requests)
         .timeout(std::time::Duration::from_secs(20))
@@ -93,4 +93,63 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
             .unwrap()
             .contains(&Value::from("queries"))
     );
+}
+
+/// `seyk mcp` starts the shared daemon on first use and relays through it; the
+/// daemon reports its folders and stops on request. No model weights needed.
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn mcp_relays_through_a_daemon_it_starts() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    let env = |cmd: &mut Command| {
+        cmd.env("SEYK_DAEMON_DIR", temp.path())
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .env("SEYK_CACHE", temp.path().join("cache.sqlite3"));
+    };
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+    ]
+    .join("\n")
+        + "\n";
+    let mut relay = binary();
+    env(&mut relay);
+    let output = relay
+        .args(["mcp", notes.to_str().unwrap()])
+        .write_stdin(requests)
+        .timeout(std::time::Duration::from_secs(30))
+        .output()
+        .unwrap();
+    let responses: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
+    assert_eq!(responses[1]["result"]["tools"][0]["name"], "search");
+
+    let mut status = binary();
+    env(&mut status);
+    let status: Value = serde_json::from_slice(
+        &status
+            .args(["daemon", "status", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let folder = &status["folders"][0];
+    assert!(folder[0].as_str().unwrap().ends_with("notes"));
+    // Without weights the watcher cannot start; that must show, not hang.
+    assert_eq!(folder[1]["state"], "stopped");
+
+    let mut stop = binary();
+    env(&mut stop);
+    stop.args(["daemon", "stop"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stopped."));
 }
