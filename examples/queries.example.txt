@@ -1,0 +1,6 @@
+# One natural-language query per line. Lines starting with # are ignored.
+Where did I write about the main character becoming like his father?
+What ideas did I have about memory becoming unreliable?
+Where did I describe grief as something physical?
+Which notes deal with somebody repeating their parents' behaviour?
+Where did I discuss the character feeling detached from reality?

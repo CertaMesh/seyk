@@ -318,6 +318,14 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
 
 ## Known limitations
 
+- **Literal matches still pull.** A passage that *shows* a theme without naming it
+  (a story whose details keep shifting, for "memory becoming unreliable") can rank
+  below an unrelated note that shares a word ("memory card … unreliable"). See
+  [docs/benchmarks.md](docs/benchmarks.md#retrieval-smoke-test).
+- **First search of a large folder is slow.** Embedding on the CPU managed roughly
+  5–6 segments per second on a busy machine, about 30 minutes for 10,000
+  segments. After that, only changes are embedded.
+
 - **Audio, video and PDF are not implemented.** See
   [docs/multimodal.md](docs/multimodal.md) for what is missing.
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is

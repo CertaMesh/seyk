@@ -129,10 +129,28 @@ pub(crate) fn l2_normalize(v: &mut [f32]) {
     }
 }
 
+/// Dot product with eight independent accumulators.
+///
+/// A plain `iter().sum()` is a strict sequential float reduction that LLVM may
+/// not reorder, so it does not vectorise. Separate lanes let it use SIMD; this
+/// was 5-6x faster on 256- and 768-d vectors (benches/similarity.rs, dot_kernel).
 #[inline]
 pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
+    let tail: f32 = ca
+        .remainder()
+        .iter()
+        .zip(cb.remainder())
+        .map(|(x, y)| x * y)
+        .sum();
+    let mut acc = [0.0f32; 8];
+    for (x, y) in ca.zip(cb) {
+        for i in 0..8 {
+            acc[i] += x[i] * y[i];
+        }
+    }
+    acc.iter().sum::<f32>() + tail
 }
 
 pub(crate) fn to_bytes(v: &[f32]) -> Vec<u8> {
@@ -161,6 +179,16 @@ mod tests {
     #[test]
     fn rejects_short_vectors() {
         assert!(Embedding::from_raw(vec![1.0; 100], Dimension::D128).is_err());
+    }
+
+    #[test]
+    fn dot_matches_naive_sum() {
+        for n in [1, 7, 8, 9, 128, 131, 768] {
+            let a: Vec<f32> = (0..n).map(|i| (i as f32 * 0.37).sin()).collect();
+            let b: Vec<f32> = (0..n).map(|i| (i as f32 * 0.11).cos()).collect();
+            let naive: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+            assert!((dot(&a, &b) - naive).abs() < 1e-4, "n={n}");
+        }
     }
 
     #[test]
