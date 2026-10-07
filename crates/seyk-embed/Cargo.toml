@@ -5,3 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Model-independent embedding interfaces and values"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"

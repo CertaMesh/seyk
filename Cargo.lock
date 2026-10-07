@@ -2533,6 +2533,11 @@ version = "0.2.0-dev"
 [[package]]
 name = "seyk-embed"
 version = "0.2.0-dev"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "seyk-embeddinggemma"
