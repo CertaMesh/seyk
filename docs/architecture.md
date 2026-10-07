@@ -269,8 +269,11 @@ The old unversioned machine output is legacy v1. CLI JSON objects now have a
 flattened `schema_version: 2` field: search, index/watch, cache stats and daemon
 status. No-running-daemon output remains `null`. MCP's existing JSON content
 block also has the version; no separate structuredContent channel was added.
-After a schema is released, any field addition, removal or rename bumps its
-version, including additive fields, because consumers parse strictly. The field
+After a document schema is released, any field addition, removal or rename
+bumps its version, including additive fields, because consumers parse strictly.
+A new command may introduce a new document type at the current version without
+changing existing document schemas. Using an existing nullable field with null
+does not change its schema. The field
 corrections here finalize unreleased v2. Bare `null` for no daemon is the sole
 non-object exception.
 
@@ -412,3 +415,102 @@ on top of provider reads and current locators. Before broader providers, revisit
 scope semantics and version guarantees with a real implementation. Size/mtime
 blind spots and filesystem TOCTOU remain limitations; this refactor does not
 claim atomic snapshots or introduce an ACL layer.
+
+## Phase 3 report: explicit text extraction
+
+### What was implemented
+
+`SearchEngine::extract(&SearchHit)` returns `ExtractedContent { text, source,
+locator, metadata }`. Text, Markdown and code use the exact half-open byte
+range from the hit. Markdown syntax and link destinations, Unicode, whitespace
+and line endings are preserved. The metadata retains the BLAKE3 hash of the
+whole resource; it is not a hash of the extracted passage.
+
+The synchronous `Extractor: Send + Sync` interface has `supports(source,
+locator, metadata)` and `extract(bytes, source, locator, metadata)`. The engine
+selects the first supporting custom extractor, in registration order, with
+`TextExtractor` as the built-in fallback. An extractor error is returned without
+trying another extractor. Search does not invoke the extractor registry.
+
+The central `extract_resource(provider, extractor, source, locator, metadata)`
+gateway reads through `ResourceProvider`, verifies the full BLAKE3 hash, then
+passes those exact bytes to the extractor. A custom extractor cannot bypass
+verification when invoked through the engine or gateway. Direct calls to the
+low-level trait method require already-verified bytes from the caller.
+The public gateway also permits extraction without constructing an engine or
+loading a model. PreviewReader shares its read/hash/verify and strict text-range
+helpers, retains one read per resource per search, and continues to suppress
+failed optional previews. Explicit extraction returns typed errors instead:
+`StaleResource`, `UnsupportedExtraction`, `InvalidLocator`, or `InvalidText`;
+provider read errors propagate. Unsupported locators/modalities fail before a
+read. Invalid UTF-8 is never replaced with guessed characters.
+
+`seyk extract --from-json <FILE|-> [--hit INDEX] [--json]` accepts a complete
+version-2 search envelope and selects one hit (zero-based index, default 0).
+It rejects unknown/unversioned schemas, invalid hits and missing indexes before
+reading the source. Raw output adds no newline; JSON output is a new document
+type with `schema_version: 2`, `text`, `source`, `locator`, and `metadata`.
+Extraction needs no model, cache, daemon or network. Errors produce stderr and
+a nonzero exit status without extracted content on stdout.
+
+`seyk search --no-preview` skips preview reads and retains `"preview": null` in
+CLI JSON. Search still reads resources as needed for indexing. Default text
+previews and every existing v2 document shape remain unchanged. The new extract
+document does not require a version bump or a new daemon endpoint identity.
+
+### What was deliberately not implemented
+
+No PDF, OCR, audio/video, remote provider, LLM, automatic extraction, ranking or
+segmentation changes. Cache schema remains v4 with no embedding invalidation.
+No persisted media type: today's text modality plus text locator identifies
+raw UTF-8. The source ID is available to `supports` for extension-based hints
+when another format needs them. An extension is not proof of format, and opaque
+IDs will eventually need authoritative provider metadata. Phase 4 should decide
+that with a working PDF implementation rather than speculative cache fields.
+
+No MCP extract tool: MCP search currently returns display line ranges but omits
+the exact byte locator and content hash. Those cannot be reconstructed safely
+from line numbers. A future MCP extraction protocol needs round-trip references
+and session-root checks before reads. Existing MCP confinement is unchanged;
+the CLI supplies the process boundary needed by downstream wrappers.
+
+### What we learned
+
+Verification belongs before extractor dispatch, where every implementation
+receives the same checked snapshot. It cannot depend on each plugin remembering
+to perform a hash check. Whole-resource reads/hashes are suitable for this text
+phase; future range/streaming extractors for audio/video need a separate method
+and a corresponding hash contract. No such method is implemented yet.
+
+The content hash proves agreement with the supplied hit, not authorization or
+authenticity of caller-supplied metadata. Filesystem TOCTOU is still a provider
+limitation; returned text always comes from the verified buffer, never a second
+read. Source text is not persisted by extraction. Tests and demos use synthetic
+content only.
+
+### Verification and demo
+
+The required Rust 1.99 fmt, all-target locked Clippy with `-D warnings`, and
+locked default test suite pass. The suite includes exact Markdown/plain/code
+ranges, multibyte boundary and malformed-range rejection, invalid UTF-8, empty
+ranges, stale filesystem and memory resources, custom extractor ordering and
+hash gating, preview read reuse, CLI stdin/file selection, v2/null-preview
+compatibility, and model-free error handling. Existing model/reference-dependent
+tests remain ignored by the default suite; no private evaluation was run.
+The PR records Ubuntu, macOS and Windows CI results for its final head.
+
+A real local EmbeddingGemma 2 q8/128-dimension CLI run searched two synthetic
+notes, `garden.md` and `harbor.md`, with previews disabled and a throwaway cache.
+The `garden.md` query returned bytes 0–110 (lines 1–4) from garden.md with
+`preview: null`. Both JSON extraction through stdin and raw extraction from the
+saved search envelope reproduced all 110 source bytes, including Markdown link
+targets and Unicode. Replacing `basil` with same-length `thyme` then made extraction
+fail with empty stdout. The full demo took 3.10 seconds on this machine; this is
+a smoke check, not a performance benchmark.
+
+### What should happen next
+
+Evaluate the extraction API with downstream CLI consumers, then implement text
+PDF extraction in Phase 4 behind the same explicit boundary. Resolve media
+metadata and MCP hit references with their first real consumers. Keep search,
+extraction and downstream reasoning separate.
