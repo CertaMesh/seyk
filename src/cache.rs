@@ -3,7 +3,7 @@
 //! A cache is an optimisation, not a corpus. It stores per-resource metadata,
 //! per-segment locators, embedding vectors and a keyword index of each
 //! segment's words, never a readable copy of the source content. (The keyword
-//! index is still sensitive: much of a text can be pieced together from it.)
+//! index retains word frequencies, not source word order, and is still sensitive.)
 //!
 //! Vectors are keyed by `(profile, input_hash)`:
 //! - the profile hashes everything that affects a vector (model, revision,
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::embedder::ModelIdentity;
 use crate::embedding::{from_bytes, to_bytes};
-use crate::lexical::{FIELDS, LexicalDoc, LexicalQuery};
+use crate::lexical::{FIELDS, LexicalDoc, LexicalQuery, order_free_text};
 use crate::{Error, Modality, ResourceLocator, ResourceMetadata, Result};
 
 /// Everything that determines a cached vector, besides the input itself.
@@ -386,7 +386,7 @@ fn lexical_docs(path: &Path, resource: &CachedResource) -> Vec<LexicalDoc> {
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 /// Persistent cache in a single SQLite file.
 pub struct SqliteCache {
@@ -444,21 +444,36 @@ impl SqliteCache {
                 |r| r.get(0),
             )
             .optional()?;
-        if version.as_deref() == Some("1") {
-            // v2 adds the keyword index. Forget the resource list but keep every
-            // vector: the next sync re-reads files to index their words, and
-            // embeds nothing it has embedded before.
-            self.conn.execute_batch("DELETE FROM resources;")?;
+        let tx = self.conn.transaction()?;
+        if matches!(version.as_deref(), Some("1" | "2")) {
+            // v3 removes source word order. Keep segment references so orphan
+            // pruning cannot remove vectors for roots that have not synced yet.
+            // v1 already has the same resource/segment columns, but no FTS table.
+            let has_fts: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'segments_fts')",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_fts {
+                // A plain DELETE only tombstones contentless rows: the old
+                // tokens and positions stay in segments_fts_data. delete-all
+                // rebuilds the index empty.
+                tx.execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all');")?;
+            }
+            // Invalidate both fast paths: every resource must be re-read and
+            // re-segmented, reusing its vectors, on its next normal sync.
+            tx.execute_batch("UPDATE resources SET modified_ns = NULL, content_hash = '';")?;
         } else if version.as_deref() != Some(SCHEMA_VERSION) {
             // It is a cache: on any other schema change, start over.
-            self.conn.execute_batch(
-                "DROP TABLE IF EXISTS embeddings;
+            tx.execute_batch(
+                "DROP TABLE IF EXISTS segments_fts;
+                 DROP TABLE IF EXISTS embeddings;
                  DROP TABLE IF EXISTS segments;
                  DROP TABLE IF EXISTS resources;
                  DROP TABLE IF EXISTS profiles;",
             )?;
         }
-        self.conn.execute_batch(
+        tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS profiles (
                  id TEXT PRIMARY KEY,
                  profile TEXT NOT NULL,
@@ -490,6 +505,7 @@ impl SqliteCache {
                  vector BLOB NOT NULL,
                  PRIMARY KEY (profile, input_hash)
              );
+             -- Sorted input: full detail preserves frequencies, not source order.
              -- Contentless: stores the words' index, not the text. Row ids are
              -- segments.rowid, so rows are deleted explicitly with their segments.
              CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
@@ -498,10 +514,11 @@ impl SqliteCache {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
-        self.conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             [SCHEMA_VERSION],
         )?;
+        tx.commit()?;
         Ok(())
     }
 }
@@ -669,7 +686,8 @@ impl EmbeddingCache for SqliteCache {
                 .file_name()
                 .map(|n| n.to_string_lossy())
                 .unwrap_or_default();
-            let full = path.to_string_lossy();
+            let name = order_free_text(&name);
+            let full = order_free_text(&path.to_string_lossy());
             for (i, s) in resource.segments.iter().enumerate() {
                 stmt.execute(params![
                     profile,
@@ -683,8 +701,8 @@ impl EmbeddingCache for SqliteCache {
                     tx.last_insert_rowid(),
                     name,
                     full,
-                    s.heading,
-                    s.lexical_text.as_deref().unwrap_or("")
+                    order_free_text(s.heading.as_deref().unwrap_or("")),
+                    order_free_text(s.lexical_text.as_deref().unwrap_or(""))
                 ])?;
             }
         }
@@ -856,7 +874,7 @@ impl EmbeddingCache for SqliteCache {
 
     fn clear(&mut self) -> Result<()> {
         self.conn
-            .execute_batch("DELETE FROM segments_fts; DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+            .execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all'); DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())

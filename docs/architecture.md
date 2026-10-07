@@ -72,13 +72,13 @@ later phases can see what was deliberately left alone and why.
 ### What was implemented
 
 - **Keyword search.** `src/lexical.rs` holds one tokenizer and query builder
-  (the same rules as FTS5's `unicode61 remove_diacritics 2`, minus common
-  function words), used by both caches. An identifier such as
-  `Session::restore()` becomes a group of tokens that must appear side by side. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
+  (FTS5's `unicode61 remove_diacritics 2`, with common
+  function words removed from queries), used by both caches. An identifier such as
+  `Session::restore()` becomes a group of tokens that must occur in the same field, in any order. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
   with columns for file name, path, heading and body, ranked by BM25.
   `MemoryCache` runs the same BM25 in memory, so `--no-cache` behaves the same.
-- **Schema v2.** Opening a v1 cache clears only the `resources` rows (so every
-  file is re-read once and gets keyword rows); the expensive embeddings are kept.
+- **Schema v3.** Opening a v1 or v2 cache clears resource, segment and keyword
+  rows (so every file is re-read once); the expensive embeddings are kept.
 - **File-name matches.** A query that is a file's name, stem or trailing path
   (`father.md`, `father`, `people/father.md`) is its own signal, independent of
   both the model and the keyword index.
@@ -120,7 +120,7 @@ A real folder of book drafts, eight queries, each with one known target passage.
 - **No learned or calibrated weights.** Eight queries are enough to reject bad
   settings, not to fit parameters. The constants are documented and overridable
   (`--lexical-weight`, hidden).
-- **No user-facing query syntax.** Identifiers become phrases automatically, but
+- **No user-facing query syntax.** Identifiers become token conjunctions automatically, but
   quotes, `AND`/`OR` and field filters (`name:`) are not supported.
 - **No change to segmentation or the embedding cache key.** Retrieval quality
   numbers above rely on both staying as they were.
@@ -134,8 +134,8 @@ A real folder of book drafts, eight queries, each with one known target passage.
 - **Rank fusion hides strength.** A hybrid score of 0.97 can be a weak match
   that happens to rank second of three. That is why hits carry their signals
   and the CLI shows the cosine.
-- **A keyword index is not content-free.** Contentless FTS5 still stores every
-  token and position, so the README's privacy note had to change.
+- **A keyword index is not content-free.** Contentless FTS5 stores word frequencies. The privacy
+  follow-up below removes source word order, but the cache remains sensitive.
 - **Two regressions remain** ("grief as something physical" 1 → 7, "ink on the
   skin" 19 → 25): keyword hits on a common word push a purely thematic passage
   down. `--mode semantic` covers those cases for now.
@@ -146,3 +146,54 @@ Phase 2: give resources an identity that is not a path (a URI-like
 `ResourceId`), put reading behind a `ResourceProvider` with a filesystem
 implementation, and add `ResourceLocator::ImageRegion`, without changing
 behaviour. Phase 3 then builds `extract(&hit)` on top of the provider.
+
+### Phase 1 follow-up: keyword index privacy
+
+Schema v3 sorts each field's tokens before inserting them into contentless
+FTS5. Duplicate tokens stay, preserving term frequency and field length; stored
+positions describe alphabetical order only. Names, paths, headings and body
+fields all take this path. Resource metadata and headings remain cache metadata.
+Opening either v1 or v2 atomically clears the old keyword index and marks all
+resources stale while keeping their segment references, so vectors survive
+partial-root syncs and restarts until each resource is rebuilt without re-embedding
+unchanged inputs.
+Freed-page erasure (`VACUUM` / `secure_delete`) remains a separate follow-up;
+this migration is not a forensic scrub of an existing cache file.
+
+Reproduced with bundled SQLite in automated tests: contentless `detail=none`
+and `detail=column` reject phrase queries and return zero from `bm25()`;
+`detail=none` also rejects column filters. `detail=full` with sorted input
+retains nonzero, field-weighted BM25. See [SQLite's FTS5 documentation](https://sqlite.org/fts5.html#the_detail_option)
+for detail modes and their restrictions.
+
+Queries quote each token, AND identifier tokens within a field, and OR the
+fields and query groups. Field filters prevent an identifier from matching
+across unrelated metadata and body words. Source adjacency is intentionally
+not required. Memory BM25 uses the same conjunctions, weighted frequencies,
+total document-length normalization and IDF floor as FTS5; synthetic tests
+compare scores and ranking with SQLite, including partial and repeated groups.
+
+Both caches now reuse the bundled `unicode61 remove_diacritics 2` tokenizer
+through a thread-local, memory-only scratch index that is rolled back after
+each field. This avoids Rust/SQLite Unicode-category and case-fold differences
+(for example Greek final sigma, Indic marks and digit-mixed Roman numerals).
+Round-trip tests also cover accented Latin, Cyrillic and CJK tokens. No original
+text or token order from this scratch index is written to disk.
+
+The release build was evaluated with the same eight targets and a throwaway
+`SEYK_CACHE`. Row indexes follow the original Phase 1 evaluation table above;
+no additional source queries, filenames or passage text are recorded here.
+Ranks are lower-is-better; `>30` means absent from the first 30 results.
+
+| Row | Semantic | Weight 1.0 | Weight 0.3 | Weight 0.15 | Default | Prior weight 0.3 | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 9 | 2 | 1 | 4 | 1 | 1 | 0 |
+| 2 | 1 | 19 | 7 | 6 | 7 | 7 | 0 |
+| 3 | 1 | 1 | 1 | 1 | 1 | 1 | 0 |
+| 4 | 1 | 2 | 2 | 3 | 2 | 2 | 0 |
+| 5 | 1 | 1 | 1 | 1 | 1 | 1 | 0 |
+| 6 | 18 | 1 | 2 | 9 | 2 | 2 | 0 |
+| 7 | 19 | >30 | 25 | 22 | 25 | 25 | 0 |
+| 8 | 7 | 8 | 7 | 7 | 7 | 7 | 0 |
+
+All eight weight-0.3 ranks are unchanged, and default ranks match them.
