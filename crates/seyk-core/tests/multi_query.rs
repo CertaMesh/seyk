@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 
 use common::FakeEmbedder;
-use seyk::{Dimension, MemoryCache, SearchEngine, SearchMode};
+use seyk_core::{Dimension, MemoryCache, SearchEngine, SearchMode};
 use tempfile::TempDir;
 
 #[test]
@@ -16,7 +16,7 @@ fn several_queries_keep_each_segments_best_score() {
         .cache(MemoryCache::new())
         .build()
         .unwrap();
-    let file_of = |h: &seyk::SearchHit| {
+    let file_of = |h: &seyk_core::SearchHit| {
         h.resource
             .to_file_path()
             .expect("file resource")

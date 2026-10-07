@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::FakeEmbedder;
-use seyk::{
+use seyk_core::{
     Dimension, Embedder, Embedding, EmbeddingCache, MemoryCache, Modality, ModelIdentity,
-    ResourceInput, Result, SearchEngine, SearchMode, SearchResults, SqliteCache,
+    ResourceInput, SearchEngine, SearchMode, SearchResults, SqliteCache,
 };
 use tempfile::TempDir;
 
@@ -25,12 +25,38 @@ impl Embedder for Counting {
     fn supports(&self, m: Modality) -> bool {
         self.inner.supports(m)
     }
-    fn embed_query(&self, q: &str) -> Result<Embedding> {
+    fn embed_query(&self, q: &str) -> seyk_embed::Result<Embedding> {
         self.queries.fetch_add(1, Ordering::SeqCst);
         self.inner.embed_query(q)
     }
-    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> seyk_embed::Result<Vec<Embedding>> {
         self.inner.embed_resources(inputs)
+    }
+
+    fn embed_batch(
+        &self,
+        requests: &[seyk_embed::EmbeddingRequest<'_>],
+    ) -> seyk_embed::Result<Vec<Embedding>> {
+        if requests
+            .iter()
+            .all(|r| r.task == seyk_embed::EmbeddingTask::SearchDocument)
+        {
+            let inputs: Vec<_> = requests.iter().map(|r| r.input.clone()).collect();
+            return self.embed_resources(&inputs);
+        }
+        requests
+            .iter()
+            .map(|r| match &r.input {
+                ResourceInput::Text { text, .. }
+                    if r.task == seyk_embed::EmbeddingTask::SearchQuery =>
+                {
+                    self.embed_query(text)
+                }
+                _ => self
+                    .embed_resources(std::slice::from_ref(&r.input))
+                    .map(|mut v| v.remove(0)),
+            })
+            .collect()
     }
 }
 
@@ -487,7 +513,7 @@ fn invalid_weights_fail_before_indexing_or_embedding_in_every_mode() {
                     .lexical_weight(weight)
                     .execute();
                 assert!(
-                    matches!(result, Err(seyk::Error::Config(_))),
+                    matches!(result, Err(seyk_core::Error::Config(_))),
                     "{mode:?}, {weight}: {result:?}"
                 );
             }

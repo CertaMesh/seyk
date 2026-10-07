@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use seyk::{Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInput, Result};
+use seyk::{Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInput};
 
 /// Deterministic text-only embedder used by integration tests.
 pub struct FakeEmbedder {
@@ -38,7 +38,7 @@ impl FakeEmbedder {
         self.embedded_resources.store(0, Ordering::SeqCst);
     }
 
-    fn embed(&self, text: &str) -> Result<Embedding> {
+    fn embed(&self, text: &str) -> seyk_embed::Result<Embedding> {
         let mut vector = vec![0.0; self.identity.dimension.get()];
         for word in text
             .split(|c: char| !c.is_alphanumeric())
@@ -62,11 +62,11 @@ impl Embedder for FakeEmbedder {
         modality == Modality::Text
     }
 
-    fn embed_query(&self, query: &str) -> Result<Embedding> {
+    fn embed_query(&self, query: &str) -> seyk_embed::Result<Embedding> {
         self.embed(query)
     }
 
-    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> seyk_embed::Result<Vec<Embedding>> {
         self.embedded_resources
             .fetch_add(inputs.len(), Ordering::SeqCst);
         inputs
@@ -76,6 +76,32 @@ impl Embedder for FakeEmbedder {
                     self.embed(&format!("{} {text}", title.unwrap_or_default()))
                 }
                 _ => unreachable!("fake embedder only receives text"),
+            })
+            .collect()
+    }
+
+    fn embed_batch(
+        &self,
+        requests: &[seyk_embed::EmbeddingRequest<'_>],
+    ) -> seyk_embed::Result<Vec<Embedding>> {
+        if requests
+            .iter()
+            .all(|r| r.task == seyk_embed::EmbeddingTask::SearchDocument)
+        {
+            let inputs: Vec<_> = requests.iter().map(|r| r.input.clone()).collect();
+            return self.embed_resources(&inputs);
+        }
+        requests
+            .iter()
+            .map(|r| match &r.input {
+                ResourceInput::Text { text, .. }
+                    if r.task == seyk_embed::EmbeddingTask::SearchQuery =>
+                {
+                    self.embed_query(text)
+                }
+                _ => self
+                    .embed_resources(std::slice::from_ref(&r.input))
+                    .map(|mut v| v.remove(0)),
             })
             .collect()
     }

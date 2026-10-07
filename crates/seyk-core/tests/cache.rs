@@ -6,16 +6,16 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use common::FakeEmbedder;
-use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
-use seyk::segment::{TextSegmenter, TextSegmenterConfig};
-use seyk::{
+use seyk_core::cache::{CacheProfile, CachedResource, CachedSegment, ResourceWrite, SegmentWrite};
+use seyk_core::segment::{TextSegmenter, TextSegmenterConfig};
+use seyk_core::{
     Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceId, ResourceLocator,
     ResourceMetadata, ResourceVersion, SearchEngine, SqliteCache,
 };
 use tempfile::TempDir;
 
 fn shared_engine(
-    cache: impl seyk::EmbeddingCache + 'static,
+    cache: impl seyk_core::EmbeddingCache + 'static,
     dimension: Dimension,
     revision: &str,
 ) -> (SearchEngine, std::sync::Arc<FakeEmbedder>) {
@@ -34,7 +34,7 @@ fn shared_engine(
     (engine, embedder)
 }
 
-fn search(engine: &SearchEngine, root: &Path) -> seyk::SearchResults {
+fn search(engine: &SearchEngine, root: &Path) -> seyk_core::SearchResults {
     engine
         .search("alpha garden")
         .paths([root])
@@ -233,7 +233,6 @@ fn resource(hashes: &[&str]) -> CachedResource {
                 locator: ResourceLocator::WholeResource,
                 heading: None,
                 input_hash: (*h).to_string(),
-                lexical_text: None,
             })
             .collect(),
     }
@@ -256,7 +255,9 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
         cache
             .put_embeddings(id, &[("h".into(), vec![value])])
             .unwrap();
-        cache.put_resource(id, path, &resource(&["h"])).unwrap();
+        cache
+            .put_resource(id, path, &write(&resource(&["h"]), ""))
+            .unwrap();
     }
 
     for (id, value) in [("a", 1.0), ("b", 2.0)] {
@@ -311,7 +312,9 @@ fn memory_cache_accepts_writes_before_registration() {
     assert!(cache.vectors_for("p", &paths(&[path])).unwrap().is_empty());
     assert!(cache.stats().unwrap().profiles.is_empty());
 
-    cache.put_resource("p", path, &resource(&["h"])).unwrap();
+    cache
+        .put_resource("p", path, &write(&resource(&["h"]), ""))
+        .unwrap();
     cache.register_profile("p", &profile("r1")).unwrap();
     assert_eq!(cache.vectors_for("p", &paths(&[path])).unwrap().len(), 1);
     let stats = cache.stats().unwrap().profiles;
@@ -346,10 +349,10 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
         .put_embeddings("other", &[("orphan".into(), vec![3.0])])
         .unwrap();
     cache
-        .put_resource("p", first, &resource(&["shared", "own"]))
+        .put_resource("p", first, &write(&resource(&["shared", "own"]), ""))
         .unwrap();
     cache
-        .put_resource("p", second, &resource(&["shared"]))
+        .put_resource("p", second, &write(&resource(&["shared"]), ""))
         .unwrap();
 
     let only_second = cache.vectors_for("p", &paths(&[second])).unwrap();
@@ -391,16 +394,17 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
         .iter()
         .map(|p| ResourceId::from_path(p).unwrap())
         .collect();
-    let query = seyk::lexical::LexicalQuery::new(["quartz"]);
+    let query = seyk_core::lexical::LexicalQuery::new(["quartz"]);
     let check = |cache: &mut dyn EmbeddingCache| {
         cache.register_profile("ties", &profile("ties")).unwrap();
         for name in &names {
-            let mut r = resource(&["first", "second"]);
-            for segment in &mut r.segments {
-                segment.lexical_text = Some("quartz pebble".into());
-            }
+            let r = resource(&["first", "second"]);
             cache
-                .put_resource("ties", &ResourceId::from_path(name).unwrap(), &r)
+                .put_resource(
+                    "ties",
+                    &ResourceId::from_path(name).unwrap(),
+                    &write(&r, "quartz pebble"),
+                )
                 .unwrap();
         }
         let hits = cache.lexical_search("ties", &query, &wanted, 100).unwrap();
@@ -447,7 +451,7 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
     let before = engine
         .search("quartz")
         .paths([notes.path()])
-        .mode(seyk::SearchMode::Lexical)
+        .mode(seyk_core::SearchMode::Lexical)
         .execute()
         .unwrap();
     drop(engine);
@@ -505,7 +509,7 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
     let after = engine
         .search("quartz")
         .paths([notes.path()])
-        .mode(seyk::SearchMode::Lexical)
+        .mode(seyk_core::SearchMode::Lexical)
         .execute()
         .unwrap();
     assert_eq!(fake.resource_count(), 0);
@@ -546,11 +550,12 @@ fn both_caches_store_non_file_identities_and_opaque_versions() {
         cache.register_profile("p", &profile("r1")).unwrap();
         let mut value = resource(&["generic"]);
         value.version = ResourceVersion::known("opaque-revision-42");
-        value.segments[0].lexical_text = Some("quartz pebble".into());
         cache
             .put_embeddings("p", &[("generic".into(), vec![1.0])])
             .unwrap();
-        cache.put_resource("p", &id, &value).unwrap();
+        cache
+            .put_resource("p", &id, &write(&value, "quartz pebble"))
+            .unwrap();
         let found = cache.resource("p", &id).unwrap().unwrap();
         assert_eq!(found.version, value.version);
         assert_eq!(found.descriptor_hash, value.descriptor_hash);
@@ -558,10 +563,10 @@ fn both_caches_store_non_file_identities_and_opaque_versions() {
             cache.resource_index("p").unwrap()[&id].descriptor_hash,
             value.descriptor_hash
         );
-        assert!(found.segments[0].lexical_text.is_none());
+        assert_eq!(found.segments, value.segments);
         let wanted = HashSet::from([id.clone()]);
         assert_eq!(cache.vectors_for("p", &wanted).unwrap()[0].resource, id);
-        let q = seyk::lexical::LexicalQuery::new(["quartz"]);
+        let q = seyk_core::lexical::LexicalQuery::new(["quartz"]);
         assert_eq!(
             cache.lexical_search("p", &q, &wanted, 1).unwrap()[0].resource,
             id
@@ -593,4 +598,127 @@ fn both_caches_store_non_file_identities_and_opaque_versions() {
         cache.resource("p", &id).unwrap().unwrap().version,
         ResourceVersion::known("next")
     );
+}
+
+fn write<'a>(resource: &'a CachedResource, lexical_body: &'a str) -> ResourceWrite<'a> {
+    ResourceWrite {
+        metadata: &resource.metadata,
+        version: &resource.version,
+        descriptor_hash: resource.descriptor_hash.as_deref(),
+        segments: resource
+            .segments
+            .iter()
+            .map(|segment| SegmentWrite {
+                segment,
+                lexical_body,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn explicit_bodies_replace_keywords_without_persisting_source() {
+    fn check(cache: &mut dyn EmbeddingCache, permits_unregistered: bool) {
+        let id: ResourceId = "mem://notes/plain".parse().unwrap();
+        let image_id: ResourceId = "mem://notes/diagram.png".parse().unwrap();
+        let wanted = HashSet::from([id.clone(), image_id.clone()]);
+        let query = |word| seyk_core::lexical::LexicalQuery::new([word]);
+        let value = resource(&["text"]);
+        let mut picture = resource(&["image"]);
+        picture.metadata.modality = Modality::Image;
+        // Preserve the established contract: MemoryCache accepts pre-registration
+        // writes; SQLite rejects them atomically through its foreign key.
+        let early = cache.put_resource("first", &id, &write(&value, "quartz pebble"));
+        assert_eq!(early.is_ok(), permits_unregistered);
+        assert_eq!(
+            cache.resource("first", &id).unwrap().is_some(),
+            permits_unregistered
+        );
+        cache.register_profile("first", &profile("first")).unwrap();
+        cache
+            .register_profile("second", &profile("second"))
+            .unwrap();
+        cache
+            .put_resource("first", &id, &write(&value, "quartz pebble"))
+            .unwrap();
+        cache
+            .put_resource("first", &image_id, &write(&picture, ""))
+            .unwrap();
+        cache
+            .put_resource("second", &id, &write(&value, "granite"))
+            .unwrap();
+        let read = cache.resource("first", &id).unwrap().unwrap();
+        assert_eq!(read, value);
+        let serialized = serde_json::to_string(&read.segments).unwrap();
+        assert!(!serialized.contains("quartz"));
+        assert!(!serialized.contains("lexical"));
+        assert_eq!(
+            cache
+                .lexical_search("first", &query("quartz"), &wanted, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            cache
+                .lexical_search("first", &query("diagram"), &wanted, 10)
+                .unwrap()[0]
+                .resource,
+            image_id
+        );
+        cache
+            .put_resource("first", &id, &write(&read, "basalt"))
+            .unwrap();
+        assert!(
+            cache
+                .lexical_search("first", &query("quartz"), &wanted, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            cache
+                .lexical_search("first", &query("basalt"), &wanted, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            cache
+                .lexical_search("second", &query("granite"), &wanted, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        cache
+            .remove_resources("first", std::slice::from_ref(&id))
+            .unwrap();
+        assert!(
+            cache
+                .lexical_search("first", &query("basalt"), &wanted, 10)
+                .unwrap()
+                .is_empty()
+        );
+        cache.clear().unwrap();
+        assert!(cache.resource_index("second").unwrap().is_empty());
+        assert!(
+            cache
+                .lexical_search("first", &query("diagram"), &wanted, 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    check(&mut MemoryCache::new(), true);
+    let temp = TempDir::new().unwrap();
+    check(
+        &mut SqliteCache::open(temp.path().join("writes.sqlite3")).unwrap(),
+        false,
+    );
+}
+
+#[test]
+fn profile_serialization_and_hash_match_the_pre_split_binary() {
+    let json = include_str!("fixtures/pre_split_profile.json");
+    let profile: CacheProfile = serde_json::from_str(json).unwrap();
+    assert_eq!(serde_json::to_string(&profile).unwrap(), json);
+    assert_eq!(profile.id(), "b14d0b2f2629a98e1614b142");
 }

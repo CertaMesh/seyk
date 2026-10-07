@@ -592,7 +592,13 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
 }
 
 fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
-    let embedder = GemmaEmbedder::load(gemma_config(args)?)?;
+    let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(|error| {
+        if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
+            anyhow::Error::new(error).context("model is missing; run `seyk model download`")
+        } else {
+            anyhow::Error::new(error)
+        }
+    })?;
     let builder = SearchEngine::builder().embedder(embedder);
     let builder = if ephemeral {
         builder.cache(MemoryCache::new())

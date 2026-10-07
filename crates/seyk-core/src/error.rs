@@ -25,6 +25,12 @@ pub enum Error {
     #[error("{modality} resources are not supported by this embedder")]
     UnsupportedModality { modality: crate::Modality },
 
+    #[error("task {task:?} is not supported for {modality}")]
+    UnsupportedTask {
+        task: seyk_embed::EmbeddingTask,
+        modality: crate::Modality,
+    },
+
     #[error("resource changed since search: {resource} (expected {expected}, got {actual})")]
     StaleResource {
         resource: crate::ResourceId,
@@ -73,3 +79,25 @@ impl Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+// Preserve the established search error variants for downstream matches.
+impl From<seyk_embed::Error> for Error {
+    fn from(error: seyk_embed::Error) -> Self {
+        match error {
+            seyk_embed::Error::Io { path, source } => Self::Io { path, source },
+            seyk_embed::Error::Embedding(message) => Self::Embedding(message),
+            seyk_embed::Error::ModelNotFound(message) => Self::ModelNotFound(message),
+            seyk_embed::Error::UnsupportedModality { modality } => {
+                Self::UnsupportedModality { modality }
+            }
+            seyk_embed::Error::DimensionMismatch { expected, actual } => {
+                Self::DimensionMismatch { expected, actual }
+            }
+            seyk_embed::Error::Config(message) => Self::Config(message),
+            seyk_embed::Error::UnsupportedTask { task, modality } => {
+                Self::UnsupportedTask { task, modality }
+            }
+            other => Self::Embedding(other.to_string()),
+        }
+    }
+}

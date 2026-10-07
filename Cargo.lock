@@ -2503,32 +2503,41 @@ dependencies = [
  "assert_cmd",
  "blake3",
  "clap",
- "criterion",
  "dirs",
- "fast_image_resize",
- "globset",
  "hf-hub",
  "image",
  "libc",
- "notify",
- "ort",
  "predicates",
  "rmcp",
- "rusqlite",
  "schemars",
  "serde",
  "serde_json",
+ "seyk-core",
+ "seyk-embed",
+ "seyk-embeddinggemma",
  "tempfile",
- "thiserror",
  "tokenizers",
  "tokio",
- "url",
- "walkdir",
 ]
 
 [[package]]
 name = "seyk-core"
 version = "0.2.0-dev"
+dependencies = [
+ "blake3",
+ "criterion",
+ "dirs",
+ "globset",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "seyk-embed",
+ "tempfile",
+ "thiserror",
+ "url",
+ "walkdir",
+]
 
 [[package]]
 name = "seyk-embed"

@@ -276,9 +276,10 @@ impl EmbeddingGemma2 {
     /// Load from local files. Fails with [`Error::ModelNotFound`] if they are not present.
     pub fn load(config: GemmaConfig) -> Result<Self> {
         if !Dimension::ALL.contains(&config.dimension) {
-            return Err(Error::Config(
-                "EmbeddingGemma 2 supports dimensions 128, 256, 512 or 768".into(),
-            ));
+            return Err(Error::Config(format!(
+                "unsupported dimension {}; use 128, 256, 512 or 768",
+                config.dimension
+            )));
         }
         if config.max_tokens == 0 || config.batch_size == 0 || config.threads == Some(0) {
             return Err(Error::Config(

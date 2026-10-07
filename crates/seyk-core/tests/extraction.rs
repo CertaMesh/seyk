@@ -1,7 +1,7 @@
 mod common;
 
 use common::FakeEmbedder;
-use seyk::{
+use seyk_core::{
     Dimension, Error, ExtractedContent, Extractor, ResourceId, ResourceLocator, ResourceMetadata,
     Result, SearchEngine, TextExtractor,
 };

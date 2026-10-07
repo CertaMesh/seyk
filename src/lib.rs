@@ -32,35 +32,17 @@
 //! # fn main() {}
 //! ```
 
-pub mod cache;
-pub mod discovery;
-pub mod embedder;
-mod embedding;
-mod engine;
-mod error;
-pub mod extractor;
-pub mod index;
-pub mod lexical;
-pub mod provider;
-mod resource;
-pub mod segment;
-#[cfg(feature = "watch")]
-pub mod watch;
-
-pub use cache::{CacheStats, EmbeddingCache, MemoryCache, SqliteCache};
-pub use discovery::DiscoveryOptions;
-pub use embedder::{Embedder, ModelIdentity, ResourceInput};
-pub use embedding::{Dimension, Embedding};
-pub use engine::{
-    IndexReport, IndexRequest, MatchSignals, ProgressEvent, ProgressFn, SearchEngine,
-    SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults, SearchStats,
-    SkippedResource, SyncStats, expand_tilde, make_preview,
+pub use seyk_core::*;
+pub use seyk_embed::{
+    EmbeddingRequest, EmbeddingTask, VideoFrame, cosine_similarity, dot_product, normalize,
 };
-pub use error::{Error, Result};
-pub use resource::{Modality, ResourceId, ResourceLocator, ResourceMetadata};
-
-pub use provider::{
-    FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
-};
-
-pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};
+pub mod embedder {
+    pub use seyk_embed::*;
+    #[cfg(feature = "onnx")]
+    pub mod gemma {
+        pub use crate::model_download::download;
+        pub use seyk_embeddinggemma::*;
+    }
+}
+#[cfg(feature = "onnx")]
+mod model_download;
