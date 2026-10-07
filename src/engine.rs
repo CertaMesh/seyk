@@ -11,11 +11,11 @@ use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, 
 use crate::discovery::{DiscoveredResource, DiscoveryOptions, ResourceKind, discover};
 use crate::embedder::{Embedder, ResourceInput};
 use crate::index::{BruteForceIndex, VectorIndex};
-use crate::segment::TextSegmenter;
+use crate::segment::{TextFormat, TextSegmenter};
 use crate::{Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
 
 /// Bump when the way segments are turned into model inputs changes.
-const INPUT_FORMAT_VERSION: u32 = 1;
+const INPUT_FORMAT_VERSION: u32 = 2;
 
 /// One ranked match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -400,7 +400,12 @@ impl SearchEngine {
                     .into_iter()
                     .map(|s| {
                         let title = segment_title(stem.as_deref(), s.heading.as_deref());
-                        let hash = input_hash(&["text", title.as_deref().unwrap_or(""), &s.text]);
+                        let model_text = match format {
+                            TextFormat::Markdown => strip_link_targets(&s.text),
+                            TextFormat::Plain | TextFormat::Code => s.text,
+                        };
+                        let hash =
+                            input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
                         Job {
                             hash: hash.clone(),
                             segment: CachedSegment {
@@ -415,7 +420,7 @@ impl SearchEngine {
                             },
                             input: JobInput::Text {
                                 title,
-                                text: s.text,
+                                text: model_text,
                             },
                         }
                     })
@@ -464,6 +469,43 @@ impl JobInput {
             JobInput::Image { bytes } => ResourceInput::Image { bytes },
         }
     }
+}
+
+/// Replace Markdown links with their visible text before embedding.
+///
+/// `[dossier](../90%20Sources/Characters/Evareth.md)` becomes `dossier`, and
+/// `[[Evareth - old|old notes]]` becomes `old notes`. Link targets are paths and
+/// URLs, not prose; left in, they made link-heavy lines match unrelated queries.
+/// Only the model input changes: locators still point at the original bytes.
+fn strip_link_targets(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('[') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        if let Some(inner) = after.strip_prefix("[[")
+            && let Some(end) = inner.find("]]")
+            && !inner[..end].contains('\n')
+        {
+            let target = &inner[..end];
+            out.push_str(target.rsplit('|').next().unwrap_or(target));
+            rest = &inner[end + 2..];
+            continue;
+        }
+        if let Some(close) = after.find("](")
+            && !after[..close].contains('\n')
+            && let Some(end) = after[close + 2..].find(')')
+            && !after[close + 2..close + 2 + end].contains(char::is_whitespace)
+        {
+            out.push_str(&after[1..close]);
+            rest = &after[close + 2 + end + 1..];
+            continue;
+        }
+        out.push('[');
+        rest = &after[1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn skip(path: &Path, reason: impl Into<String>) -> SkippedResource {
@@ -797,6 +839,28 @@ mod tests {
             "Some text here."
         );
         assert_eq!(make_preview("alpha beta gamma delta", 12), "alpha beta…");
+    }
+
+    #[test]
+    fn link_targets_are_not_embedded() {
+        assert_eq!(
+            strip_link_targets(
+                "Sources: [main dossier](../90%20Sources/Evareth.md), ![map](img/map.png)."
+            ),
+            "Sources: main dossier, !map."
+        );
+        assert_eq!(
+            strip_link_targets("see [[Evareth - old]] and [[Nyora|her]]"),
+            "see Evareth - old and her"
+        );
+        assert_eq!(
+            strip_link_targets("an [unclosed bracket and [x] plain"),
+            "an [unclosed bracket and [x] plain"
+        );
+        assert_eq!(
+            strip_link_targets("[spaced](not a url)"),
+            "[spaced](not a url)"
+        );
     }
 
     #[test]
