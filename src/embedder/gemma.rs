@@ -189,24 +189,25 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
             Ok(dir.clone())
         }
         ModelSource::HuggingFace { repo, revision } => {
-            let cache = hf_hub::Cache::from_env();
-            let repo_cache = cache.repo(hf_hub::Repo::with_revision(
-                repo.clone(),
-                hf_hub::RepoType::Model,
-                revision.clone(),
-            ));
-            let mut dir = None;
+            let repo_dir = hf_hub::Cache::from_env()
+                .path()
+                .join(format!("models--{}", repo.replace('/', "--")));
+            // Branch names resolve through refs/. A pinned commit often has no
+            // refs/ entry (the Python client never writes one), only snapshots/<sha>,
+            // so `hf_hub::CacheRepo::get` cannot be used here.
+            let commit = std::fs::read_to_string(repo_dir.join("refs").join(revision))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| revision.clone());
+            let dir = repo_dir.join("snapshots").join(commit);
             for f in config.files() {
-                let p = repo_cache.get(&f).ok_or_else(|| {
-                    Error::ModelNotFound(format!(
-                        "{repo}@{} ({}) is not downloaded; run `gemma-search model download`",
+                if !dir.join(&f).exists() {
+                    return Err(Error::ModelNotFound(format!(
+                        "{repo}@{} ({f}) is not downloaded; run `gemma-search model download`",
                         &revision[..revision.len().min(12)],
-                        f
-                    ))
-                })?;
-                dir.get_or_insert_with(|| snapshot_root(&p, &f));
+                    )));
+                }
             }
-            Ok(dir.expect("at least one file"))
+            Ok(dir)
         }
     }
 }
@@ -243,6 +244,7 @@ impl GemmaEmbedder {
 
     fn from_dir(dir: &Path, config: GemmaConfig) -> Result<Self> {
         let s = config.precision.suffix();
+        let onnx_dir = onnx_dir_without_symlinks(dir, &config)?;
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).map_err(ort_err)?;
         tokenizer
             .with_truncation(Some(tokenizers::TruncationParams {
@@ -253,10 +255,10 @@ impl GemmaEmbedder {
         tokenizer.with_padding(None);
         let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
 
-        let text = session(&dir.join(format!("onnx/model{s}.onnx")), config.threads)?;
+        let text = session(&onnx_dir.join(format!("model{s}.onnx")), config.threads)?;
         let vision = if config.vision {
             Some(Mutex::new(session(
-                &dir.join(format!("onnx/vision_encoder{s}.onnx")),
+                &onnx_dir.join(format!("vision_encoder{s}.onnx")),
                 config.threads,
             )?))
         } else {
@@ -428,6 +430,49 @@ impl GemmaEmbedder {
             modality: Modality::Image,
         })
     }
+}
+
+/// ONNX Runtime refuses external weight files that resolve outside the
+/// directory of the `.onnx` file. The Hugging Face cache stores every file as a
+/// symlink into a shared blob store, which trips that check. In that case,
+/// hard-link the resolved files side by side in a private directory (falling
+/// back to a copy across filesystems). Plain directories are used as they are.
+fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf> {
+    let onnx: Vec<String> = config
+        .files()
+        .into_iter()
+        .filter_map(|f| f.strip_prefix("onnx/").map(str::to_string))
+        .collect();
+    let src = dir.join("onnx");
+    let any_link = onnx
+        .iter()
+        .any(|f| std::fs::symlink_metadata(src.join(f)).is_ok_and(|m| m.file_type().is_symlink()));
+    if !any_link {
+        return Ok(src);
+    }
+    let base = dirs::cache_dir()
+        .ok_or_else(|| Error::Config("no cache directory on this platform".into()))?;
+    let key = blake3::hash(src.to_string_lossy().as_bytes()).to_hex();
+    let dst = base.join("gemma-search").join("models").join(&key[..16]);
+    std::fs::create_dir_all(&dst).map_err(|e| Error::io(&dst, e))?;
+    for f in &onnx {
+        let real = src
+            .join(f)
+            .canonicalize()
+            .map_err(|e| Error::io(src.join(f), e))?;
+        let target = dst.join(f);
+        let real_len = std::fs::metadata(&real)
+            .map_err(|e| Error::io(&real, e))?
+            .len();
+        if std::fs::metadata(&target).is_ok_and(|m| m.len() == real_len) {
+            continue;
+        }
+        let _ = std::fs::remove_file(&target);
+        if std::fs::hard_link(&real, &target).is_err() {
+            std::fs::copy(&real, &target).map_err(|e| Error::io(&target, e))?;
+        }
+    }
+    Ok(dst)
 }
 
 fn session(path: &Path, threads: Option<usize>) -> Result<Session> {

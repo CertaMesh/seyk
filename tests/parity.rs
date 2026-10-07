@@ -69,19 +69,26 @@ fn prompts_and_token_ids_match_reference() {
 #[ignore = "needs EmbeddingGemma 2 weights"]
 fn embeddings_match_reference_at_every_dimension() {
     let r = reference();
+    let mut worst = 1.0f32;
     for dim in Dimension::ALL {
         let e = model_support::embedder(dim);
         for q in &r.queries {
             let got = e.embed_query(&q.text).unwrap();
             let c = cos(got.as_slice(), &truncated(&q.emb, dim.get()));
+            worst = worst.min(c);
             assert!(c >= min_cosine(), "query {:?} at {dim}: cosine {c}", q.text);
         }
         for d in &r.docs {
             let got = e.embed_text_document(d.title.as_deref(), &d.text).unwrap();
             let c = cos(got.as_slice(), &truncated(&d.emb, dim.get()));
+            worst = worst.min(c);
             assert!(c >= min_cosine(), "doc {:?} at {dim}: cosine {c}", d.text);
         }
     }
+    eprintln!(
+        "worst cosine vs reference ({:?}): {worst:.5}",
+        model_support::precision()
+    );
 }
 
 #[test]

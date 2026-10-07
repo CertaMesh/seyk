@@ -36,7 +36,7 @@ pub fn config(dimension: Dimension) -> GemmaConfig {
 }
 
 pub fn embedder(dimension: Dimension) -> GemmaEmbedder {
-    GemmaEmbedder::load(config(dimension)).expect(
-        "EmbeddingGemma 2 weights not found; run `gemma-search model download` (or set GEMMA_SEARCH_MODEL)",
-    )
+    GemmaEmbedder::load(config(dimension)).unwrap_or_else(|e| {
+        panic!("cannot load EmbeddingGemma 2 (run `gemma-search model download` or set GEMMA_SEARCH_MODEL): {e}")
+    })
 }
