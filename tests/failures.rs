@@ -69,6 +69,8 @@ where
             s.path
                 .as_ref()
                 .unwrap()
+                .canonicalize()
+                .unwrap()
                 .strip_prefix(temp.path().canonicalize().unwrap())
                 .unwrap()
                 .to_owned()

@@ -43,6 +43,10 @@ fn search(engine: &SearchEngine, root: &Path) -> seyk::SearchResults {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Solo #4349: timestamp changes need a writable Windows file handle"
+)]
 fn unchanged_and_mtime_only_changes_reuse_embeddings() {
     let temp = TempDir::new().unwrap();
     let file = temp.path().join("notes.txt");
@@ -381,7 +385,8 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
         "/notes/alpha.md",
         "/notes/delta.md",
         "/notes/bravo.md",
-    ];
+    ]
+    .map(|name| std::env::temp_dir().join(name.trim_start_matches('/')));
     let wanted: HashSet<ResourceId> = names
         .iter()
         .map(|p| ResourceId::from_path(p).unwrap())
@@ -389,7 +394,7 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
     let query = seyk::lexical::LexicalQuery::new(["quartz"]);
     let check = |cache: &mut dyn EmbeddingCache| {
         cache.register_profile("ties", &profile("ties")).unwrap();
-        for name in names {
+        for name in &names {
             let mut r = resource(&["first", "second"]);
             for segment in &mut r.segments {
                 segment.lexical_text = Some("quartz pebble".into());

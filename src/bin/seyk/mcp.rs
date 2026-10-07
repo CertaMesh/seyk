@@ -592,8 +592,10 @@ mod tests {
         assert_eq!(response["schema_version"], 2);
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
-            response["hits"][0]["path"],
-            canonical.to_string_lossy().as_ref()
+            Path::new(response["hits"][0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            canonical
         );
         assert_eq!(
             response["hits"][0]["resource"],
@@ -620,6 +622,8 @@ mod tests {
             hits[0]
                 .resource
                 .to_file_path()
+                .unwrap()
+                .canonicalize()
                 .unwrap()
                 .starts_with(outer.path().canonicalize().unwrap())
         );

@@ -804,9 +804,13 @@ mod tests {
     use super::*;
     use seyk::{MatchSignals, Modality, ResourceId, ResourceMetadata, SearchStats};
 
+    fn test_path(path: &str) -> PathBuf {
+        std::env::temp_dir().join(path.trim_start_matches('/'))
+    }
+
     fn hit(path: &str, score: f32, locator: ResourceLocator, preview: Option<&str>) -> SearchHit {
         SearchHit {
-            resource: ResourceId::from_path(path).unwrap(),
+            resource: ResourceId::from_path(test_path(path)).unwrap(),
             locator,
             score,
             metadata: ResourceMetadata {
@@ -854,9 +858,9 @@ mod tests {
 
     #[test]
     fn human_output() {
-        let out = format_results(&results(), Path::new("/book"), false);
+        let out = format_results(&results(), &test_path("/book"), false);
         assert_eq!(
-            out,
+            out.replace('\\', "/"),
             "0.914  characters/father.md:81-96\n       He notices himself repeating the same gestures...\n\n0.500  photos/kitchen.jpg\n"
         );
     }
@@ -866,7 +870,7 @@ mod tests {
         let mut r = results();
         r.queries.push("dad".into());
         r.hits[1].query_index = 1;
-        let out = format_results(&r, Path::new("/book"), false);
+        let out = format_results(&r, &test_path("/book"), false);
         assert!(out.contains("father.md:81-96  ← \"father\"\n"), "{out}");
         assert!(out.contains("kitchen.jpg  ← \"dad\"\n"), "{out}");
     }
@@ -880,7 +884,7 @@ mod tests {
             filename: true,
             ..Default::default()
         };
-        let out = format_results(&r, Path::new("/book"), false);
+        let out = format_results(&r, &test_path("/book"), false);
         assert!(
             out.contains("father.md:81-96  [meaning 0.91+words]\n"),
             "{out}"
@@ -893,7 +897,12 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
         assert_eq!(v["schema_version"], 2);
         let first = &v["hits"][0];
-        assert_eq!(first["resource"], "file:///book/characters/father.md");
+        assert_eq!(
+            first["resource"],
+            ResourceId::from_path(test_path("/book/characters/father.md"))
+                .unwrap()
+                .as_str()
+        );
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");
@@ -908,7 +917,7 @@ mod tests {
         let value = serde_json::to_value(json_output(&r)).unwrap();
         assert_eq!(value["schema_version"], 2);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
-        assert!(format_results(&r, Path::new("/"), false).contains("mem://book/chapter"));
+        assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
             2

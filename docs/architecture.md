@@ -318,7 +318,8 @@ SearchResults serialization includes URI hits but does not add the CLI envelope.
 ### Verification and demo
 
 The required Rust 1.99 fmt and all-target Clippy checks pass. The default test
-suite passes with the 9 existing weight/reference-dependent tests ignored; PR #9
+suite passes with the 9 existing weight/reference-dependent tests ignored and
+two Windows-only follow-ups documented below; PR #9
 records the per-OS results for the final head.
 The updated library doctest compiles. Automated evidence includes:
 
@@ -362,6 +363,13 @@ Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking chang
 Filesystem is the only real provider; the memory provider exists only in tests.
 
 ### What we learned
+
+Native Windows testing passed all nine provider tests, including actual deletion
+and vector pruning. Additional CLI/MCP, lexical-tie and failure-isolation URI
+fixtures now compare portable absolute paths or canonicalize decoded paths.
+Two unrelated pre-existing tests are ignored only on Windows pending Solo
+#4348 (discovery fixture separators) and #4349 (read-only timestamp handle).
+Provider/deletion regressions remain enabled on Windows.
 
 The first Windows CI run exposed two previously uncompiled lint paths: a cache
 fixture used only by Unix assertions and a daemon-only status method. The
