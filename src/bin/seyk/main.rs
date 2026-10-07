@@ -1,4 +1,4 @@
-//! `gemma-search`: a thin command-line front end for the `gemma_search` crate.
+//! `seyk`: a thin command-line front end for the `seyk` crate.
 
 #[cfg(feature = "mcp")]
 mod mcp;
@@ -9,8 +9,8 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use gemma_search::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
-use gemma_search::{
+use seyk::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
+use seyk::{
     CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, IndexReport, MemoryCache,
     ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchResults, SqliteCache, SyncStats,
     expand_tilde,
@@ -18,7 +18,7 @@ use gemma_search::{
 
 #[derive(Parser)]
 #[command(
-    name = "gemma-search",
+    name = "seyk",
     version,
     about = "Local semantic search over your files with EmbeddingGemma 2"
 )]
@@ -30,7 +30,7 @@ struct Cli {
 #[derive(Args, Clone)]
 struct ModelArgs {
     /// Model directory, or Hugging Face repo as REPO[@REVISION]. Defaults to the pinned ONNX export.
-    #[arg(long, env = "GEMMA_SEARCH_MODEL", global = true)]
+    #[arg(long, env = "SEYK_MODEL", global = true)]
     model: Option<String>,
 
     /// Embedding dimension: 768, 512, 256 or 128. Queries and cache entries always share it.
@@ -46,7 +46,7 @@ struct ModelArgs {
     text_only: bool,
 
     /// Cache file. Defaults to the platform cache directory.
-    #[arg(long, env = "GEMMA_SEARCH_CACHE", global = true)]
+    #[arg(long, env = "SEYK_CACHE", global = true)]
     cache_path: Option<PathBuf>,
 }
 
@@ -122,7 +122,7 @@ enum Command {
     Cache {
         #[command(subcommand)]
         action: CacheAction,
-        #[arg(long, env = "GEMMA_SEARCH_CACHE", global = true)]
+        #[arg(long, env = "SEYK_CACHE", global = true)]
         cache_path: Option<PathBuf>,
     },
     /// Serve semantic search to agents over MCP (stdio). The model stays loaded.
@@ -307,7 +307,7 @@ fn watch_and_index(
     discovery: &DiscoveryOptions,
     json: bool,
 ) -> Result<ExitCode> {
-    use gemma_search::watch::{WatchOptions, watch};
+    use seyk::watch::{WatchOptions, watch};
     let progress = Progress::new(!json);
     let report = |e: ProgressEvent| progress.event(e);
     if !json {
@@ -598,7 +598,7 @@ fn format_cache_stats(stats: &CacheStats) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gemma_search::{Modality, ResourceId, ResourceMetadata, SearchStats};
+    use seyk::{Modality, ResourceId, ResourceMetadata, SearchStats};
 
     fn hit(path: &str, score: f32, locator: ResourceLocator, preview: Option<&str>) -> SearchHit {
         SearchHit {

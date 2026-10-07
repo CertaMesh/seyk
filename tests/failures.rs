@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::FakeEmbedder;
-use gemma_search::{
+use seyk::{
     Dimension, Embedder, Embedding, Error, MemoryCache, Modality, ModelIdentity, ResourceInput,
     Result, SearchEngine, SqliteCache,
 };
@@ -42,7 +42,7 @@ impl Embedder for Flaky {
 /// neither copy may be recorded as indexed, or the second would never retry.
 fn shared_failed_input_marks_every_owner_incomplete<C>(cache_for: impl Fn(&TempDir) -> C)
 where
-    C: gemma_search::EmbeddingCache + 'static,
+    C: seyk::EmbeddingCache + 'static,
 {
     let temp = TempDir::new().unwrap();
     for dir in ["a", "b"] {

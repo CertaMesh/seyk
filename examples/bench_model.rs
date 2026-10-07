@@ -7,7 +7,7 @@
 //!
 //! Peak RSS is a process-wide high-water mark, so run once per precision
 //! to get a separate memory figure for each. Model files must already be in
-//! the Hugging Face cache (`gemma-search model download`) or `--model-dir`;
+//! the Hugging Face cache (`seyk model download`) or `--model-dir`;
 //! nothing is fetched here.
 
 use std::fmt::Write as _;
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
-use gemma_search::{Embedder, ResourceInput, SearchEngine, SqliteCache};
+use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
+use seyk::{Embedder, ResourceInput, SearchEngine, SqliteCache};
 
 struct Args {
     precision: Precision,

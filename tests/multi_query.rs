@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 
 use common::FakeEmbedder;
-use gemma_search::{Dimension, MemoryCache, SearchEngine};
+use seyk::{Dimension, MemoryCache, SearchEngine};
 use tempfile::TempDir;
 
 #[test]
@@ -16,7 +16,7 @@ fn several_queries_keep_each_segments_best_score() {
         .cache(MemoryCache::new())
         .build()
         .unwrap();
-    let file_of = |h: &gemma_search::SearchHit| {
+    let file_of = |h: &seyk::SearchHit| {
         h.resource
             .path()
             .file_name()

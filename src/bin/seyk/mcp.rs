@@ -1,4 +1,4 @@
-//! `gemma-search mcp`: a stdio MCP server exposing semantic search to agents.
+//! `seyk mcp`: a stdio MCP server exposing semantic search to agents.
 //!
 //! The server only finds passages. The calling agent reads them and writes any
 //! answer, so no generation happens here. The model stays loaded between calls.
@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use gemma_search::watch::{WatchOptions, watch};
-use gemma_search::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
+use seyk::watch::{WatchOptions, watch};
+use seyk::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -33,7 +33,7 @@ background; while `index.state` is \"indexing\", results cover only what is inde
 type EngineFactory = Box<dyn Fn() -> Result<SearchEngine> + Send + Sync>;
 
 #[derive(Clone)]
-pub struct GemmaSearchServer {
+pub struct SeykServer {
     roots: Arc<Vec<PathBuf>>,
     engine: Arc<Mutex<Option<Arc<SearchEngine>>>>,
     factory: Arc<EngineFactory>,
@@ -109,7 +109,7 @@ struct Response {
     index: Option<IndexStatus>,
 }
 
-impl GemmaSearchServer {
+impl SeykServer {
     pub fn new(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> Result<Self> {
         let roots = roots
             .into_iter()
@@ -259,7 +259,7 @@ impl GemmaSearchServer {
 /// Resolve `path` against the first root and refuse anything outside the roots,
 /// so an agent cannot read previews of arbitrary files through this server.
 fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
-    let path = gemma_search::expand_tilde(path);
+    let path = seyk::expand_tilde(path);
     let joined = if path.is_absolute() {
         path
     } else {
@@ -318,7 +318,7 @@ fn to_response(r: SearchResults) -> Response {
 }
 
 #[tool_router]
-impl GemmaSearchServer {
+impl SeykServer {
     #[tool(
         description = "Semantic search over local files (Markdown, text, code, images). Returns \
         ranked passages as path + line range + preview. Read the files at those lines before \
@@ -341,11 +341,11 @@ impl GemmaSearchServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for GemmaSearchServer {
+impl ServerHandler for SeykServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(
-                "gemma-search",
+                "seyk",
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(INSTRUCTIONS)
@@ -353,7 +353,7 @@ impl ServerHandler for GemmaSearchServer {
 }
 
 pub fn serve(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> Result<()> {
-    let server = GemmaSearchServer::new(roots, factory, background)?;
+    let server = SeykServer::new(roots, factory, background)?;
     if background {
         let s = server.clone();
         std::thread::spawn(move || s.background_index());
@@ -371,7 +371,7 @@ pub fn serve(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gemma_search::{
+    use seyk::{
         Dimension, Embedder, Embedding, MemoryCache, Modality, ModelIdentity, ResourceInput,
     };
     use std::time::{Duration, Instant};
@@ -380,7 +380,7 @@ mod tests {
     struct WordHash(ModelIdentity);
 
     impl WordHash {
-        fn vector(&self, text: &str) -> gemma_search::Result<Embedding> {
+        fn vector(&self, text: &str) -> seyk::Result<Embedding> {
             let mut v = vec![0.0; 128];
             for w in text.split_whitespace() {
                 v[blake3::hash(w.to_lowercase().as_bytes()).as_bytes()[0] as usize % 128] += 1.0;
@@ -396,13 +396,13 @@ mod tests {
         fn supports(&self, m: Modality) -> bool {
             m == Modality::Text
         }
-        fn embed_query(&self, q: &str) -> gemma_search::Result<Embedding> {
+        fn embed_query(&self, q: &str) -> seyk::Result<Embedding> {
             self.vector(q)
         }
         fn embed_resources(
             &self,
             inputs: &[ResourceInput<'_>],
-        ) -> gemma_search::Result<Vec<Embedding>> {
+        ) -> seyk::Result<Vec<Embedding>> {
             inputs
                 .iter()
                 .map(|i| match i {
@@ -429,7 +429,7 @@ mod tests {
             .build()?)
     }
 
-    fn wait_for(server: &GemmaSearchServer, done: impl Fn(&IndexStatus) -> bool) -> IndexStatus {
+    fn wait_for(server: &SeykServer, done: impl Fn(&IndexStatus) -> bool) -> IndexStatus {
         let started = Instant::now();
         loop {
             let s = server.status().unwrap().unwrap();
@@ -444,7 +444,7 @@ mod tests {
         }
     }
 
-    fn search(server: &GemmaSearchServer, q: &str) -> Response {
+    fn search(server: &SeykServer, q: &str) -> Response {
         server
             .run_search(SearchParams {
                 queries: vec![q.into()],
@@ -466,7 +466,7 @@ mod tests {
         )
         .unwrap();
         let server =
-            GemmaSearchServer::new(vec![dir.path().into()], Box::new(fake_engine), true).unwrap();
+            SeykServer::new(vec![dir.path().into()], Box::new(fake_engine), true).unwrap();
         let bg = server.clone();
         std::thread::spawn(move || bg.background_index());
 
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn failed_model_load_stops_background_indexing() {
         let dir = tempfile::TempDir::new().unwrap();
-        let server = GemmaSearchServer::new(
+        let server = SeykServer::new(
             vec![dir.path().into()],
             Box::new(|| Err(anyhow!("no weights"))),
             true,
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn confine_rejects_paths_outside_roots() {
         let root = std::env::temp_dir().canonicalize().unwrap();
-        let inside = root.join("gemma-search-confine-test");
+        let inside = root.join("seyk-confine-test");
         std::fs::create_dir_all(&inside).unwrap();
         let roots = vec![inside.clone()];
         assert_eq!(confine(Path::new("."), &roots).unwrap(), inside);

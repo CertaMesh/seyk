@@ -1,5 +1,5 @@
 [package]
-name = "gemma-search"
+name = "seyk"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -15,9 +15,9 @@ default = ["onnx", "image", "cli", "mcp", "watch"]
 onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
 # Image resources (needs `onnx` for inference).
 image = ["dep:image", "dep:fast_image_resize"]
-# The `gemma-search` binary. Library consumers can disable this.
+# The `seyk` binary. Library consumers can disable this.
 cli = ["dep:clap", "dep:anyhow"]
-# `gemma-search mcp`: a stdio MCP server that keeps the model loaded between searches.
+# `seyk mcp`: a stdio MCP server that keeps the model loaded between searches.
 mcp = ["cli", "watch", "dep:rmcp", "dep:tokio", "dep:schemars"]
 # Keep an index fresh as files change (`index --watch`).
 watch = ["dep:notify"]
@@ -56,8 +56,8 @@ predicates = "3"
 libc = "0.2"
 
 [[bin]]
-name = "gemma-search"
-path = "src/bin/gemma-search/main.rs"
+name = "seyk"
+path = "src/bin/seyk/main.rs"
 required-features = ["cli"]
 
 [[bench]]

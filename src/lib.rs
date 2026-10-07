@@ -7,9 +7,9 @@
 //!
 //! ```no_run
 //! # #[cfg(feature = "onnx")]
-//! # fn main() -> gemma_search::Result<()> {
-//! use gemma_search::{SearchEngine, SqliteCache};
-//! use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder};
+//! # fn main() -> seyk::Result<()> {
+//! use seyk::{SearchEngine, SqliteCache};
+//! use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder};
 //!
 //! let embedder = GemmaEmbedder::load(GemmaConfig::default())?;
 //! let engine = SearchEngine::builder()

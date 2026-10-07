@@ -302,14 +302,14 @@ pub struct SqliteCache {
 }
 
 impl SqliteCache {
-    /// The default location: `<platform cache dir>/gemma-search/cache.sqlite3`.
+    /// The default location: `<platform cache dir>/seyk/cache.sqlite3`.
     ///
-    /// macOS: `~/Library/Caches/gemma-search/`, Linux: `$XDG_CACHE_HOME/gemma-search/`
-    /// (usually `~/.cache/gemma-search/`).
+    /// macOS: `~/Library/Caches/seyk/`, Linux: `$XDG_CACHE_HOME/seyk/`
+    /// (usually `~/.cache/seyk/`).
     pub fn default_path() -> Result<PathBuf> {
         let base = dirs::cache_dir()
             .ok_or_else(|| Error::Config("no cache directory on this platform".into()))?;
-        Ok(base.join("gemma-search").join("cache.sqlite3"))
+        Ok(base.join("seyk").join("cache.sqlite3"))
     }
 
     pub fn open_default() -> Result<Self> {

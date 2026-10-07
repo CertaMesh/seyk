@@ -65,7 +65,7 @@ What this shows, with the caveat above:
 - **The first search of a folder is dominated by embedding.** Under this load, that
   was about 5–6 segments per second, roughly 30 minutes for 10,000 segments. Later
   searches only embed the query and changed segments, which took well under a
-  second here. Run `gemma-search index` once on a large folder.
+  second here. Run `seyk index` once on a large folder.
 - **q8 was not faster than fp32 here.** Its advantages are a 3.5x smaller download
   and faster loading. Compare speed again on a quiet machine before choosing a
   default for speed reasons.

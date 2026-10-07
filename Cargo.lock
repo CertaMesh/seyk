@@ -917,36 +917,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gemma-search"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "blake3",
- "clap",
- "criterion",
- "dirs",
- "fast_image_resize",
- "globset",
- "hf-hub",
- "image",
- "libc",
- "notify",
- "ort",
- "predicates",
- "rmcp",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokenizers",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2523,6 +2493,36 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "seyk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "blake3",
+ "clap",
+ "criterion",
+ "dirs",
+ "fast_image_resize",
+ "globset",
+ "hf-hub",
+ "image",
+ "libc",
+ "notify",
+ "ort",
+ "predicates",
+ "rmcp",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokenizers",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]

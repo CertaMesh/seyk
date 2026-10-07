@@ -5,7 +5,7 @@ mod model_support;
 use std::fs;
 use std::path::Path;
 
-use gemma_search::{Dimension, MemoryCache, ResourceLocator, SearchEngine, SearchResults};
+use seyk::{Dimension, MemoryCache, ResourceLocator, SearchEngine, SearchResults};
 
 fn write(dir: &Path, name: &str, body: &str) {
     let p = dir.join(name);

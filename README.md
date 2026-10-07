@@ -1,4 +1,4 @@
-# gemma-search
+# Seyk
 
 Local semantic search over your own files, built on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
@@ -7,7 +7,7 @@ Ask a question in your own words, point it at a folder, and get back the passage
 that mean the same thing, even when they share no words with the question:
 
 ```console
-$ gemma-search search "grief as something physical" ~/Writing/Book -n 2
+$ seyk search "grief as something physical" ~/Writing/Book -n 2
 0.766  ideas/inheritance.txt:3
        Grief: after the funeral her chest felt packed with wet sand. She could not lift her arms to hang up her coat.
 
@@ -20,7 +20,7 @@ Searched 6 segments: 3 files (3 unchanged, 0 new or changed), 0 segments embedde
 (Real output from a small test folder. The best match shares no words with the
 question except "grief".)
 
-It is a Rust library first. The `gemma-search` CLI is a thin layer over it, so other
+It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
 
 What it is **not**: there is no chat, no answer generation, no summaries, no OCR and
@@ -59,9 +59,9 @@ Runtime build.
 Download the weights once (about 0.5 GB for the default 8-bit text and vision models):
 
 ```bash
-gemma-search model download            # 8-bit weights (default)
-gemma-search model download --precision fp32   # full precision, ~1.8 GB
-gemma-search model info                # where they are, whether they are present
+seyk model download            # 8-bit weights (default)
+seyk model download --precision fp32   # full precision, ~1.8 GB
+seyk model info                # where they are, whether they are present
 ```
 
 This is the only command that uses the network. It fetches the ONNX export
@@ -73,7 +73,7 @@ To use weights you already have, pass a directory with the same layout
 (`tokenizer.json`, `onnx/model_quantized.onnx` + `.onnx_data`, …):
 
 ```bash
-gemma-search search "…" ~/notes --model /path/to/embeddinggemma-2-ONNX
+seyk search "…" ~/notes --model /path/to/embeddinggemma-2-ONNX
 ```
 
 Precision: `q8` (default) or `fp32`. There is deliberately no `fp16`: the model card
@@ -84,32 +84,42 @@ vectors.
 
 ```bash
 # Search a folder (recursively). Embeddings are cached as you go.
-gemma-search search "fear of becoming like his father" ~/Writing/Book
+seyk search "fear of becoming like his father" ~/Writing/Book
 
 # Several paths, files or folders
-gemma-search search "ideas involving memory and identity" notes.md characters/
+seyk search "ideas involving memory and identity" notes.md characters/
+
+# Several phrasings of the same need; each result keeps its best score
+seyk search "who is the main character" -q "protagonist of the story" ~/Writing/Book
 
 # Only Markdown, skip drafts, top 5, hide weak matches
-gemma-search search "grief as something physical" ~/Writing \
+seyk search "grief as something physical" ~/Writing \
   --include '*.md' --exclude drafts --limit 5 --min-score 0.55
 
 # Nothing written to disk
-gemma-search search "query" ./notes --no-cache
+seyk search "query" ./notes --no-cache
 
 # Machine-readable output (mirrors the library's SearchResults type)
-gemma-search search "query" ./notes --json
+seyk search "query" ./notes --json
 
 # Optional: embed everything up front so later searches are instant
-gemma-search index ~/Writing/Book
+seyk index ~/Writing/Book
+
+# Keep the index fresh: index once, then re-index whatever changes
+seyk index --watch ~/Writing/Book
+
+# Serve search to AI agents over MCP (see "Agents" below)
+seyk mcp ~/Writing/Book
 
 # Inspect or wipe the cache
-gemma-search cache stats
-gemma-search cache clear
+seyk cache stats
+seyk cache clear
 ```
 
 | Flag | Meaning |
 |---|---|
 | `-n, --limit` | Number of results (default 10) |
+| `-q, --also` | Another phrasing to search for too (repeatable) |
 | `--min-score` | Hide results below this cosine similarity |
 | `--dimension` | 768, 512, 256 (default) or 128 |
 | `--precision` | `q8` (default) or `fp32` |
@@ -125,11 +135,41 @@ Scores are cosine similarities. Use them to rank results within one search. They
 are not calibrated probabilities, and unrelated text rarely scores near zero, so
 pick a `--min-score` by looking at your own results.
 
+## Agents (MCP)
+
+`seyk mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server
+over stdio. Agents get one tool, `search`, that takes one to eight phrasings and
+returns ranked passages as path, line range, heading, score and preview. The agent
+then reads those lines itself and writes the answer. Seyk never generates text.
+
+```bash
+# Claude Code: make your notes searchable in every session
+claude mcp add --scope user seyk -- seyk mcp ~/Writing/Book
+
+# Or per project, for a codebase
+claude mcp add seyk -- seyk mcp .
+```
+
+- **The model stays loaded.** After the first call, a search takes well under a
+  second on a warm cache.
+- **Indexing runs in the background.** On start the server indexes its folders,
+  then re-indexes on change. Searches never wait for it: they answer from what is
+  already indexed and report `index.state` (`loading_model`, `indexing` with
+  progress, `ready`, `pass_failed` or `stopped`).
+- **Confined to its folders.** The tool refuses paths outside the folders the
+  server was started with.
+- **For code, it complements grep.** Use Seyk for "where do we retry failed
+  payments?" and grep for `retryPayment(`.
+
+**Privacy.** Seyk itself sends nothing anywhere, but a cloud-hosted agent sends
+the passages it reads to its provider. Point the server only at folders you are
+happy for that agent to read.
+
 ## Library
 
 ```rust
-use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder};
-use gemma_search::{Dimension, ResourceLocator, SearchEngine, SqliteCache};
+use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder};
+use seyk::{Dimension, ResourceLocator, SearchEngine, SqliteCache};
 
 let embedder = GemmaEmbedder::load(GemmaConfig {
     dimension: Dimension::D256,
@@ -203,6 +243,9 @@ There are three ways to search:
 3. **Explicit indexing (`index`).** Runs the same update ahead of time and also
    removes cache entries for files deleted under the indexed folders. It is an
    optimisation, never a requirement.
+4. **Watching (`index --watch`, and `mcp`).** Indexes once, then repeats the same
+   incremental update about 1.5 s after files stop changing. Changes inside
+   `.git/`, `target/`, `node_modules/` and similar folders are ignored.
 
 Stale vectors cannot be reused. Every vector is stored under a *profile*: a hash of
 the model id, exact weights revision, precision, dimension, normalisation, both
@@ -214,17 +257,17 @@ the old vectors are simply never looked up. `cache stats` lists the profiles.
 
 | What | Where (macOS) | Where (Linux) |
 |---|---|---|
-| Embedding cache | `~/Library/Caches/gemma-search/cache.sqlite3` | `~/.cache/gemma-search/cache.sqlite3` |
+| Embedding cache | `~/Library/Caches/seyk/cache.sqlite3` | `~/.cache/seyk/cache.sqlite3` |
 | Model weights | `~/.cache/huggingface/hub/` (or `$HF_HOME/hub`) | same |
-| Hard links to the ONNX files (a copy only if the cache is on another disk) | `~/Library/Caches/gemma-search/models/` | `~/.cache/gemma-search/models/` |
-| Configuration | none: flags plus `GEMMA_SEARCH_MODEL`, `GEMMA_SEARCH_CACHE` | same |
+| Hard links to the ONNX files (a copy only if the cache is on another disk) | `~/Library/Caches/seyk/models/` | `~/.cache/seyk/models/` |
+| Configuration | none: flags plus `SEYK_MODEL`, `SEYK_CACHE` | same |
 
 The hard links exist because ONNX Runtime refuses weight files that live behind the
 Hugging Face cache's symlinks.
 
 **Privacy.** Files, queries and embeddings never leave the machine. Treat the cache
 as sensitive: embeddings can leak information about the text they came from. The
-cache directory is created `0700` and the file `0600`. `gemma-search cache clear`
+cache directory is created `0700` and the file `0600`. `seyk cache clear`
 deletes every vector.
 
 ## Supported resources
@@ -250,13 +293,17 @@ matching one of them would score poorly. So text is split along its own structur
 
 - Markdown headings start a new segment and stay with their content. The heading
   path (`Part One > The Kitchen`) is sent to the model as the document title, as the
-  model card recommends. Fenced code blocks are never split or parsed for headings.
+  model card recommends. Lines inside fenced code blocks are never taken for
+  headings.
 - Every paragraph of 60 characters or more is its own segment. Shorter fragments
   (labels, one-line notes) merge with their neighbours, up to about 1,000
   characters (~250 tokens).
 - Paragraphs longer than 1,800 characters (~450 tokens) are cut at sentence ends,
   and the next piece repeats the last sentence. There is no overlap across paragraph
-  breaks you chose yourself.
+  breaks you chose yourself. Fenced code blocks count as one paragraph.
+
+Sizes are counted in bytes, which equals characters for English text. Accented
+and non-Latin text therefore gets somewhat shorter segments.
 
 This uses a small fraction of the model's 8K context on purpose: shorter, focused
 segments retrieve better and give precise locations. Each segment keeps its exact
@@ -294,8 +341,8 @@ cargo test                         # no model needed: segmentation, cache, CLI, 
 cargo test --release -- --ignored  # also the model-backed parity and retrieval tests
 ```
 
-Model-backed tests read `GEMMA_SEARCH_MODEL` (local model dir) and
-`GEMMA_SEARCH_TEST_PRECISION` (`q8` or `fp32`). The image parity tests also need a
+Model-backed tests read `SEYK_MODEL` (local model dir) and
+`SEYK_TEST_PRECISION` (`q8` or `fp32`). The image parity tests also need a
 reference dump from `scripts/reference_image_embeddings.py` (see the test for the
 environment variables).
 
@@ -324,7 +371,8 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   [docs/benchmarks.md](docs/benchmarks.md#retrieval-smoke-test).
 - **First search of a large folder is slow.** Embedding on the CPU managed roughly
   5–6 segments per second on a busy machine, about 30 minutes for 10,000
-  segments. After that, only changes are embedded.
+  segments. After that, only changes are embedded. Run `index --watch` or the MCP
+  server so this happens in the background.
 
 - **Audio, video and PDF are not implemented.** See
   [docs/multimodal.md](docs/multimodal.md) for what is missing.
@@ -342,7 +390,9 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   size and modification time to the nanosecond is not re-read until `index` or a
   cache clear. Vectors are still never reused for different text.
 - **Single-writer cache.** Two processes writing the same cache wait on SQLite's
-  lock rather than run in parallel.
+  lock rather than run in parallel. Two MCP servers started on the same new
+  folder may both embed it during the first index; identical inputs are stored
+  once.
 - **Setext headings** (underlined with `===`/`---`) are not recognised; ATX
   headings (`#`) are.
 
@@ -363,7 +413,9 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 | `cache` | `EmbeddingCache` trait, `SqliteCache`, `MemoryCache`, profiles |
 | `index` | `VectorIndex` trait and `BruteForceIndex` |
 | `engine` | `SearchEngine`: lazy sync, ranking, previews, `index` |
-| `src/bin/gemma-search.rs` | Argument parsing and formatting only |
+| `watch` | Re-index on file changes (`index --watch`, MCP background indexing) |
+| `src/bin/seyk/main.rs` | Argument parsing and formatting only |
+| `src/bin/seyk/mcp.rs` | The MCP server: tool schema, root confinement, background indexing |
 
 ## License
 

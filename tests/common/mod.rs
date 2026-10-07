@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use gemma_search::{
+use seyk::{
     Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInput, Result,
 };
 

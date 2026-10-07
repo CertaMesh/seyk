@@ -4,7 +4,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 fn binary() -> Command {
-    Command::cargo_bin("gemma-search").unwrap()
+    Command::cargo_bin("seyk").unwrap()
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
         + "\n";
     let output = binary()
         .args(["mcp", temp.path().to_str().unwrap()])
-        .env("GEMMA_SEARCH_MODEL", temp.path().join("no-model"))
+        .env("SEYK_MODEL", temp.path().join("no-model"))
         .write_stdin(requests)
         .timeout(std::time::Duration::from_secs(20))
         .output()
@@ -84,7 +84,7 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "gemma-search");
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
     let tools = &responses[1]["result"]["tools"];
     assert_eq!(tools[0]["name"], "search");
     assert!(

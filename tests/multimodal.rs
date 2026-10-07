@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use gemma_search::Dimension;
-use gemma_search::SearchEngine;
-use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision, vision};
-use gemma_search::embedder::{Embedder, ResourceInput};
+use seyk::Dimension;
+use seyk::SearchEngine;
+use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision, vision};
+use seyk::embedder::{Embedder, ResourceInput};
 use image::{ImageBuffer, Rgb};
 use serde::Deserialize;
 
@@ -80,7 +80,7 @@ fn write_text_page(path: &Path) {
     image.save(path).unwrap();
 }
 
-fn first_path(results: &gemma_search::SearchResults) -> PathBuf {
+fn first_path(results: &seyk::SearchResults) -> PathBuf {
     results
         .hits
         .first()
@@ -138,8 +138,8 @@ impl ImageRecord {
 }
 
 fn load_reference() -> ImageReference {
-    let path = std::env::var("GEMMA_IMAGE_REFERENCE_JSON")
-        .expect("set GEMMA_IMAGE_REFERENCE_JSON to the Python reference JSON");
+    let path = std::env::var("SEYK_IMAGE_REFERENCE_JSON")
+        .expect("set SEYK_IMAGE_REFERENCE_JSON to the Python reference JSON");
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
@@ -208,7 +208,7 @@ fn image_reference_records_check_declared_shapes() {
 #[ignore = "needs generated Python reference tensors"]
 fn image_preprocessing_matches_python_reference() {
     let model_dir =
-        std::env::var("GEMMA_ONNX_DIR").expect("set GEMMA_ONNX_DIR to the ONNX snapshot directory");
+        std::env::var("SEYK_ONNX_DIR").expect("set SEYK_ONNX_DIR to the ONNX snapshot directory");
     let reference = load_reference();
     let tokenizer = load_tokenizer(&model_dir);
 
@@ -225,8 +225,8 @@ fn image_preprocessing_matches_python_reference() {
 #[ignore = "needs generated Python reference tensors and EmbeddingGemma 2 weights"]
 fn image_preprocessing_and_embedding_matches_python_reference() {
     let model_dir =
-        std::env::var("GEMMA_ONNX_DIR").expect("set GEMMA_ONNX_DIR to the ONNX snapshot directory");
-    let precision: Precision = std::env::var("GEMMA_SEARCH_TEST_PRECISION")
+        std::env::var("SEYK_ONNX_DIR").expect("set SEYK_ONNX_DIR to the ONNX snapshot directory");
+    let precision: Precision = std::env::var("SEYK_TEST_PRECISION")
         .unwrap_or_else(|_| "q8".into())
         .parse()
         .unwrap();
@@ -256,7 +256,7 @@ fn image_preprocessing_and_embedding_matches_python_reference() {
             .pop()
             .unwrap();
         let expected =
-            gemma_search::Embedding::from_raw(record.embedding.clone(), Dimension::D768).unwrap();
+            seyk::Embedding::from_raw(record.embedding.clone(), Dimension::D768).unwrap();
         let cosine = actual.cosine(&expected);
         println!(
             "{} precision={} resized={}x{} soft_tokens={} max_pixel_diff={:.7} cosine={:.7}",

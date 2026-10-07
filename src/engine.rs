@@ -487,8 +487,8 @@ impl JobInput {
 
 /// Replace Markdown links with their visible text before embedding.
 ///
-/// `[dossier](../90%20Sources/Characters/Evareth.md)` becomes `dossier`, and
-/// `[[Evareth - old|old notes]]` becomes `old notes`. Link targets are paths and
+/// `[dossier](../people/Ada.md)` becomes `dossier`, and
+/// `[[Ada - old|old notes]]` becomes `old notes`. Link targets are paths and
 /// URLs, not prose; left in, they made link-heavy lines match unrelated queries.
 /// Only the model input changes: locators still point at the original bytes.
 fn strip_link_targets(text: &str) -> String {
@@ -946,13 +946,13 @@ mod tests {
     fn link_targets_are_not_embedded() {
         assert_eq!(
             strip_link_targets(
-                "Sources: [main dossier](../90%20Sources/Evareth.md), ![map](img/map.png)."
+                "Sources: [main dossier](../people/Ada.md), ![map](img/map.png)."
             ),
             "Sources: main dossier, !map."
         );
         assert_eq!(
-            strip_link_targets("see [[Evareth - old]] and [[Nyora|her]]"),
-            "see Evareth - old and her"
+            strip_link_targets("see [[Ada - old]] and [[Marlow|him]]"),
+            "see Ada - old and him"
         );
         assert_eq!(
             strip_link_targets("an [unclosed bracket and [x] plain"),

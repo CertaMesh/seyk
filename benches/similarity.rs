@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use gemma_search::cache::{CacheProfile, CachedResource, CachedSegment};
-use gemma_search::index::{BruteForceIndex, VectorIndex};
-use gemma_search::{
+use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
+use seyk::index::{BruteForceIndex, VectorIndex};
+use seyk::{
     Dimension, EmbeddingCache, Modality, ModelIdentity, ResourceLocator, ResourceMetadata,
     SqliteCache,
 };

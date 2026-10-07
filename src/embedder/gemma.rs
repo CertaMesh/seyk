@@ -202,7 +202,7 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
             for f in config.files() {
                 if !dir.join(&f).exists() {
                     return Err(Error::ModelNotFound(format!(
-                        "{repo}@{} ({f}) is not downloaded; run `gemma-search model download`",
+                        "{repo}@{} ({f}) is not downloaded; run `seyk model download`",
                         &revision[..revision.len().min(12)],
                     )));
                 }
@@ -453,7 +453,7 @@ fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf
     let base = dirs::cache_dir()
         .ok_or_else(|| Error::Config("no cache directory on this platform".into()))?;
     let key = blake3::hash(src.to_string_lossy().as_bytes()).to_hex();
-    let dst = base.join("gemma-search").join("models").join(&key[..16]);
+    let dst = base.join("seyk").join("models").join(&key[..16]);
     std::fs::create_dir_all(&dst).map_err(|e| Error::io(&dst, e))?;
     for f in &onnx {
         let real = src

@@ -5,8 +5,8 @@
 
 mod model_support;
 
-use gemma_search::embedder::gemma::{GemmaEmbedder, Precision};
-use gemma_search::{Dimension, Embedder};
+use seyk::embedder::gemma::{GemmaEmbedder, Precision};
+use seyk::{Dimension, Embedder};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -99,7 +99,7 @@ fn batching_does_not_change_vectors() {
     let inputs: Vec<_> = r
         .docs
         .iter()
-        .map(|d| gemma_search::ResourceInput::Text {
+        .map(|d| seyk::ResourceInput::Text {
             title: d.title.as_deref(),
             text: &d.text,
         })

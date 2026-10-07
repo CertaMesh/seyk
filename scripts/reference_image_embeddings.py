@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -21,9 +22,11 @@ from transformers.models.gemma4.image_processing_gemma4 import (
 )
 
 
+# The pinned snapshot in the local Hugging Face cache; override with SEYK_REFERENCE_MODEL_DIR.
 MODEL_DIR = Path(
-    "/Users/krishankoenig/.cache/huggingface/hub/models--google--embeddinggemma-2"
-    "/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b"
+    os.environ.get("SEYK_REFERENCE_MODEL_DIR")
+    or Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    / "hub/models--google--embeddinggemma-2/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b"
 )
 
 

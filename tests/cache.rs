@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::FakeEmbedder;
-use gemma_search::cache::{CacheProfile, CachedResource, CachedSegment};
-use gemma_search::segment::{TextSegmenter, TextSegmenterConfig};
-use gemma_search::{
+use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
+use seyk::segment::{TextSegmenter, TextSegmenterConfig};
+use seyk::{
     Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceLocator,
     ResourceMetadata, SearchEngine, SqliteCache,
 };
 use tempfile::TempDir;
 
 fn shared_engine(
-    cache: impl gemma_search::EmbeddingCache + 'static,
+    cache: impl seyk::EmbeddingCache + 'static,
     dimension: Dimension,
     revision: &str,
 ) -> (SearchEngine, std::sync::Arc<FakeEmbedder>) {
@@ -34,7 +34,7 @@ fn shared_engine(
     (engine, embedder)
 }
 
-fn search(engine: &SearchEngine, root: &Path) -> gemma_search::SearchResults {
+fn search(engine: &SearchEngine, root: &Path) -> seyk::SearchResults {
     engine
         .search("alpha garden")
         .paths([root])

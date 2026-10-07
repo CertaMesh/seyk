@@ -13,10 +13,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use gemma_search::discovery::{ResourceKind, discover};
-use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
-use gemma_search::segment::TextSegmenter;
-use gemma_search::{
+use seyk::discovery::{ResourceKind, discover};
+use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
+use seyk::segment::TextSegmenter;
+use seyk::{
     Dimension, DiscoveryOptions, MemoryCache, ResourceLocator, SearchEngine, SqliteCache,
     expand_tilde, make_preview,
 };
