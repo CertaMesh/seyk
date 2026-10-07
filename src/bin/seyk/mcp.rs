@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use seyk::watch::{WatchOptions, watch};
-use seyk::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use seyk::watch::{WatchOptions, watch};
+use seyk::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
 
 const MAX_QUERIES: usize = 8;
 const MAX_LIMIT: usize = 50;
@@ -344,10 +344,7 @@ impl SeykServer {
 impl ServerHandler for SeykServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                "seyk",
-                env!("CARGO_PKG_VERSION"),
-            ))
+            .with_server_info(Implementation::new("seyk", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
 }
@@ -399,10 +396,7 @@ mod tests {
         fn embed_query(&self, q: &str) -> seyk::Result<Embedding> {
             self.vector(q)
         }
-        fn embed_resources(
-            &self,
-            inputs: &[ResourceInput<'_>],
-        ) -> seyk::Result<Vec<Embedding>> {
+        fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> seyk::Result<Vec<Embedding>> {
             inputs
                 .iter()
                 .map(|i| match i {
@@ -465,8 +459,7 @@ mod tests {
             "lighthouse keeper counts ships",
         )
         .unwrap();
-        let server =
-            SeykServer::new(vec![dir.path().into()], Box::new(fake_engine), true).unwrap();
+        let server = SeykServer::new(vec![dir.path().into()], Box::new(fake_engine), true).unwrap();
         let bg = server.clone();
         std::thread::spawn(move || bg.background_index());
 

@@ -5,9 +5,9 @@
 
 mod model_support;
 
+use serde::Deserialize;
 use seyk::embedder::gemma::{GemmaEmbedder, Precision};
 use seyk::{Dimension, Embedder};
-use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Item {

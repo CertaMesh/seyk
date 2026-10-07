@@ -15,10 +15,7 @@ use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 pub fn precision() -> Precision {
     std::env::var("SEYK_TEST_PRECISION")
         .ok()
-        .map(|p| {
-            p.parse()
-                .expect("SEYK_TEST_PRECISION is q8 or fp32")
-        })
+        .map(|p| p.parse().expect("SEYK_TEST_PRECISION is q8 or fp32"))
         .unwrap_or_default()
 }
 
