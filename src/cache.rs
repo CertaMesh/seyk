@@ -65,6 +65,8 @@ pub struct CachedResource {
 }
 
 /// Resource metadata and the provider token used to index it.
+///
+/// Unstable: may change before 1.0 alongside the provider and cache contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedResourceState {
     pub metadata: ResourceMetadata,
@@ -110,6 +112,9 @@ pub struct CacheStats {
 }
 
 /// Storage for resource metadata, segment locators and vectors.
+///
+/// Unstable: exposes ResourceVersion and CachedResourceState, which may change
+/// before 1.0; filesystem is the only supported production provider.
 pub trait EmbeddingCache: Send {
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()>;
 

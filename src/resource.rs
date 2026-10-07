@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// The kind of content a resource holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Modality {
     Text,
     Image,
@@ -161,6 +162,7 @@ impl PartialOrd for ResourceId {
 /// Where inside a resource a hit was found. Deliberately modality-independent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ResourceLocator {
     /// A byte range of a text resource. Lines are 1-based and inclusive.
     Text {

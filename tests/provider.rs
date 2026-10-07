@@ -22,6 +22,7 @@ struct Item {
 struct Notes {
     items: Mutex<BTreeMap<ResourceId, Item>>,
     reads: AtomicUsize,
+    version_checks: AtomicUsize,
     unknown: AtomicBool,
     change_on_read: AtomicBool,
     deletion_checks: AtomicUsize,
@@ -89,6 +90,7 @@ impl ResourceProvider for Notes {
         Ok(bytes)
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
+        self.version_checks.fetch_add(1, Ordering::SeqCst);
         self.items
             .lock()
             .unwrap()
@@ -249,6 +251,12 @@ fn version_race_is_skipped_and_deletion_stays_inside_scope() {
     let report = engine.index().roots(roots()).execute().unwrap();
     assert_eq!(report.sync.skipped.len(), 1);
     assert!(report.sync.skipped[0].path.is_none());
+    assert!(
+        serde_json::to_value(&report.sync.skipped[0])
+            .unwrap()
+            .get("path")
+            .is_none()
+    );
     assert_eq!(report.sync.resources_updated, 0);
     engine
         .index()
@@ -481,4 +489,21 @@ fn deletion_scope_errors_are_reported_without_losing_entries() {
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn fresh_listing_avoids_version_checks_but_reads_are_guarded() {
+    let notes = Arc::new(Notes::default());
+    notes.set("mem://book/a", "alpha garden");
+    let (engine, _) = engine(notes.clone());
+    engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(notes.version_checks.swap(0, Ordering::SeqCst), 2);
+    engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(notes.version_checks.load(Ordering::SeqCst), 0);
+    notes.set("mem://book/a", "quartz pebble");
+    engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(notes.version_checks.swap(0, Ordering::SeqCst), 2);
+    notes.unknown.store(true, Ordering::SeqCst);
+    engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(notes.version_checks.load(Ordering::SeqCst), 2);
 }

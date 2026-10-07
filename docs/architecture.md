@@ -129,22 +129,6 @@ A real folder of book drafts, eight queries, each with one known target passage.
 
 ### What we learned
 
-Deletion must tolerate unavailable metadata: per-entry errors retain that entry;
-a scope-resolution error retains all candidates. Canonicalizing roots once per
-pass removes the former cached-IDs × roots realpath cost. Synthetic provider
-errors and Unix permission-denied parents exercise retention and reporting;
-out-of-scope cached IDs never reach the deletion provider.
-
-Windows canonical paths use verbatim prefixes while decoded file URIs use disk
-prefixes. Deletion scope comparisons normalize through the same URI codec; the
-missing child is never canonicalized. Native CI covers actual file deletion,
-cache removal and orphan-vector pruning, with portable URI/cache fixtures.
-
-Content hashes alone cannot establish preparation freshness: title and kind/format
-also affect model inputs. Both version and content shortcuts now require the
-persisted descriptor fingerprint, including unknown-version providers. Tests
-compare warm and cold caches after title-only and format-only changes.
-
 - **The weight has to depend on the query.** One global keyword weight cannot
   serve both `INC-18372` and "where did I write about loss you can't feel":
   the first is all keyword, the second is all meaning.
@@ -234,16 +218,23 @@ Nothing produces it yet. Existing locator variants and fields are unchanged.
 The engine now receives a synchronous `ResourceProvider: Send + Sync` for
 listing, reading, version checks and confirmed in-scope deletion. `FsProvider`
 retains discovery filters and the no-follow directory walk. Library requests
-keep `.paths(...)` and can also accept `.roots(...)` with URI identities.
+keep `.paths(...)`, a filesystem-only convenience that canonicalizes locally
+regardless of provider. `.roots(...)` is the generic entry point for URI identities.
+Known boundary leaks remain: ResourceScope carries filesystem DiscoveryOptions,
+and ProvidedResource.kind imports discovery::ResourceKind. Move ResourceKind and
+TextFormat into shared content types at the crate split.
 The provider's descriptor supplies content kind, size, optional mtime, opaque
 version and the title prefix used by embedding. All engine/cache identities
 are ResourceId values; `discover()` remains a filesystem compatibility helper.
 
-Known equal versions skip rereading. Unknown versions always reread and hash;
+Known equal listing versions and descriptor fingerprints skip rereading and
+avoid a second provider.version()/filesystem stat call. Version checks only
+surround actual reads. Unknown versions always reread and hash;
 identical content and model inputs still reuse vectors. Fs versions encode size
 and mtime. Version checks around reads detect changes during indexing, and
 previews still validate the hash of the bytes they actually read. The engine
-has no resource filesystem reads, stats, existence checks or canonicalization.
+delegates resource reads, stats and deletion to providers; request `.paths()`
+still canonicalizes through ResourceScope locally.
 Deletion requires a provider's positive confirmation inside the request scope;
 filter exclusion or a permissions error does not establish deletion. The provider
 resolves deletion roots once per pass; the engine filters cached IDs by those
@@ -278,13 +269,21 @@ The old unversioned machine output is legacy v1. CLI JSON objects now have a
 flattened `schema_version: 2` field: search, index/watch, cache stats and daemon
 status. No-running-daemon output remains `null`. MCP's existing JSON content
 block also has the version; no separate structuredContent channel was added.
+After a schema is released, any field addition, removal or rename bumps its
+version, including additive fields, because consumers parse strictly. The field
+corrections here finalize unreleased v2. Bare `null` for no daemon is the sole
+non-object exception.
 
 CLI search retains queries/mode/hits/stats. A hit now contains, for example,
 `"resource": "file:///notes/my%20note.md"` instead of a path string. MCP hits add
 that resource field and retain `"path": "/notes/my note.md"` for opening files.
-MCP paths are optional for non-file IDs. The URI is the lossless identity;
+MCP paths and CLI skipped-record paths are omitted for non-file IDs. The URI is
+the lossless identity;
 JSON display paths replace invalid UTF-8 bytes. Skipped resources expose a URI
-and optional local path. Human CLI output for existing files is unchanged.
+and optional local path. Parse `resource` as a URI and percent-decode its file
+path; never strip the `file://` prefix. Confinement checks must compare decoded,
+canonical filesystem paths, not URI strings. Human CLI output for existing files
+is unchanged.
 The daemon endpoint hash includes the JSON protocol version, so new clients
 do not reuse a daemon serving the old output shape.
 
@@ -297,7 +296,8 @@ Public Rust API breaks:
   representation and parser use URIs, so legacy serialized path strings are
   rejected. File URIs normalize aliases; ordering retains local Path ordering
   for file/file comparisons and uses URI order for non-file identities.
-- Exhaustive ResourceLocator matches must handle the new ImageRegion variant.
+- ResourceLocator adds ImageRegion; both ResourceLocator and Modality become
+  `#[non_exhaustive]`, so downstream matches need a wildcard arm.
 - `SkippedResource` adds `resource: ResourceId`; `path` becomes `Option<PathBuf>`.
 - `EmbeddingCache::resource_index` returns
   `HashMap<ResourceId, CachedResourceState>` containing metadata and version.
@@ -309,7 +309,8 @@ Public Rust API breaks:
   `CachedResourceState` also exposes the fingerprint. `StoredVector.path` and
   `LexicalHit.path` become `resource: ResourceId`.
 
-ResourceProvider, ResourceScope, ProvidedResource and ResourceVersion are
+EmbeddingCache, CachedResourceState, ResourceProvider, ResourceScope,
+ProvidedResource and ResourceVersion are
 explicitly unstable: they may change before 1.0; filesystem is the only supported
 provider. They are not an authorization/ACL framework. Direct library
 SearchResults serialization includes URI hits but does not add the CLI envelope.
@@ -317,7 +318,8 @@ SearchResults serialization includes URI hits but does not add the CLI envelope.
 ### Verification and demo
 
 The required Rust 1.99 fmt and all-target Clippy checks pass. The default test
-suite passes 102 tests with 9 existing weight/reference-dependent tests ignored.
+suite passes with the 9 existing weight/reference-dependent tests ignored; PR #9
+records the per-OS results for the final head.
 The updated library doctest compiles. Automated evidence includes:
 
 - A test-only memory provider driving indexing, semantic/lexical/hybrid retrieval,
@@ -360,6 +362,17 @@ Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking chang
 Filesystem is the only real provider; the memory provider exists only in tests.
 
 ### What we learned
+
+The first Windows CI run exposed two previously uncompiled lint paths: a cache
+fixture used only by Unix assertions and a daemon-only status method. The
+fixture now checks its path on every platform; the method compiles for Unix
+and tests. CI uses no-fail-fast to expose all platform test failures in one run.
+
+A provider abstraction still has filesystem assumptions in `.paths()`, discovery
+filters and content-kind ownership; they are now explicit unstable boundaries.
+Listing tokens avoid a redundant stat on unchanged resources while read-race
+checks remain. Non-exhaustive content enums allow later modalities/locators;
+strict JSON consumers require version bumps even for additive fields.
 
 Deletion must tolerate unavailable metadata: per-entry errors retain that entry;
 a scope-resolution error retains all candidates. Canonicalizing roots once per

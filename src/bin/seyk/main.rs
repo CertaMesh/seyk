@@ -19,6 +19,7 @@ use seyk::{
 };
 
 /// Machine-output protocol; legacy output had no version field.
+/// Any field addition, removal or rename after release requires a version bump.
 const JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(serde::Serialize)]
@@ -624,6 +625,7 @@ fn format_locator(locator: &ResourceLocator) -> String {
             height,
         } => format!(" region {x},{y} {width}x{height}"),
         ResourceLocator::WholeResource => String::new(),
+        _ => String::new(),
     }
 }
 

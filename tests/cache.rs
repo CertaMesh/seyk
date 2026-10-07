@@ -188,6 +188,7 @@ fn memory_cache_is_ephemeral_and_sqlite_is_private() {
 
     let cache_path = temp.path().join("private.sqlite3");
     let cache = SqliteCache::open(&cache_path).unwrap();
+    assert_eq!(cache.path(), cache_path);
     #[cfg(unix)]
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&fs::metadata(cache.path()).unwrap().permissions())

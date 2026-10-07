@@ -33,6 +33,8 @@ impl ResourceVersion {
 }
 
 /// Scope for enumeration and deletion checks. Filters retain filesystem semantics.
+/// Roots identify a resource or hierarchical URI/path descendants for deletion.
+/// DiscoveryOptions remains a filesystem-specific boundary leak.
 ///
 /// Unstable: may change before 1.0; filesystem is the only supported provider.
 #[derive(Debug, Clone)]
@@ -71,6 +73,8 @@ impl ResourceScope {
 }
 
 /// A resource available for indexing, without loading its contents.
+/// `kind` currently comes from filesystem discovery; ResourceKind/TextFormat
+/// should move into shared content types at the crate split.
 ///
 /// Unstable: may change before 1.0; filesystem is the only supported provider.
 #[derive(Debug, Clone)]

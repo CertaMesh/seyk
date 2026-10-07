@@ -81,7 +81,11 @@ pub struct SearchHit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedResource {
     pub resource: ResourceId,
-    #[serde(serialize_with = "crate::resource::serialize_optional_path")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::resource::serialize_optional_path"
+    )]
     pub path: Option<PathBuf>,
     pub reason: String,
 }
@@ -311,6 +315,14 @@ impl SearchEngine {
             }
             let descriptor_hash = r.fingerprint();
             let cached = known.get(&r.id);
+            // Listing already supplies a freshness token; only stat again before a read.
+            if cached.is_some_and(|m| {
+                m.version.matches(&r.version)
+                    && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
+            }) {
+                stats.resources_unchanged += 1;
+                continue;
+            }
             let version = match self.provider.version(&r.id) {
                 Ok(v) => v,
                 Err(e) => {
@@ -323,12 +335,6 @@ impl SearchEngine {
                 stats
                     .skipped
                     .push(skip(&r.id, "resource changed after discovery"));
-                continue;
-            }
-            if cached.is_some_and(|m| {
-                m.version.matches(&version) && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
-            }) {
-                stats.resources_unchanged += 1;
                 continue;
             }
             let bytes = match self.provider.read(&r.id) {
@@ -690,6 +696,8 @@ impl<'e> SearchRequest<'e> {
         self
     }
 
+    /// Add filesystem-only paths, canonicalized locally at execution even with
+    /// a custom provider. Use `roots()` for generic provider identities.
     pub fn paths<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,
@@ -1131,6 +1139,8 @@ impl<'e> IndexRequest<'e> {
         self
     }
 
+    /// Add filesystem-only paths, canonicalized locally at execution even with
+    /// a custom provider. Use `roots()` for generic provider identities.
     pub fn paths<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,

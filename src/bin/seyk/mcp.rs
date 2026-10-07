@@ -234,6 +234,7 @@ impl Hub {
     }
 
     /// Every watched folder and its status, for `seyk daemon status`.
+    #[cfg(any(unix, test))]
     pub fn watched(&self) -> Vec<(PathBuf, IndexStatus)> {
         self.watched
             .lock()
