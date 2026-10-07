@@ -43,10 +43,24 @@ them. What happens next is up to the application.
 
 ## Installation
 
-Requires Rust 1.88 or newer.
+Prebuilt binaries for macOS (Apple Silicon), Linux (x86_64 and ARM64) and
+Windows (x86_64) are attached to each
+[release](https://github.com/CertaMesh/seyk/releases). While the repository is
+private, install with the GitHub CLI:
 
 ```bash
-cargo install --path .
+gh api repos/CertaMesh/seyk/contents/scripts/install.sh \
+  -H "Accept: application/vnd.github.raw" | sh
+```
+
+The script picks your platform, checks the SHA-256 checksum and installs to
+`~/.local/bin` (set `SEYK_INSTALL_DIR` to change that). There is no Intel Mac
+build, because ONNX Runtime publishes no prebuilt library for it.
+
+From source (Rust 1.88 or newer):
+
+```bash
+cargo install --locked --git https://github.com/CertaMesh/seyk
 ```
 
 The binary is self-contained. ONNX Runtime is linked statically; its prebuilt
