@@ -31,10 +31,20 @@ impl std::fmt::Display for Modality {
 pub struct ResourceId(String);
 
 impl ResourceId {
-    /// Convert an absolute local path without reading or canonicalizing it.
+    /// Convert an absolute local path without accessing the filesystem.
+    /// URI dot segments are normalized. Request `.paths(...)` resolves actual
+    /// filesystem paths (including symlinks) before converting them to IDs.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let url = url::Url::from_file_path(path.as_ref())
             .map_err(|_| Error::Config("resource path must be absolute".into()))?;
+        if url
+            .host_str()
+            .is_some_and(|host| !host.is_empty() && host != "localhost")
+        {
+            return Err(Error::Config(
+                "resource path must be local (UNC hosts are unsupported)".into(),
+            ));
+        }
         if url.path().to_ascii_lowercase().contains("%00") {
             return Err(Error::Config("resource path contains NUL".into()));
         }
@@ -272,6 +282,7 @@ mod tests {
         let path = Path::new(r"C:\notes\a b.md");
         let id = ResourceId::from_path(path).unwrap();
         assert_eq!(id.to_file_path().unwrap(), path);
+        assert!(ResourceId::from_path(r"\\server\share\note.md").is_err());
     }
 
     #[test]

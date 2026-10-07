@@ -619,7 +619,22 @@ fn key_path(b: Vec<u8>) -> PathBuf {
     PathBuf::from(std::ffi::OsString::from_vec(b))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn path_key(p: &Path) -> Vec<u8> {
+    // Discovery has always stored canonical Windows paths, including the
+    // verbatim drive prefix. URI decoding omits that prefix; restore it so a
+    // pre-v4 cache continues to use exactly the same keys.
+    use std::path::{Component, Prefix};
+    let raw = p.to_string_lossy();
+    match p.components().next() {
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)) => {
+            format!(r"\\?\{raw}").into_bytes()
+        }
+        _ => raw.into_owned().into_bytes(),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn path_key(p: &Path) -> Vec<u8> {
     p.to_string_lossy().into_owned().into_bytes()
 }
@@ -965,5 +980,18 @@ impl EmbeddingCache for SqliteCache {
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn file_keys_keep_the_legacy_canonical_drive_prefix() {
+        let id = ResourceId::from_path(r"C:\notes\chapter.md").unwrap();
+        let legacy = br"\\?\C:\notes\chapter.md".to_vec();
+        assert_eq!(resource_key(&id), legacy);
+        assert_eq!(key_resource(legacy).unwrap(), id);
     }
 }
