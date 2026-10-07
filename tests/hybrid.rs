@@ -403,3 +403,203 @@ fn check_partial_root_migration(version: &str) {
         );
     }
 }
+
+#[test]
+fn equal_score_candidates_are_stable_before_fusion_and_top_k() {
+    let root = TempDir::new().unwrap();
+    // More than the hybrid candidate depth (50), to exercise its cutoff too.
+    for i in (0..60).rev() {
+        fs::write(root.path().join(format!("note-{i:02}.md")), "quartz pebble").unwrap();
+    }
+    let check = |engine: SearchEngine, counter: Arc<Counting>| {
+        engine.index().paths([root.path()]).execute().unwrap();
+        let vector = counter.embed_query("quartz").unwrap();
+        engine
+            .with_cache(|cache| {
+                let resources = cache.resource_index(engine.profile_id())?;
+                for path in resources.keys() {
+                    let resource = cache.resource(engine.profile_id(), path)?.unwrap();
+                    for segment in resource.segments {
+                        cache.put_embeddings(
+                            engine.profile_id(),
+                            &[(segment.input_hash, vector.as_slice().to_vec())],
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut orders = Vec::new();
+        for mode in [
+            SearchMode::Lexical,
+            SearchMode::Hybrid,
+            SearchMode::Semantic,
+        ] {
+            let result = engine
+                .search("quartz")
+                .paths([root.path()])
+                .mode(mode)
+                .sync(false)
+                .limit(3)
+                .execute()
+                .unwrap();
+            let order: Vec<_> = result
+                .hits
+                .iter()
+                .map(|h| {
+                    h.resource
+                        .path()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            assert_eq!(order, ["note-00.md", "note-01.md", "note-02.md"]);
+            orders.push(order);
+        }
+        orders
+    };
+    let db = TempDir::new().unwrap();
+    let (e, c) = engine(SqliteCache::open(db.path().join("cache.sqlite3")).unwrap());
+    let expected = check(e, c);
+    for _ in 0..20 {
+        let (e, c) = engine(MemoryCache::new());
+        assert_eq!(check(e, c), expected);
+    }
+}
+
+#[test]
+fn invalid_weights_fail_before_indexing_or_embedding_in_every_mode() {
+    both_caches(|engine, counter, root| {
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Lexical,
+            SearchMode::Semantic,
+        ] {
+            for weight in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let result = engine
+                    .search("basil")
+                    .paths([root])
+                    .mode(mode)
+                    .lexical_weight(weight)
+                    .execute();
+                assert!(
+                    matches!(result, Err(seyk::Error::Config(_))),
+                    "{mode:?}, {weight}: {result:?}"
+                );
+            }
+        }
+        assert_eq!(counter.queries.load(Ordering::SeqCst), 0);
+        assert_eq!(counter.inner.resource_count(), 0);
+    });
+}
+
+#[test]
+fn zero_hybrid_weight_disables_only_keywords_and_keeps_scores_finite() {
+    both_caches(|engine, _, root| {
+        // The cosine threshold suppresses semantics, leaving only keywords.
+        let result = engine
+            .search("basil")
+            .paths([root])
+            .min_score(2.0)
+            .lexical_weight(0.0)
+            .execute()
+            .unwrap();
+        assert!(result.hits.is_empty());
+        let named = engine
+            .search("father.md")
+            .paths([root])
+            .min_score(2.0)
+            .lexical_weight(0.0)
+            .execute()
+            .unwrap();
+        assert_eq!(named.hits.len(), 1);
+        assert_eq!(named.hits[0].score, 1.0);
+        assert!(named.hits[0].signals.filename);
+        assert!(named.hits[0].signals.lexical.is_none());
+        let semantic = engine
+            .search("basil")
+            .paths([root])
+            .lexical_weight(0.0)
+            .execute()
+            .unwrap();
+        assert!(!semantic.hits.is_empty());
+        assert!(
+            semantic
+                .hits
+                .iter()
+                .all(|h| h.score.is_finite() && h.signals.lexical.is_none())
+        );
+        for weight in [f32::MAX, f32::MIN_POSITIVE, f32::from_bits(1)] {
+            let result = engine
+                .search("basil")
+                .paths([root])
+                .min_score(2.0)
+                .lexical_weight(weight)
+                .execute()
+                .unwrap();
+            assert!(
+                result
+                    .hits
+                    .iter()
+                    .all(|h| h.score.is_finite() && h.score > 0.0 && h.score <= 1.0)
+            );
+        }
+        let missing = engine
+            .search("unfindabletoken")
+            .paths([root])
+            .min_score(2.0)
+            .execute()
+            .unwrap();
+        assert!(missing.hits.is_empty());
+    });
+}
+
+#[test]
+fn valid_weight_overrides_do_not_change_lexical_or_semantic_mode() {
+    both_caches(|engine, _, root| {
+        for mode in [SearchMode::Lexical, SearchMode::Semantic] {
+            let baseline = search(&engine, root, "father", mode);
+            for weight in [0.0, 10.0, f32::MAX] {
+                let result = engine
+                    .search("father")
+                    .paths([root])
+                    .mode(mode)
+                    .lexical_weight(weight)
+                    .execute()
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(&result.hits).unwrap(),
+                    serde_json::to_value(&baseline.hits).unwrap()
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn spaced_names_and_cross_platform_suffixes_keep_the_filename_signal() {
+    both_caches(|engine, _, root| {
+        fs::create_dir_all(root.join("my people")).unwrap();
+        fs::write(
+            root.join("my people/My Notes.md"),
+            "Synthetic notebook entry.",
+        )
+        .unwrap();
+        for query in [
+            "my notes.md",
+            "my notes",
+            " \"My Notes.md\" ",
+            "`my notes`",
+            "my people/My Notes.md",
+            r"my people\My Notes.md",
+        ] {
+            let result = search(&engine, root, query, SearchMode::Hybrid);
+            assert_eq!(top(&result), "My Notes.md", "{query}");
+            assert!(result.hits[0].signals.filename, "{query}");
+        }
+        let result = search(&engine, root, "my father", SearchMode::Hybrid);
+        assert!(result.hits.iter().all(|h| !h.signals.filename));
+    });
+}

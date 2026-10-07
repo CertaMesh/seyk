@@ -77,8 +77,9 @@ later phases can see what was deliberately left alone and why.
   `Session::restore()` becomes a group of tokens that must occur in the same field, in any order. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
   with columns for file name, path, heading and body, ranked by BM25.
   `MemoryCache` runs the same BM25 in memory, so `--no-cache` behaves the same.
-- **Schema v3.** Opening a v1 or v2 cache clears resource, segment and keyword
-  rows (so every file is re-read once); the expensive embeddings are kept.
+- **Schema v3.** Opening a v1 or v2 cache marks resources stale so each file is
+  re-read once. Resource rows, segments and embeddings are kept; FTS5 `delete-all`
+  empties the keyword index before it is rebuilt.
 - **File-name matches.** A query that is a file's name, stem or trailing path
   (`father.md`, `father`, `people/father.md`) is its own signal, independent of
   both the model and the keyword index.
