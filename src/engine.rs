@@ -81,6 +81,7 @@ pub struct SearchHit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedResource {
     pub resource: ResourceId,
+    #[serde(serialize_with = "crate::resource::serialize_optional_path")]
     pub path: Option<PathBuf>,
     pub reason: String,
 }

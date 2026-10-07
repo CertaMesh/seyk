@@ -21,7 +21,9 @@ use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_handler,
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use seyk::watch::{WatchOptions, watch};
-use seyk::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
+use seyk::{
+    DiscoveryOptions, ProgressEvent, ResourceId, ResourceLocator, SearchEngine, SearchResults,
+};
 
 const MAX_QUERIES: usize = 8;
 const MAX_LIMIT: usize = 50;
@@ -102,7 +104,9 @@ pub struct SearchParams {
 
 #[derive(Debug, Serialize)]
 struct Hit {
-    path: PathBuf,
+    resource: ResourceId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
     /// "start-end" line range, when the hit is a text segment.
     #[serde(skip_serializing_if = "Option::is_none")]
     lines: Option<String>,
@@ -120,6 +124,7 @@ struct Hit {
 
 #[derive(Debug, Serialize)]
 struct Response {
+    schema_version: u32,
     hits: Vec<Hit>,
     segments_searched: usize,
     files: usize,
@@ -403,7 +408,11 @@ fn to_response(r: SearchResults) -> Response {
                 }),
                 _ => None,
             },
-            path: h.resource.to_file_path().expect("file resource"),
+            path: h
+                .resource
+                .to_file_path()
+                .map(|p| p.to_string_lossy().into_owned()),
+            resource: h.resource,
             score: (h.score * 1000.0).round() / 1000.0,
             heading: h.heading,
             matched: [
@@ -422,6 +431,7 @@ fn to_response(r: SearchResults) -> Response {
         })
         .collect();
     Response {
+        schema_version: crate::JSON_SCHEMA_VERSION,
         hits,
         segments_searched: r.stats.segments_searched,
         files: r.stats.sync.resources_discovered,
@@ -565,6 +575,95 @@ mod tests {
                 mode: None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn response_keeps_openable_path_and_adds_versioned_uri() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("my note.md");
+        std::fs::write(&file, "lighthouse keeper counts ships").unwrap();
+        let server = SeykServer::new(
+            vec![dir.path().into()],
+            Hub::new(Box::new(fake_engine), false),
+        )
+        .unwrap();
+        let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
+        assert_eq!(response["schema_version"], 2);
+        let canonical = file.canonicalize().unwrap();
+        assert_eq!(
+            response["hits"][0]["path"],
+            canonical.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            response["hits"][0]["resource"],
+            ResourceId::from_path(&canonical).unwrap().as_str()
+        );
+        assert!(response["hits"][0]["lines"].is_string());
+        assert!(response["hits"][0]["preview"].is_string());
+    }
+
+    #[test]
+    fn sessions_search_only_their_roots_even_with_a_shared_cache() {
+        let outer = tempfile::tempdir().unwrap();
+        let inner = tempfile::tempdir().unwrap();
+        std::fs::write(outer.path().join("a.txt"), "quartz pebble").unwrap();
+        std::fs::write(inner.path().join("b.txt"), "quartz pebble").unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let a = SeykServer::new(vec![outer.path().into()], hub.clone()).unwrap();
+        let b = SeykServer::new(vec![inner.path().into()], hub).unwrap();
+        assert_eq!(search(&a, "quartz").hits.len(), 1);
+        assert_eq!(search(&b, "quartz").hits.len(), 1);
+        let hits = search(&a, "quartz").hits;
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0]
+                .resource
+                .to_file_path()
+                .unwrap()
+                .starts_with(outer.path().canonicalize().unwrap())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_cannot_expand_the_mcp_session_scope() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("outside.txt");
+        std::fs::write(&secret, "outside quartz").unwrap();
+        let link = inside.path().join("link.txt");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let roots = vec![inside.path().canonicalize().unwrap()];
+        assert!(confine(&link, &roots).is_err());
+        let server = SeykServer::new(roots, Hub::new(Box::new(fake_engine), false)).unwrap();
+        assert!(search(&server, "quartz").hits.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_filename_keeps_a_lossless_uri_and_readable_path() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let valid = dir.path().join("note.txt");
+        std::fs::write(&valid, "quartz pebble").unwrap();
+        let engine = fake_engine().unwrap();
+        let mut results = engine.search("quartz").paths([&valid]).execute().unwrap();
+        // Some Unix filesystems reject invalid UTF-8 filenames. Exercise the
+        // output boundary without requiring such a file to exist on this host.
+        let file = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(std::ffi::OsString::from_vec(b"note-\xff.txt".to_vec()));
+        results.hits[0].resource = ResourceId::from_path(&file).unwrap();
+        let value = serde_json::to_value(to_response(results)).unwrap();
+        let id: ResourceId = value["hits"][0]["resource"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(id.to_file_path().unwrap(), file);
+        assert!(value["hits"][0]["path"].as_str().unwrap().contains('�'));
     }
 
     #[test]

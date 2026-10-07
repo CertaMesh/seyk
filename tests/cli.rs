@@ -33,6 +33,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stats["schema_version"], 2);
     assert_eq!(stats["profiles"], serde_json::json!([]));
 
     binary()

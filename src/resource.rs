@@ -186,6 +186,16 @@ pub struct ResourceMetadata {
     pub content_hash: String,
 }
 
+// JSON's path is a display aid; ResourceId is the lossless identity.
+pub(crate) fn serialize_optional_path<S: serde::Serializer>(
+    path: &Option<PathBuf>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    path.as_ref()
+        .map(|p| p.to_string_lossy())
+        .serialize(serializer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
