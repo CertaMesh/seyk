@@ -1,0 +1,6 @@
+# The Rust used by CI, release builds and rustup locally. Raise it on purpose:
+# the monthly "Rust canary" workflow shows whether the newest stable passes.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

@@ -1,0 +1,29 @@
+name: Rust canary
+
+# Runs the CI checks on the newest stable Rust, ignoring the pin in
+# rust-toolchain.toml. A failure here blocks nothing; it means raising the pin
+# will need work (usually a new clippy lint).
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  latest-stable:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: rustc --version
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
