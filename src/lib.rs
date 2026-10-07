@@ -38,6 +38,7 @@ pub mod embedder;
 mod embedding;
 mod engine;
 mod error;
+pub mod extractor;
 pub mod index;
 pub mod lexical;
 pub mod provider;
@@ -61,3 +62,5 @@ pub use resource::{Modality, ResourceId, ResourceLocator, ResourceMetadata};
 pub use provider::{
     FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
 };
+
+pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};
