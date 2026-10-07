@@ -333,9 +333,9 @@ Hugging Face cache's symlinks.
 
 **Privacy.** Files, queries and embeddings never leave the machine. Treat the cache
 as sensitive. Embeddings can leak information about the text they came from, and
-the keyword index (a SQLite FTS5 table) stores **every word of every indexed file
-with its position**. It keeps no copy of the original text, but most of it,
-lowercased and without punctuation, can be rebuilt from the index. The
+the keyword index (a SQLite FTS5 table) stores **which words occur in each passage
+and how often, not their order**. Each field is tokenized and sorted before it
+is indexed. These word frequencies are still sensitive, like embeddings. The
 cache directory is created `0700` and the file `0600`. `seyk cache clear`
 deletes every vector.
 

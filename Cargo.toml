@@ -30,7 +30,6 @@ blake3 = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2"
 globset = "0.4"
-unicode-normalization = "0.1"
 notify = { version = "8", optional = true }
 dirs = "6"
 

@@ -109,7 +109,7 @@ fn identifiers_are_found_by_keyword() {
         let r = search(&engine, root, "INC-18372", SearchMode::Hybrid);
         assert_eq!(top(&r), "incident.md");
         assert!(r.hits[0].signals.lexical.is_some());
-        // Only the incident note contains the phrase "inc 18372".
+        // Only the incident note contains both identifier tokens in one field.
         let lexical = search(&engine, root, "INC-18372", SearchMode::Lexical);
         assert_eq!(lexical.hits.len(), 1);
     });
@@ -173,31 +173,141 @@ fn edits_and_deletions_update_the_keyword_index() {
 }
 
 #[test]
-fn upgrading_a_v1_cache_keeps_every_embedding() {
-    let temp = corpus();
-    let db = TempDir::new().unwrap();
-    let file = db.path().join("cache.sqlite3");
-    {
-        let (engine, _) = engine(SqliteCache::open(&file).unwrap());
-        engine.index().paths([temp.path()]).execute().unwrap();
-    }
-    // Pretend the file was written by schema v1, before the keyword index.
-    let conn = rusqlite::Connection::open(&file).unwrap();
-    conn.execute_batch(
-        "UPDATE meta SET value = '1' WHERE key = 'schema_version'; DELETE FROM segments_fts;",
+fn identifiers_match_without_order_or_adjacency_in_both_caches() {
+    both_caches(|engine, _, root| {
+        fs::write(root.join("incident.md"), "18372 intervening words INC").unwrap();
+        fs::write(root.join("garden.md"), "restore unrelated words Session").unwrap();
+        // Partial matches in different fields must not combine into a group.
+        fs::write(root.join("session.md"), "restore only").unwrap();
+        for (query, name) in [
+            ("INC-18372", "incident.md"),
+            ("Session::restore()", "garden.md"),
+        ] {
+            let r = search(&engine, root, query, SearchMode::Lexical);
+            assert_eq!(r.hits.len(), 1);
+            assert_eq!(top(&r), name);
+        }
+    });
+}
+
+#[test]
+fn persisted_positions_are_sorted_in_every_field() {
+    let temp = TempDir::new().unwrap();
+    let file = temp.path().join("zeta alpha zeta.md");
+    fs::write(
+        &file,
+        "# Zebra Alpha Zebra\n\nZürich Café κόσμος नमस्ते 東京 aⅣ2 Café",
     )
     .unwrap();
-    drop(conn);
+    let db = TempDir::new().unwrap();
+    let cache_file = db.path().join("cache.sqlite3");
+    let (engine, _) = engine(SqliteCache::open(&cache_file).unwrap());
+    engine.index().paths([&file]).execute().unwrap();
+    let conn = rusqlite::Connection::open(cache_file).unwrap();
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE temp.vocab USING fts5vocab(main, segments_fts, instance);",
+    )
+    .unwrap();
+    for field in ["name", "path", "heading", "body"] {
+        let mut stmt = conn
+            .prepare("SELECT doc, term FROM temp.vocab WHERE col=?1 ORDER BY doc, offset")
+            .unwrap();
+        let tokens = stmt
+            .query_map([field], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(!tokens.is_empty(), "{field}");
+        assert!(
+            tokens
+                .windows(2)
+                .all(|pair| pair[0].0 != pair[1].0 || pair[0].1 <= pair[1].1),
+            "{field}: {tokens:?}"
+        );
+        if field == "name" {
+            assert_eq!(tokens.iter().filter(|(_, term)| term == "zeta").count(), 2);
+        }
+    }
+}
 
-    let (engine, _) = engine(SqliteCache::open(&file).unwrap());
-    let r = search(&engine, temp.path(), "INC-18372", SearchMode::Hybrid);
-    assert_eq!(
-        r.stats.sync.segments_embedded, 0,
-        "no vector was recomputed"
-    );
-    assert_eq!(
-        r.stats.sync.resources_updated, 4,
-        "every file was re-indexed"
-    );
-    assert_eq!(top(&r), "incident.md");
+#[test]
+fn upgrading_v1_and_v2_caches_keeps_embeddings_and_reindexes_files() {
+    for version in ["1", "2"] {
+        let temp = corpus();
+        let db = TempDir::new().unwrap();
+        let file = db.path().join("cache.sqlite3");
+        {
+            let (engine, _) = engine(SqliteCache::open(&file).unwrap());
+            engine.index().paths([temp.path()]).execute().unwrap();
+        }
+        let conn = rusqlite::Connection::open(&file).unwrap();
+        conn.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            [version],
+        )
+        .unwrap();
+        if version == "1" {
+            conn.execute_batch("DROP TABLE segments_fts;").unwrap();
+        } else {
+            // Include an orphan row to prove migration discards the entire old index.
+            conn.execute(
+                "INSERT INTO segments_fts(rowid,body) VALUES(99999,'obsolete ordered words')",
+                [],
+            )
+            .unwrap();
+        }
+        let vectors = |conn: &rusqlite::Connection| {
+            conn.prepare("SELECT input_hash,vector FROM embeddings ORDER BY input_hash")
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let before = vectors(&conn);
+        let cache = SqliteCache::open(&file).unwrap();
+        for table in ["resources", "segments", "segments_fts"] {
+            assert_eq!(
+                conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(vectors(&conn), before);
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "3"
+        );
+        let (engine, _) = engine(cache);
+        let r = search(&engine, temp.path(), "INC-18372", SearchMode::Hybrid);
+        assert_eq!(
+            r.stats.sync.segments_embedded, 0,
+            "no vector was recomputed"
+        );
+        assert_eq!(
+            r.stats.sync.resources_updated, 4,
+            "every file was re-indexed"
+        );
+        assert_eq!(top(&r), "incident.md");
+        assert_eq!(vectors(&conn), before);
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM segments_fts WHERE segments_fts MATCH 'obsolete'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
 }

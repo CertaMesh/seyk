@@ -834,7 +834,10 @@ mod tests {
             ..Default::default()
         };
         let out = format_results(&r, Path::new("/book"), false);
-        assert!(out.contains("father.md:81-96  [meaning 0.91+words]\n"), "{out}");
+        assert!(
+            out.contains("father.md:81-96  [meaning 0.91+words]\n"),
+            "{out}"
+        );
         assert!(out.contains("kitchen.jpg  [name]\n"), "{out}");
     }
 
