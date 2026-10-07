@@ -42,6 +42,21 @@ pub struct ResourceScope {
 }
 
 impl ResourceScope {
+    /// Check hierarchical root boundaries without filesystem access.
+    pub(crate) fn contains(&self, id: &ResourceId) -> bool {
+        self.roots.iter().any(|root| {
+            if let (Some(path), Some(root)) = (id.to_file_path(), root.to_file_path()) {
+                path.starts_with(root)
+            } else {
+                id == root
+                    || id
+                        .as_str()
+                        .strip_prefix(root.as_str())
+                        .is_some_and(|rest| root.as_str().ends_with('/') || rest.starts_with('/'))
+            }
+        })
+    }
+
     pub(crate) fn from_paths(
         paths: &[PathBuf],
         mut roots: Vec<ResourceId>,
@@ -87,8 +102,14 @@ pub trait ResourceProvider: Send + Sync {
     /// A known token must change when the resource bytes change. Use unknown
     /// when freshness cannot be established; the engine will reread and hash.
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion>;
+    /// Resolve deletion roots once per pass, before filtering cached identities.
+    /// An error retains entries and is reported as skipped work by the engine.
+    fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
+        Ok(scope.clone())
+    }
     /// True only for confirmed deletion inside scope. Errors and exclusions
-    /// must not count as deletion. The conservative default retains entries.
+    /// must not count as deletion. Pass the scope returned by `deletion_scope`.
+    /// The conservative default retains entries.
     fn is_deleted(&self, _id: &ResourceId, _scope: &ResourceScope) -> Result<bool> {
         Ok(false)
     }
@@ -137,19 +158,28 @@ impl ResourceProvider for FsProvider {
         let meta = std::fs::metadata(&path).map_err(|e| Error::io(path, e))?;
         Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
     }
+    fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
+        let roots = scope
+            .roots
+            .iter()
+            .map(|root| {
+                let path = file_path(root)?;
+                let real = path.canonicalize().map_err(|e| Error::io(&path, e))?;
+                // Both roots and children are compared through the file-URI codec,
+                // normalizing Windows verbatim prefixes without statting a missing child.
+                ResourceId::from_path(real)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ResourceScope {
+            roots,
+            discovery: scope.discovery.clone(),
+        })
+    }
     fn is_deleted(&self, id: &ResourceId, scope: &ResourceScope) -> Result<bool> {
         let Some(path) = id.to_file_path() else {
             return Ok(false);
         };
-        let mut inside = false;
-        for root in &scope.roots {
-            let root = file_path(root)?;
-            let real = root.canonicalize().map_err(|e| Error::io(&root, e))?;
-            // The URI codec maps Windows VerbatimDisk and Disk paths to the
-            // same decoded representation, without statting the missing child.
-            inside |= path.starts_with(file_path(&ResourceId::from_path(real)?)?);
-        }
-        if !inside {
+        if !scope.contains(id) {
             return Ok(false);
         }
         match std::fs::metadata(&path) {

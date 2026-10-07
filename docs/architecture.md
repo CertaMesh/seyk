@@ -129,6 +129,12 @@ A real folder of book drafts, eight queries, each with one known target passage.
 
 ### What we learned
 
+Deletion must tolerate unavailable metadata: per-entry errors retain that entry;
+a scope-resolution error retains all candidates. Canonicalizing roots once per
+pass removes the former cached-IDs × roots realpath cost. Synthetic provider
+errors and Unix permission-denied parents exercise retention and reporting;
+out-of-scope cached IDs never reach the deletion provider.
+
 Windows canonical paths use verbatim prefixes while decoded file URIs use disk
 prefixes. Deletion scope comparisons normalize through the same URI codec; the
 missing child is never canonicalized. Native CI covers actual file deletion,
@@ -239,7 +245,10 @@ and mtime. Version checks around reads detect changes during indexing, and
 previews still validate the hash of the bytes they actually read. The engine
 has no resource filesystem reads, stats, existence checks or canonicalization.
 Deletion requires a provider's positive confirmation inside the request scope;
-filter exclusion or a permissions error does not establish deletion.
+filter exclusion or a permissions error does not establish deletion. The provider
+resolves deletion roots once per pass; the engine filters cached IDs by those
+root boundaries before calling `is_deleted`. Non-NotFound errors retain entries
+and appear in the skipped report (and CLI/watch logs), without aborting the pass.
 
 File titles, lexical name/path fields, model input hashes, cache profiles,
 segmentation and file tie-break ordering are preserved. Watchers, daemon
@@ -351,6 +360,12 @@ Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking chang
 Filesystem is the only real provider; the memory provider exists only in tests.
 
 ### What we learned
+
+Deletion must tolerate unavailable metadata: per-entry errors retain that entry;
+a scope-resolution error retains all candidates. Canonicalizing roots once per
+pass removes the former cached-IDs × roots realpath cost. Synthetic provider
+errors and Unix permission-denied parents exercise retention and reporting;
+out-of-scope cached IDs never reach the deletion provider.
 
 Windows canonical paths use verbatim prefixes while decoded file URIs use disk
 prefixes. Deletion scope comparisons normalize through the same URI codec; the

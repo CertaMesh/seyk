@@ -24,6 +24,10 @@ struct Notes {
     reads: AtomicUsize,
     unknown: AtomicBool,
     change_on_read: AtomicBool,
+    deletion_checks: AtomicUsize,
+    deletion_error: AtomicBool,
+    scope_checks: AtomicUsize,
+    scope_error: AtomicBool,
 }
 impl Notes {
     fn set(&self, uri: &str, text: &str) {
@@ -92,7 +96,20 @@ impl ResourceProvider for Notes {
             .map(|item| self.token(item))
             .ok_or_else(|| Error::Config("missing note".into()))
     }
+    fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
+        self.scope_checks.fetch_add(1, Ordering::SeqCst);
+        if self.scope_error.load(Ordering::SeqCst) {
+            Err(Error::Config("synthetic scope failure".into()))
+        } else {
+            Ok(scope.clone())
+        }
+    }
     fn is_deleted(&self, id: &ResourceId, scope: &ResourceScope) -> Result<bool> {
+        self.deletion_checks.fetch_add(1, Ordering::SeqCst);
+        assert!(in_scope(id, scope), "outside-scope id reached provider");
+        if self.deletion_error.load(Ordering::SeqCst) {
+            return Err(Error::Config("synthetic deletion failure".into()));
+        }
         Ok(in_scope(id, scope) && !self.items.lock().unwrap().contains_key(id))
     }
 }
@@ -265,6 +282,7 @@ fn filesystem_listing_preserves_discovery_and_deletion_is_conservative() {
         roots: vec![ResourceId::from_path(temp.path()).unwrap()],
         discovery: DiscoveryOptions::default(),
     };
+    let scope = FsProvider.deletion_scope(&scope).unwrap();
     let old = discover(&[temp.path().to_path_buf()], &scope.discovery).unwrap();
     let listed = FsProvider.list(&scope).unwrap();
     assert_eq!(listed.len(), old.len());
@@ -366,4 +384,101 @@ fn filesystem_index_removes_deleted_resources_and_vectors() {
     let stats = engine.with_cache(|c| c.stats()).unwrap();
     assert_eq!(stats.profiles[0].resources, 0);
     assert_eq!(stats.profiles[0].embeddings, 0);
+}
+
+#[test]
+fn deletion_errors_retain_entries_and_do_not_abort_the_pass() {
+    let notes = Arc::new(Notes::default());
+    notes.set("mem://book/a", "alpha garden");
+    notes.set("mem://bookish/b", "quartz pebble");
+    let (engine, _) = engine(notes.clone());
+    engine
+        .index()
+        .roots([roots()[0].clone(), "mem://bookish/".parse().unwrap()])
+        .execute()
+        .unwrap();
+    notes.items.lock().unwrap().clear();
+    notes.deletion_checks.store(0, Ordering::SeqCst);
+    notes.scope_checks.store(0, Ordering::SeqCst);
+    notes.deletion_error.store(true, Ordering::SeqCst);
+    let report = engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(notes.deletion_checks.load(Ordering::SeqCst), 1);
+    assert_eq!(notes.scope_checks.load(Ordering::SeqCst), 1);
+    assert_eq!(report.resources_removed, 0);
+    assert_eq!(report.sync.skipped.len(), 1);
+    assert!(
+        report.sync.skipped[0]
+            .reason
+            .contains("synthetic deletion failure")
+    );
+    assert_eq!(
+        engine
+            .with_cache(|c| Ok(c.resource_index(engine.profile_id())?.len()))
+            .unwrap(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_denied_parent_retains_cache_and_index_succeeds() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("private");
+    std::fs::create_dir(&parent).unwrap();
+    let path = parent.join("note.md");
+    std::fs::write(&path, "alpha garden").unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "permissions"))
+        .build()
+        .unwrap();
+    engine.index().paths([temp.path()]).execute().unwrap();
+    let permissions = std::fs::metadata(&parent).unwrap().permissions();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let denied =
+        std::fs::metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    let result = engine.index().paths([temp.path()]).execute();
+    std::fs::set_permissions(&parent, permissions).unwrap();
+    let report = result.unwrap();
+    assert_eq!(report.resources_removed, 0);
+    if denied {
+        // A privileged test runner can bypass Unix mode bits.
+        assert!(
+            report
+                .sync
+                .skipped
+                .iter()
+                .any(|s| s.reason.contains("deletion check"))
+        );
+    }
+    assert_eq!(
+        engine
+            .with_cache(|c| Ok(c.resource_index(engine.profile_id())?.len()))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn deletion_scope_errors_are_reported_without_losing_entries() {
+    let notes = Arc::new(Notes::default());
+    notes.set("mem://book/a", "alpha garden");
+    let (engine, _) = engine(notes.clone());
+    engine.index().roots(roots()).execute().unwrap();
+    notes.items.lock().unwrap().clear();
+    notes.scope_error.store(true, Ordering::SeqCst);
+    let report = engine.index().roots(roots()).execute().unwrap();
+    assert_eq!(report.resources_removed, 0);
+    assert_eq!(report.sync.skipped.len(), 1);
+    assert!(
+        report.sync.skipped[0]
+            .reason
+            .contains("synthetic scope failure")
+    );
+    assert_eq!(
+        engine
+            .with_cache(|c| Ok(c.resource_index(engine.profile_id())?.len()))
+            .unwrap(),
+        1
+    );
 }

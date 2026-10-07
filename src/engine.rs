@@ -1166,15 +1166,30 @@ impl<'e> IndexRequest<'e> {
                 resources: resources.len(),
             });
         }
-        let sync = engine.sync(&resources, self.progress)?;
+        let mut sync = engine.sync(&resources, self.progress)?;
 
         let pid = engine.profile_id.as_str();
         let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
         let known = engine.with_cache(|c| c.resource_index(pid))?;
         let mut gone = Vec::new();
-        for id in known.into_keys() {
-            if !present.contains(&id) && engine.provider.is_deleted(&id, &scope)? {
-                gone.push(id);
+        match engine.provider.deletion_scope(&scope) {
+            Ok(deletion_scope) => {
+                for id in known.into_keys() {
+                    if present.contains(&id) || !deletion_scope.contains(&id) {
+                        continue;
+                    }
+                    match engine.provider.is_deleted(&id, &deletion_scope) {
+                        Ok(true) => gone.push(id),
+                        Ok(false) => {}
+                        Err(e) => sync.skipped.push(skip(&id, format!("deletion check: {e}"))),
+                    }
+                }
+            }
+            Err(e) => {
+                for root in &scope.roots {
+                    sync.skipped
+                        .push(skip(root, format!("deletion scope: {e}")));
+                }
             }
         }
         let removed = engine.with_cache(|c| {
