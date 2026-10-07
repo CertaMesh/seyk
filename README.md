@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" width="128" alt="Seyk logo">
+</p>
+
 # Seyk
 
 Local semantic search over your own files, built on Google's
