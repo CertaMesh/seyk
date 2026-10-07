@@ -153,8 +153,10 @@ Schema v3 sorts each field's tokens before inserting them into contentless
 FTS5. Duplicate tokens stay, preserving term frequency and field length; stored
 positions describe alphabetical order only. Names, paths, headings and body
 fields all take this path. Resource metadata and headings remain cache metadata.
-Opening either v1 or v2 atomically discards resource/segment rows and the entire
-old keyword index, retaining embeddings so unchanged files need no re-embedding.
+Opening either v1 or v2 atomically clears the old keyword index and marks all
+resources stale while keeping their segment references, so vectors survive
+partial-root syncs and restarts until each resource is rebuilt without re-embedding
+unchanged inputs.
 Freed-page erasure (`VACUUM` / `secure_delete`) remains a separate follow-up;
 this migration is not a forensic scrub of an existing cache file.
 

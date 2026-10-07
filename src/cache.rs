@@ -446,10 +446,20 @@ impl SqliteCache {
             .optional()?;
         let tx = self.conn.transaction()?;
         if matches!(version.as_deref(), Some("1" | "2")) {
-            // v3 removes source word order. Forget the resource list but keep
-            // every vector: the next sync re-reads files to index their words, and
-            // embeds nothing it has embedded before.
-            tx.execute_batch("DROP TABLE IF EXISTS segments_fts; DELETE FROM resources;")?;
+            // v3 removes source word order. Keep segment references so orphan
+            // pruning cannot remove vectors for roots that have not synced yet.
+            // v1 already has the same resource/segment columns, but no FTS table.
+            let has_fts: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'segments_fts')",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_fts {
+                tx.execute_batch("DELETE FROM segments_fts;")?;
+            }
+            // Invalidate both fast paths: every resource must be re-read and
+            // re-segmented, reusing its vectors, on its next normal sync.
+            tx.execute_batch("UPDATE resources SET modified_ns = NULL, content_hash = '';")?;
         } else if version.as_deref() != Some(SCHEMA_VERSION) {
             // It is a cache: on any other schema change, start over.
             tx.execute_batch(
