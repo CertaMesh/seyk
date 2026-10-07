@@ -1,0 +1,65 @@
+[package]
+name = "gemma-search"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "search"]
+categories = ["command-line-utilities", "text-processing"]
+
+[features]
+default = ["onnx", "image", "cli"]
+# EmbeddingGemma 2 inference through ONNX Runtime.
+onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
+# Image resources (needs `onnx` for inference).
+image = ["dep:image", "dep:fast_image_resize"]
+# The `gemma-search` binary. Library consumers can disable this.
+cli = ["dep:clap", "dep:anyhow"]
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+walkdir = "2"
+globset = "0.4"
+dirs = "6"
+
+ort = { version = "=2.0.0-rc.13", optional = true }
+tokenizers = { version = "0.23", optional = true, default-features = false, features = ["onig"] }
+hf-hub = { version = "0.4", optional = true, default-features = false, features = ["ureq", "rustls-tls"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+fast_image_resize = { version = "5", optional = true }
+
+clap = { version = "4", optional = true, features = ["derive", "env", "wrap_help"] }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.8", default-features = false }
+assert_cmd = "2"
+predicates = "3"
+
+[[bin]]
+name = "gemma-search"
+path = "src/bin/gemma-search.rs"
+required-features = ["cli"]
+
+[[bench]]
+name = "similarity"
+harness = false
+
+[[example]]
+name = "bench_model"
+required-features = ["onnx"]
+
+[[example]]
+name = "eval_corpus"
+required-features = ["onnx"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
