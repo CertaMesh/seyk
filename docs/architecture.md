@@ -474,6 +474,17 @@ from line numbers. A future MCP extraction protocol needs round-trip references
 and session-root checks before reads. Existing MCP confinement is unchanged;
 the CLI supplies the process boundary needed by downstream wrappers.
 
+### Public API changes
+
+- `Error` is now `#[non_exhaustive]` and gains `StaleResource`,
+  `UnsupportedExtraction`, `InvalidLocator` and `InvalidText`. Downstream
+  `match` statements need a wildcard arm.
+- New: `Extractor`, `TextExtractor`, `ExtractedContent`, `extract_resource`,
+  `SearchEngine::extract`, `SearchEngineBuilder::extractor`.
+- `Extractor`, `ExtractedContent` and `extract_resource` are explicitly
+  unstable: they may change before 1.0, and a range/streaming method is planned
+  for audio and video.
+
 ### What we learned
 
 Verification belongs before extractor dispatch, where every implementation

@@ -6,6 +6,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 /// Readable content from a selected location in a verified resource snapshot.
+///
+/// Unstable: may change before 1.0 (a range/streaming method is planned for audio and video).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedContent {
     pub text: String,
@@ -21,6 +23,8 @@ pub struct ExtractedContent {
 /// extraction. Direct calls to `extract` must supply bytes already verified
 /// against `metadata.content_hash`. The central gateway verifies before calling
 /// any implementation. Future range/streaming extractors need a separate method.
+///
+/// Unstable: may change before 1.0 (a range/streaming method is planned for audio and video).
 pub trait Extractor: Send + Sync {
     fn supports(
         &self,
@@ -74,6 +78,8 @@ impl Extractor for TextExtractor {
 ///
 /// This model-free entry point uses only the supplied provider. It does not
 /// establish authorization or authenticate a caller-supplied content hash.
+///
+/// Unstable: may change before 1.0 (a range/streaming method is planned for audio and video).
 pub fn extract_resource(
     provider: &dyn ResourceProvider,
     extractor: &dyn Extractor,

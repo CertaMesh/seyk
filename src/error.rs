@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 /// Errors produced by the search engine and its components.
+///
+/// Non-exhaustive: new failure kinds can be added without breaking matches.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("I/O error at {path}: {source}")]
     Io {
