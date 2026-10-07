@@ -242,6 +242,35 @@ fn upgrading_v2_keeps_embeddings_across_partial_root_rebuilds() {
     check_partial_root_migration("2");
 }
 
+/// Whether a token survives in the FTS index's own storage. A plain DELETE on a
+/// contentless table only tombstones rows, so queries miss the token while its
+/// bytes stay in `segments_fts_data`.
+fn fts_data_contains(conn: &rusqlite::Connection, token: &str) -> bool {
+    let mut stmt = conn.prepare("SELECT block FROM segments_fts_data").unwrap();
+    let blocks = stmt
+        .query_map([], |r| r.get::<_, Vec<u8>>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    blocks
+        .iter()
+        .any(|b| b.windows(token.len()).any(|w| w == token.as_bytes()))
+}
+
+#[test]
+fn clearing_the_cache_leaves_no_tokens_in_the_keyword_index() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("note.md"), "Quetzalcoatl visited.").unwrap();
+    let db = TempDir::new().unwrap();
+    let file = db.path().join("cache.sqlite3");
+    let (engine, _) = engine(SqliteCache::open(&file).unwrap());
+    engine.index().paths([root.path()]).execute().unwrap();
+    let conn = rusqlite::Connection::open(&file).unwrap();
+    assert!(fts_data_contains(&conn, "quetzalcoatl"));
+    engine.with_cache(|c| c.clear()).unwrap();
+    assert!(!fts_data_contains(&conn, "quetzalcoatl"));
+}
+
 fn check_partial_root_migration(version: &str) {
     let root_a = TempDir::new().unwrap();
     let root_b = TempDir::new().unwrap();
@@ -296,6 +325,7 @@ fn check_partial_root_migration(version: &str) {
     assert_eq!(count("SELECT count(*) FROM resources"), 2);
     assert_eq!(count("SELECT count(*) FROM segments"), 2);
     assert_eq!(count("SELECT count(*) FROM segments_fts"), 0);
+    assert!(!fts_data_contains(&conn, "obsolete"));
     assert_eq!(
         count("SELECT count(*) FROM resources WHERE modified_ns IS NULL AND content_hash = ''"),
         2

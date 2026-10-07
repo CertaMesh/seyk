@@ -455,7 +455,10 @@ impl SqliteCache {
                 |r| r.get(0),
             )?;
             if has_fts {
-                tx.execute_batch("DELETE FROM segments_fts;")?;
+                // A plain DELETE only tombstones contentless rows: the old
+                // tokens and positions stay in segments_fts_data. delete-all
+                // rebuilds the index empty.
+                tx.execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all');")?;
             }
             // Invalidate both fast paths: every resource must be re-read and
             // re-segmented, reusing its vectors, on its next normal sync.
@@ -871,7 +874,7 @@ impl EmbeddingCache for SqliteCache {
 
     fn clear(&mut self) -> Result<()> {
         self.conn
-            .execute_batch("DELETE FROM segments_fts; DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+            .execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all'); DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())
