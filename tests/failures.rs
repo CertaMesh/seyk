@@ -67,6 +67,8 @@ where
         .iter()
         .map(|s| {
             s.path
+                .as_ref()
+                .unwrap()
                 .strip_prefix(temp.path().canonicalize().unwrap())
                 .unwrap()
                 .to_owned()

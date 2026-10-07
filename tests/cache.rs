@@ -2,15 +2,15 @@ mod common;
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use common::FakeEmbedder;
 use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
 use seyk::segment::{TextSegmenter, TextSegmenterConfig};
 use seyk::{
-    Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceLocator,
-    ResourceMetadata, SearchEngine, SqliteCache,
+    Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceId, ResourceLocator,
+    ResourceMetadata, ResourceVersion, SearchEngine, SqliteCache,
 };
 use tempfile::TempDir;
 
@@ -214,6 +214,7 @@ fn profile(revision: &str) -> CacheProfile {
 
 fn resource(hashes: &[&str]) -> CachedResource {
     CachedResource {
+        version: ResourceVersion::known("fs:1:1"),
         metadata: ResourceMetadata {
             modality: Modality::Text,
             size_bytes: 1,
@@ -232,8 +233,8 @@ fn resource(hashes: &[&str]) -> CachedResource {
     }
 }
 
-fn paths(items: &[&Path]) -> HashSet<PathBuf> {
-    items.iter().map(|p| p.to_path_buf()).collect()
+fn paths(items: &[&ResourceId]) -> HashSet<ResourceId> {
+    items.iter().map(|p| (*p).clone()).collect()
 }
 
 fn hashes(items: &[&str]) -> Vec<String> {
@@ -243,7 +244,7 @@ fn hashes(items: &[&str]) -> Vec<String> {
 #[test]
 fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
     let mut cache = MemoryCache::new();
-    let path = Path::new("/notes.txt");
+    let path = &ResourceId::from_path("/notes.txt").unwrap();
     for (id, value) in [("a", 1.0), ("b", 2.0)] {
         cache.register_profile(id, &profile(id)).unwrap();
         cache
@@ -258,8 +259,14 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
         assert_eq!(found[0].vector, vec![value]);
     }
 
-    cache.touch_resource("a", path, Some(7)).unwrap();
-    cache.remove_resources("b", &[path.to_path_buf()]).unwrap();
+    let mut metadata = resource(&["h"]).metadata;
+    metadata.modified_ns = Some(7);
+    cache
+        .touch_resource("a", path, &metadata, &ResourceVersion::known("fs:1:7"))
+        .unwrap();
+    cache
+        .remove_resources("b", std::slice::from_ref(path))
+        .unwrap();
     assert_eq!(cache.prune_orphans("b").unwrap(), 1);
     assert_eq!(
         cache
@@ -285,7 +292,7 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
 #[test]
 fn memory_cache_accepts_writes_before_registration() {
     let mut cache = MemoryCache::new();
-    let path = Path::new("/notes.txt");
+    let path = &ResourceId::from_path("/notes.txt").unwrap();
     // Batching writes vectors before their resource, so a vector without a
     // segment is known but not yet searchable.
     cache
@@ -315,7 +322,10 @@ fn memory_cache_accepts_writes_before_registration() {
 #[test]
 fn memory_cache_prunes_only_unreferenced_vectors() {
     let mut cache = MemoryCache::new();
-    let (first, second) = (Path::new("/first.txt"), Path::new("/second.txt"));
+    let (first, second) = (
+        &ResourceId::from_path("/first.txt").unwrap(),
+        &ResourceId::from_path("/second.txt").unwrap(),
+    );
     cache
         .put_embeddings(
             "p",
@@ -338,11 +348,13 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
 
     let only_second = cache.vectors_for("p", &paths(&[second])).unwrap();
     assert_eq!(only_second.len(), 1);
-    assert_eq!(only_second[0].path, second);
+    assert_eq!(&only_second[0].resource, second);
 
     assert_eq!(cache.prune_orphans("p").unwrap(), 1);
     // A vector still used by another resource survives its sibling's removal.
-    cache.remove_resources("p", &[first.to_path_buf()]).unwrap();
+    cache
+        .remove_resources("p", std::slice::from_ref(first))
+        .unwrap();
     assert_eq!(cache.prune_orphans("p").unwrap(), 1);
     assert_eq!(
         cache
@@ -368,7 +380,10 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
         "/notes/delta.md",
         "/notes/bravo.md",
     ];
-    let wanted: HashSet<PathBuf> = names.iter().map(PathBuf::from).collect();
+    let wanted: HashSet<ResourceId> = names
+        .iter()
+        .map(|p| ResourceId::from_path(p).unwrap())
+        .collect();
     let query = seyk::lexical::LexicalQuery::new(["quartz"]);
     let check = |cache: &mut dyn EmbeddingCache| {
         cache.register_profile("ties", &profile("ties")).unwrap();
@@ -377,18 +392,20 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
             for segment in &mut r.segments {
                 segment.lexical_text = Some("quartz pebble".into());
             }
-            cache.put_resource("ties", Path::new(name), &r).unwrap();
+            cache
+                .put_resource("ties", &ResourceId::from_path(name).unwrap(), &r)
+                .unwrap();
         }
         let hits = cache.lexical_search("ties", &query, &wanted, 100).unwrap();
         assert_eq!(hits.len(), 8);
         assert!(hits.iter().all(|h| h.score == hits[0].score));
-        let order: Vec<_> = hits.into_iter().map(|h| (h.path, h.ordinal)).collect();
+        let order: Vec<_> = hits.into_iter().map(|h| (h.resource, h.ordinal)).collect();
         for limit in [0, 1, 3, 8] {
             let limited: Vec<_> = cache
                 .lexical_search("ties", &query, &wanted, limit)
                 .unwrap()
                 .into_iter()
-                .map(|h| (h.path, h.ordinal))
+                .map(|h| (h.resource, h.ordinal))
                 .collect();
             assert_eq!(limited, order[..limit]);
         }
@@ -398,9 +415,11 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
     let expected = check(&mut SqliteCache::open(db.path().join("cache.sqlite3")).unwrap());
     let mut sorted = expected.clone();
     sorted.sort_by(|a, b| {
-        a.0.as_os_str()
+        a.0.to_file_path()
+            .unwrap()
+            .as_os_str()
             .as_encoded_bytes()
-            .cmp(b.0.as_os_str().as_encoded_bytes())
+            .cmp(b.0.to_file_path().unwrap().as_os_str().as_encoded_bytes())
             .then(a.1.cmp(&b.1))
     });
     assert_eq!(expected, sorted);

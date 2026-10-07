@@ -4,15 +4,14 @@
 
 use std::collections::HashSet;
 use std::hint::black_box;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
 use seyk::index::{BruteForceIndex, VectorIndex};
 use seyk::{
-    Dimension, EmbeddingCache, Modality, ModelIdentity, ResourceLocator, ResourceMetadata,
-    SqliteCache,
+    Dimension, EmbeddingCache, Modality, ModelIdentity, ResourceId, ResourceLocator,
+    ResourceMetadata, ResourceVersion, SqliteCache,
 };
 
 const SIZES: [usize; 4] = [100, 1_000, 10_000, 100_000];
@@ -130,7 +129,7 @@ fn filled_cache(
     dir: &std::path::Path,
     n: usize,
     dim: Dimension,
-) -> (SqliteCache, String, HashSet<PathBuf>) {
+) -> (SqliteCache, String, HashSet<ResourceId>) {
     let mut cache = SqliteCache::open(dir.join(format!("cache-{n}.sqlite3"))).unwrap();
     let profile = profile(dim);
     let pid = profile.id();
@@ -138,7 +137,7 @@ fn filled_cache(
     let mut rng = Rng(n as u64);
     let mut paths = HashSet::new();
     for f in 0..n.div_ceil(SEGMENTS_PER_FILE) {
-        let path = PathBuf::from(format!("/notes/chapter-{f:06}.md"));
+        let path = ResourceId::from_path(format!("/notes/chapter-{f:06}.md")).unwrap();
         let segments: Vec<CachedSegment> = (0..SEGMENTS_PER_FILE)
             .map(|s| CachedSegment {
                 locator: ResourceLocator::Text {
@@ -157,6 +156,7 @@ fn filled_cache(
             .map(|s| (s.input_hash.clone(), rng.unit_vector(dim.get())))
             .collect();
         let resource = CachedResource {
+            version: ResourceVersion::known("fs:10000:0"),
             metadata: ResourceMetadata {
                 modality: Modality::Text,
                 size_bytes: 10_000,

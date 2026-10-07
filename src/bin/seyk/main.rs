@@ -703,7 +703,14 @@ fn format_summary(r: &SearchResults) -> String {
         r.stats.total_ms as f64 / 1000.0
     );
     for s in r.stats.sync.skipped.iter().take(5) {
-        out.push_str(&format!("  skipped {}: {}\n", s.path.display(), s.reason));
+        out.push_str(&format!(
+            "  skipped {}: {}\n",
+            s.path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| s.resource.to_string()),
+            s.reason
+        ));
     }
     out
 }
@@ -722,7 +729,14 @@ fn format_index_report(r: &IndexReport) -> String {
     }
     out.push('\n');
     for s in &r.sync.skipped {
-        out.push_str(&format!("  skipped {}: {}\n", s.path.display(), s.reason));
+        out.push_str(&format!(
+            "  skipped {}: {}\n",
+            s.path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| s.resource.to_string()),
+            s.reason
+        ));
     }
     out
 }

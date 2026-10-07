@@ -38,7 +38,22 @@ impl ResourceId {
         if url.path().to_ascii_lowercase().contains("%00") {
             return Err(Error::Config("resource path contains NUL".into()));
         }
-        Ok(Self(url.into()))
+        let canonical = url::Url::parse(url.as_str()).map_err(|e| Error::Config(e.to_string()))?;
+        Ok(Self(canonical.into()))
+    }
+
+    pub(crate) fn labels(&self) -> (String, String) {
+        if let Some(path) = self.to_file_path() {
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (name, path.to_string_lossy().into_owned())
+        } else {
+            let url = url::Url::parse(&self.0).expect("validated URI");
+            let name = url.path().rsplit('/').next().unwrap_or("").to_string();
+            (name, self.0.clone())
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -223,6 +238,9 @@ mod tests {
             assert!(serde_json::from_value::<ResourceId>(serde_json::json!(uri)).is_err());
         }
         assert!(ResourceId::from_path("relative").is_err());
+        let id = ResourceId::from_path("/tmp/a/../b").unwrap();
+        assert_eq!(id.as_str(), "file:///tmp/b");
+        assert_eq!(id.as_str().parse::<ResourceId>().unwrap(), id);
     }
 
     #[cfg(unix)]

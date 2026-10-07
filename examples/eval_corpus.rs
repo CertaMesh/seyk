@@ -341,7 +341,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.total_ms as f64 / 1000.0
     );
     for s in &report.sync.skipped {
-        eprintln!("skipped {}: {}", s.path.display(), s.reason);
+        eprintln!("skipped {}: {}", s.resource, s.reason);
     }
 
     let segments = segment_corpus(&args.paths, &TextSegmenter::default());

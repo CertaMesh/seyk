@@ -8,12 +8,13 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, MemoryCache};
-use crate::discovery::{DiscoveredResource, DiscoveryOptions, ResourceKind, discover};
+use crate::discovery::{DiscoveryOptions, ResourceKind};
 use crate::embedder::{Embedder, ResourceInput};
 use crate::index::{BruteForceIndex, Scored, VectorIndex};
 use crate::lexical::LexicalQuery;
 use crate::segment::{TextFormat, TextSegmenter};
 use crate::{Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
+use crate::{FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion};
 
 /// Bump when the way segments are turned into model inputs changes.
 const INPUT_FORMAT_VERSION: u32 = 2;
@@ -79,7 +80,8 @@ pub struct SearchHit {
 /// A resource that was found but could not be searched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedResource {
-    pub path: PathBuf,
+    pub resource: ResourceId,
+    pub path: Option<PathBuf>,
     pub reason: String,
 }
 
@@ -138,6 +140,7 @@ pub enum ProgressEvent {
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
 
 pub struct SearchEngineBuilder {
+    provider: Arc<dyn ResourceProvider>,
     embedder: Option<Arc<dyn Embedder>>,
     cache: Option<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
@@ -145,6 +148,17 @@ pub struct SearchEngineBuilder {
 }
 
 impl SearchEngineBuilder {
+    /// Resource access; defaults to the local filesystem provider.
+    pub fn provider(mut self, provider: impl ResourceProvider + 'static) -> Self {
+        self.provider = Arc::new(provider);
+        self
+    }
+
+    pub fn shared_provider(mut self, provider: Arc<dyn ResourceProvider>) -> Self {
+        self.provider = provider;
+        self
+    }
+
     pub fn embedder(mut self, embedder: impl Embedder + 'static) -> Self {
         self.embedder = Some(Arc::new(embedder));
         self
@@ -187,6 +201,7 @@ impl SearchEngineBuilder {
         let mut cache = self.cache.unwrap_or_else(|| Box::new(MemoryCache::new()));
         cache.register_profile(&profile_id, &profile)?;
         Ok(SearchEngine {
+            provider: self.provider,
             embedder,
             cache: Mutex::new(cache),
             segmenter: self.segmenter,
@@ -199,6 +214,7 @@ impl SearchEngineBuilder {
 
 /// Semantic search over local files.
 pub struct SearchEngine {
+    provider: Arc<dyn ResourceProvider>,
     embedder: Arc<dyn Embedder>,
     cache: Mutex<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
@@ -210,6 +226,7 @@ pub struct SearchEngine {
 impl SearchEngine {
     pub fn builder() -> SearchEngineBuilder {
         SearchEngineBuilder {
+            provider: Arc::new(FsProvider),
             embedder: None,
             cache: None,
             segmenter: TextSegmenter::default(),
@@ -236,6 +253,7 @@ impl SearchEngine {
             engine: self,
             queries: vec![query.into()],
             paths: Vec::new(),
+            roots: Vec::new(),
             limit: 10,
             min_score: None,
             discovery: DiscoveryOptions::default(),
@@ -252,6 +270,7 @@ impl SearchEngine {
         IndexRequest {
             engine: self,
             paths: Vec::new(),
+            roots: Vec::new(),
             discovery: DiscoveryOptions::default(),
             progress: None,
         }
@@ -269,7 +288,7 @@ impl SearchEngine {
     /// Make sure every resource has up-to-date vectors in the cache.
     fn sync(
         &self,
-        resources: &[DiscoveredResource],
+        resources: &[ProvidedResource],
         progress: Option<ProgressFn>,
     ) -> Result<SyncStats> {
         let mut stats = SyncStats {
@@ -284,30 +303,56 @@ impl SearchEngine {
             let modality = r.kind.modality();
             if !self.embedder.supports(modality) {
                 stats.skipped.push(skip(
-                    &r.path,
+                    &r.id,
                     format!("{modality} search is not supported by this embedder"),
                 ));
                 continue;
             }
-            let cached = known.get(&r.path);
-            if let Some(m) = cached
-                && r.modified_ns.is_some()
-                && m.size_bytes == r.size_bytes
-                && m.modified_ns == r.modified_ns
-            {
-                stats.resources_unchanged += 1;
-                continue;
-            }
-            let bytes = match std::fs::read(&r.path) {
-                Ok(b) => b,
+            let cached = known.get(&r.id);
+            let version = match self.provider.version(&r.id) {
+                Ok(v) => v,
                 Err(e) => {
-                    stats.skipped.push(skip(&r.path, e.to_string()));
+                    stats.skipped.push(skip(&r.id, e.to_string()));
                     continue;
                 }
             };
+            // A list/stat race must not attach old metadata to newly read bytes.
+            if r.version.is_known() && !r.version.matches(&version) {
+                stats
+                    .skipped
+                    .push(skip(&r.id, "resource changed after discovery"));
+                continue;
+            }
+            if cached.is_some_and(|m| m.version.matches(&version)) {
+                stats.resources_unchanged += 1;
+                continue;
+            }
+            let bytes = match self.provider.read(&r.id) {
+                Ok(b) => b,
+                Err(e) => {
+                    stats.skipped.push(skip(&r.id, e.to_string()));
+                    continue;
+                }
+            };
+            let after = match self.provider.version(&r.id) {
+                Ok(v) => v,
+                Err(e) => {
+                    stats.skipped.push(skip(&r.id, e.to_string()));
+                    continue;
+                }
+            };
+            if version.is_known() && !version.matches(&after) {
+                stats
+                    .skipped
+                    .push(skip(&r.id, "resource changed while reading"));
+                continue;
+            }
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
-            if cached.is_some_and(|m| m.content_hash == content_hash) {
-                self.with_cache(|c| c.touch_resource(pid, &r.path, r.modified_ns))?;
+            if let Some(m) = cached.filter(|m| m.metadata.content_hash == content_hash) {
+                let mut metadata = m.metadata.clone();
+                metadata.size_bytes = bytes.len() as u64;
+                metadata.modified_ns = r.modified_ns;
+                self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                 stats.resources_unchanged += 1;
                 continue;
             }
@@ -319,11 +364,12 @@ impl SearchEngine {
             };
             match self.prepare(r, bytes) {
                 Ok(jobs) => pending.push(Pending {
-                    path: r.path.clone(),
+                    resource: r.id.clone(),
                     metadata,
+                    version,
                     jobs,
                 }),
-                Err(reason) => stats.skipped.push(skip(&r.path, reason)),
+                Err(reason) => stats.skipped.push(skip(&r.id, reason)),
             }
         }
 
@@ -403,14 +449,15 @@ impl SearchEngine {
                 .iter()
                 .find_map(|j| failed.get(&j.segment.input_hash))
             {
-                stats.skipped.push(skip(&p.path, reason.clone()));
+                stats.skipped.push(skip(&p.resource, reason.clone()));
                 continue;
             }
             let resource = CachedResource {
                 metadata: p.metadata.clone(),
+                version: p.version.clone(),
                 segments: p.jobs.iter().map(|j| j.segment.clone()).collect(),
             };
-            self.with_cache(|c| c.put_resource(pid, &p.path, &resource))?;
+            self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
             stats.resources_updated += 1;
         }
         Ok(upto.max(from))
@@ -445,7 +492,7 @@ impl SearchEngine {
     /// Turn a resource into embedding jobs. Errors are reasons to skip the resource.
     fn prepare(
         &self,
-        r: &DiscoveredResource,
+        r: &ProvidedResource,
         bytes: Vec<u8>,
     ) -> std::result::Result<Vec<Job>, String> {
         match r.kind {
@@ -454,7 +501,7 @@ impl SearchEngine {
                     return Err("looks like a binary file".into());
                 }
                 let text = String::from_utf8(bytes).map_err(|_| "not valid UTF-8".to_string())?;
-                let stem = r.path.file_stem().map(|s| s.to_string_lossy().into_owned());
+                let stem = &r.title;
                 Ok(self
                     .segmenter
                     .segment(&text, format)
@@ -507,7 +554,8 @@ impl SearchEngine {
 }
 
 struct Pending {
-    path: PathBuf,
+    resource: ResourceId,
+    version: ResourceVersion,
     metadata: ResourceMetadata,
     jobs: Vec<Job>,
 }
@@ -573,9 +621,10 @@ fn strip_link_targets(text: &str) -> String {
     out
 }
 
-fn skip(path: &Path, reason: impl Into<String>) -> SkippedResource {
+fn skip(resource: &ResourceId, reason: impl Into<String>) -> SkippedResource {
     SkippedResource {
-        path: path.to_path_buf(),
+        resource: resource.clone(),
+        path: resource.to_file_path(),
         reason: reason.into(),
     }
 }
@@ -606,6 +655,7 @@ pub struct SearchRequest<'e> {
     engine: &'e SearchEngine,
     queries: Vec<String>,
     paths: Vec<PathBuf>,
+    roots: Vec<ResourceId>,
     limit: usize,
     min_score: Option<f32>,
     discovery: DiscoveryOptions,
@@ -617,6 +667,12 @@ pub struct SearchRequest<'e> {
 }
 
 impl<'e> SearchRequest<'e> {
+    /// Add provider-specific roots without filesystem path conversion.
+    pub fn roots(mut self, roots: impl IntoIterator<Item = ResourceId>) -> Self {
+        self.roots.extend(roots);
+        self
+    }
+
     /// Search for another phrasing too. Each segment is ranked by its best score
     /// over all queries, so rephrasing widens recall without diluting scores.
     pub fn query(mut self, query: impl Into<String>) -> Self {
@@ -705,10 +761,11 @@ impl<'e> SearchRequest<'e> {
                 "lexical weight must be finite and non-negative".into(),
             ));
         }
-        if self.paths.is_empty() {
+        if self.paths.is_empty() && self.roots.is_empty() {
             return Err(Error::Config("no paths to search".into()));
         }
-        let resources = discover(&self.paths, &self.discovery)?;
+        let scope = ResourceScope::from_paths(&self.paths, self.roots, self.discovery)?;
+        let resources = engine.provider.list(&scope)?;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
@@ -724,7 +781,7 @@ impl<'e> SearchRequest<'e> {
         };
 
         let pid = engine.profile_id.as_str();
-        let wanted: HashSet<PathBuf> = resources.iter().map(|r| r.path.clone()).collect();
+        let wanted: HashSet<ResourceId> = resources.iter().map(|r| r.id.clone()).collect();
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
@@ -748,14 +805,14 @@ impl<'e> SearchRequest<'e> {
             }
             let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
             // Vector IDs break cosine ties, including at the top-k cutoff.
-            stored.sort_by_cached_key(|v| (crate::cache::path_key(&v.path), v.ordinal));
+            stored.sort_by_cached_key(|v| (crate::cache::resource_key(&v.resource), v.ordinal));
             let mut index = BruteForceIndex::with_capacity(dim, stored.len());
             let mut keys = Vec::with_capacity(stored.len());
             for v in stored {
                 // A wrong-sized vector means a corrupt cache; never compare it.
                 if v.vector.len() == dim {
                     index.add(&v.vector);
-                    keys.push(segments.insert(v.path, v.ordinal, v.segment));
+                    keys.push(segments.insert(v.resource, v.ordinal, v.segment));
                 }
             }
             searched = keys.len();
@@ -783,12 +840,16 @@ impl<'e> SearchRequest<'e> {
             lexical = engine
                 .with_cache(|c| c.lexical_search(pid, &query, &wanted, depth))?
                 .into_iter()
-                .map(|h| ((h.path, h.ordinal), h.score))
+                .map(|h| ((h.resource, h.ordinal), h.score))
                 .collect();
             named = resources
                 .iter()
-                .filter(|r| self.queries.iter().any(|q| names_file(q, &r.path)))
-                .map(|r| (r.path.clone(), 0))
+                .filter(|r| {
+                    self.queries
+                        .iter()
+                        .any(|q| names_file(q, Path::new(&r.id.labels().1)))
+                })
+                .map(|r| (r.id.clone(), 0))
                 .collect();
             if self.mode == SearchMode::Lexical {
                 searched = lexical.len();
@@ -806,17 +867,23 @@ impl<'e> SearchRequest<'e> {
         let mut previews = PreviewReader::default();
         let mut hits = Vec::with_capacity(ranked.len());
         for (key, score, signals, query_index) in ranked {
-            let Some(metadata) = metadata.get(&key.0).cloned() else {
+            let Some(metadata) = metadata.get(&key.0).map(|s| s.metadata.clone()) else {
                 continue;
             };
             let Some(segment) = segments.get_or_load(engine, pid, &key)? else {
                 continue;
             };
-            let preview = self
-                .preview_chars
-                .and_then(|n| previews.preview(&key.0, &segment.locator, &metadata, n));
+            let preview = self.preview_chars.and_then(|n| {
+                previews.preview(
+                    engine.provider.as_ref(),
+                    &key.0,
+                    &segment.locator,
+                    &metadata,
+                    n,
+                )
+            });
             hits.push(SearchHit {
-                resource: ResourceId::from_path(&key.0)?,
+                resource: key.0,
                 locator: segment.locator.clone(),
                 score,
                 signals,
@@ -841,7 +908,7 @@ impl<'e> SearchRequest<'e> {
 }
 
 /// A segment's identity within a search: its resource and position.
-type SegmentKey = (PathBuf, usize);
+type SegmentKey = (ResourceId, usize);
 
 /// Segments seen so far, filled from the vectors already loaded and, for hits
 /// found only by keyword or name, from the cache on demand.
@@ -851,7 +918,7 @@ struct SegmentTable {
 }
 
 impl SegmentTable {
-    fn insert(&mut self, path: PathBuf, ordinal: usize, segment: CachedSegment) -> SegmentKey {
+    fn insert(&mut self, path: ResourceId, ordinal: usize, segment: CachedSegment) -> SegmentKey {
         let key = (path, ordinal);
         self.segments.insert(key.clone(), Some(segment));
         key
@@ -1042,11 +1109,18 @@ fn fuse_max(per_query: impl Iterator<Item = Vec<Scored>>, limit: usize) -> Vec<F
 pub struct IndexRequest<'e> {
     engine: &'e SearchEngine,
     paths: Vec<PathBuf>,
+    roots: Vec<ResourceId>,
     discovery: DiscoveryOptions,
     progress: Option<ProgressFn<'e>>,
 }
 
 impl<'e> IndexRequest<'e> {
+    /// Add provider-specific roots without filesystem path conversion.
+    pub fn roots(mut self, roots: impl IntoIterator<Item = ResourceId>) -> Self {
+        self.roots.extend(roots);
+        self
+    }
+
     pub fn paths<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,
@@ -1072,10 +1146,11 @@ impl<'e> IndexRequest<'e> {
     pub fn execute(self) -> Result<IndexReport> {
         let started = Instant::now();
         let engine = self.engine;
-        if self.paths.is_empty() {
+        if self.paths.is_empty() && self.roots.is_empty() {
             return Err(Error::Config("no paths to index".into()));
         }
-        let resources = discover(&self.paths, &self.discovery)?;
+        let scope = ResourceScope::from_paths(&self.paths, self.roots, self.discovery)?;
+        let resources = engine.provider.list(&scope)?;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
@@ -1084,22 +1159,15 @@ impl<'e> IndexRequest<'e> {
         let sync = engine.sync(&resources, self.progress)?;
 
         let pid = engine.profile_id.as_str();
-        let roots: Vec<PathBuf> = self
-            .paths
-            .iter()
-            .filter_map(|p| p.canonicalize().ok())
-            .collect();
-        let present: HashSet<&Path> = resources.iter().map(|r| r.path.as_path()).collect();
+        let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
+        let known = engine.with_cache(|c| c.resource_index(pid))?;
+        let mut gone = Vec::new();
+        for id in known.into_keys() {
+            if !present.contains(&id) && engine.provider.is_deleted(&id, &scope)? {
+                gone.push(id);
+            }
+        }
         let removed = engine.with_cache(|c| {
-            let gone: Vec<PathBuf> = c
-                .resource_index(pid)?
-                .into_keys()
-                .filter(|p| {
-                    roots.iter().any(|r| p.starts_with(r))
-                        && !present.contains(p.as_path())
-                        && !p.exists()
-                })
-                .collect();
             c.remove_resources(pid, &gone)?;
             if !gone.is_empty() {
                 c.prune_orphans(pid)?;
@@ -1119,13 +1187,14 @@ impl<'e> IndexRequest<'e> {
 #[derive(Default)]
 struct PreviewReader {
     /// Each file read once per search, with the digest of exactly those bytes.
-    files: HashMap<PathBuf, Option<(Vec<u8>, String)>>,
+    files: HashMap<ResourceId, Option<(Vec<u8>, String)>>,
 }
 
 impl PreviewReader {
     fn preview(
         &mut self,
-        path: &Path,
+        provider: &dyn ResourceProvider,
+        path: &ResourceId,
         locator: &ResourceLocator,
         meta: &ResourceMetadata,
         max_chars: usize,
@@ -1140,9 +1209,9 @@ impl PreviewReader {
         };
         let (bytes, digest) = self
             .files
-            .entry(path.to_path_buf())
+            .entry(path.clone())
             .or_insert_with(|| {
-                let bytes = std::fs::read(path).ok()?;
+                let bytes = provider.read(path).ok()?;
                 let digest = blake3::hash(&bytes).to_hex().to_string();
                 Some((bytes, digest))
             })
