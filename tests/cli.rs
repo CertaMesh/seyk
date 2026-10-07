@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 mod common;
 
 use assert_cmd::Command;

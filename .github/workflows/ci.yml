@@ -25,7 +25,15 @@ jobs:
       # fail a PR that changed nothing. See rust-canary.yml for the newest one.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Model-backed tests are #[ignore]d: CI never downloads the weights.
-      - run: cargo test --locked --no-fail-fast
+      - run: cargo test --workspace --locked --no-fail-fast
+      - name: Check standalone dependency boundaries
+        run: python scripts/check_embedding_dependencies.py
+      - name: Check minimal library and CLI features
+        run: |
+          cargo check -p seyk --no-default-features --lib --locked
+          cargo check -p seyk --no-default-features --features cli --bin seyk --locked
+          cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
+          cargo test -p seyk-core --no-default-features --locked

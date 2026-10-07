@@ -1,3 +1,5 @@
+#![cfg(feature = "onnx")]
+
 //! Retrieval quality with the real model. Assertions are about ranking only.
 
 mod model_support;

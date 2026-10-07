@@ -586,7 +586,7 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
         source,
         dimension: args.dimension,
         precision: args.precision,
-        vision: !args.text_only,
+        vision: cfg!(feature = "image") && !args.text_only,
         ..Default::default()
     })
 }
