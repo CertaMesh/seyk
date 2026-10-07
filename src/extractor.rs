@@ -17,7 +17,7 @@ pub struct ExtractedContent {
 
 /// Convert verified resource bytes into readable evidence.
 ///
-/// Use [`extract_resource`] or the search engine for provider-backed
+/// Use [`extract_resource`] or [`crate::SearchEngine::extract`] for provider-backed
 /// extraction. Direct calls to `extract` must supply bytes already verified
 /// against `metadata.content_hash`. The central gateway verifies before calling
 /// any implementation. Future range/streaming extractors need a separate method.

@@ -507,3 +507,46 @@ fn fresh_listing_avoids_version_checks_but_reads_are_guarded() {
     engine.index().roots(roots()).execute().unwrap();
     assert_eq!(notes.version_checks.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn memory_extraction_verifies_current_bytes_without_model_or_filesystem() {
+    let notes = Arc::new(Notes::default());
+    let text = "alpha café\r\n  文書 🙂\n";
+    notes.set("mem://book/entry", text);
+    let (engine, fake) = engine(notes.clone());
+    let results = engine
+        .search("alpha")
+        .roots(roots())
+        .previews(None)
+        .execute()
+        .unwrap();
+    let hit = &results.hits[0];
+    assert!(hit.preview.is_none());
+    notes.reads.store(0, Ordering::SeqCst);
+    fake.reset_resource_count();
+    let content = engine.extract(hit).unwrap();
+    let seyk::ResourceLocator::Text {
+        byte_start,
+        byte_end,
+        ..
+    } = hit.locator
+    else {
+        panic!("text locator")
+    };
+    assert_eq!(content.text, &text[byte_start as usize..byte_end as usize]);
+    assert_eq!(content.metadata, hit.metadata);
+    assert_eq!(notes.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.resource_count(), 0);
+    let mut unsupported = hit.clone();
+    unsupported.locator = seyk::ResourceLocator::WholeResource;
+    assert!(matches!(
+        engine.extract(&unsupported),
+        Err(Error::UnsupportedExtraction { .. })
+    ));
+    assert_eq!(notes.reads.load(Ordering::SeqCst), 1);
+    notes.set("mem://book/entry", &text.replace("alpha", "bravo"));
+    assert!(matches!(
+        engine.extract(hit),
+        Err(Error::StaleResource { .. })
+    ));
+}
