@@ -77,6 +77,7 @@ impl FilterArgs {
 enum Command {
     /// Search files and directories with a natural-language query.
     Search {
+        /// What you are looking for, in your own words.
         query: String,
         /// Files or directories to search. Defaults to the current directory.
         paths: Vec<PathBuf>,
