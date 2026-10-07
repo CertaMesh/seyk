@@ -1,14 +1,18 @@
 //! `gemma-search mcp`: a stdio MCP server exposing semantic search to agents.
 //!
 //! The server only finds passages. The calling agent reads them and writes any
-//! answer, so no generation happens here. The model loads on the first search
-//! and stays loaded, which is the point of running a server instead of the CLI.
+//! answer, so no generation happens here. The model stays loaded between calls.
+//!
+//! By default a background thread indexes the roots on start and re-indexes on
+//! change, and searches read only what is indexed. A search therefore never waits
+//! for a large first index; it reports progress instead.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use gemma_search::{ResourceLocator, SearchEngine, SearchResults};
+use gemma_search::watch::{WatchOptions, watch};
+use gemma_search::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, SearchResults};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -23,8 +27,8 @@ const INSTRUCTIONS: &str = "Local semantic search over the user's files with Emb
 It matches meaning, not keywords, so describe what the passage would say rather than asking \
 the question. Pass 2-4 different phrasings in one call; each hit keeps its best score. Hits \
 are pointers: read the file at the given lines before answering, and cite path:lines. \
-Prefer grep for exact identifiers or strings. The first search of a large folder embeds \
-every file and can take minutes; later searches take about a second.";
+Prefer grep for exact identifiers or strings. The server indexes its folders in the \
+background; while `index.state` is \"indexing\", results cover only what is indexed so far.";
 
 type EngineFactory = Box<dyn Fn() -> Result<SearchEngine> + Send + Sync>;
 
@@ -33,7 +37,23 @@ pub struct GemmaSearchServer {
     roots: Arc<Vec<PathBuf>>,
     engine: Arc<Mutex<Option<Arc<SearchEngine>>>>,
     factory: Arc<EngineFactory>,
+    /// `None` when background indexing is off; searches then embed inline.
+    status: Option<Arc<Mutex<IndexStatus>>>,
     tool_router: ToolRouter<Self>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum IndexStatus {
+    LoadingModel,
+    Indexing {
+        segments_done: usize,
+        segments_total: usize,
+    },
+    Ready,
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -78,30 +98,92 @@ struct Response {
     files: usize,
     segments_embedded: usize,
     took_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<IndexStatus>,
 }
 
 impl GemmaSearchServer {
-    pub fn new(roots: Vec<PathBuf>, factory: EngineFactory) -> Result<Self> {
+    pub fn new(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> Result<Self> {
         let roots = roots
             .into_iter()
-            .map(|r| r.canonicalize().with_context(|| format!("root {}", r.display())))
+            .map(|r| {
+                r.canonicalize()
+                    .with_context(|| format!("root {}", r.display()))
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             roots: Arc::new(roots),
             engine: Arc::new(Mutex::new(None)),
             factory: Arc::new(factory),
+            status: background.then(|| Arc::new(Mutex::new(IndexStatus::LoadingModel))),
             tool_router: Self::tool_router(),
         })
     }
 
     fn engine(&self) -> Result<Arc<SearchEngine>> {
-        let mut slot = self.engine.lock().map_err(|_| anyhow!("engine lock poisoned"))?;
+        let mut slot = self
+            .engine
+            .lock()
+            .map_err(|_| anyhow!("engine lock poisoned"))?;
         if let Some(e) = slot.as_ref() {
             return Ok(e.clone());
         }
         let e = Arc::new((self.factory)()?);
         *slot = Some(e.clone());
         Ok(e)
+    }
+
+    fn set_status(&self, s: IndexStatus) {
+        if let Some(m) = &self.status
+            && let Ok(mut g) = m.lock()
+        {
+            *g = s;
+        }
+    }
+
+    fn status(&self) -> Option<IndexStatus> {
+        self.status
+            .as_ref()
+            .and_then(|m| m.lock().ok().map(|g| g.clone()))
+    }
+
+    /// Index the roots, then keep them fresh. Runs on its own thread for the
+    /// server's lifetime.
+    fn background_index(&self) {
+        let engine = match self.engine() {
+            Ok(e) => e,
+            Err(e) => {
+                return self.set_status(IndexStatus::Failed {
+                    error: format!("{e:#}"),
+                });
+            }
+        };
+        let progress = |e: ProgressEvent| {
+            if let ProgressEvent::Embedding { done, total } = e
+                && total > 0
+            {
+                self.set_status(IndexStatus::Indexing {
+                    segments_done: done,
+                    segments_total: total,
+                });
+            }
+        };
+        let result = watch(
+            &engine,
+            &self.roots,
+            &DiscoveryOptions::default(),
+            &WatchOptions::default(),
+            Some(&progress),
+            |pass| match pass {
+                Ok(_) => self.set_status(IndexStatus::Ready),
+                Err(e) => eprintln!("gemma-search: index pass failed: {e}"),
+            },
+        );
+        if let Err(e) = result {
+            self.set_status(IndexStatus::Failed {
+                error: e.to_string(),
+            });
+        }
     }
 
     fn run_search(&self, p: SearchParams) -> Result<Response> {
@@ -126,13 +208,17 @@ impl GemmaSearchServer {
                 .collect::<Result<Vec<_>>>()?
         };
 
+        let status = self.status();
+        // Embed inline only when no background indexer keeps the cache fresh.
+        let inline = matches!(status, None | Some(IndexStatus::Failed { .. }));
         let engine = self.engine()?;
         let mut queries = queries.into_iter();
         let first = queries.next().expect("checked non-empty");
         let mut req = queries
             .fold(engine.search(first), |r, q| r.query(q))
             .paths(&paths)
-            .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT));
+            .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT))
+            .sync(inline);
         if let Some(s) = p.min_score {
             req = req.min_score(s);
         }
@@ -142,7 +228,9 @@ impl GemmaSearchServer {
         for g in p.exclude {
             req = req.exclude(g);
         }
-        Ok(to_response(req.execute()?))
+        let mut resp = to_response(req.execute()?);
+        resp.index = status;
+        Ok(resp)
     }
 }
 
@@ -183,7 +271,11 @@ fn to_response(r: SearchResults) -> Response {
                     line_start: Some(a),
                     line_end: Some(b),
                     ..
-                } => Some(if a == b { a.to_string() } else { format!("{a}-{b}") }),
+                } => Some(if a == b {
+                    a.to_string()
+                } else {
+                    format!("{a}-{b}")
+                }),
                 _ => None,
             },
             path: h.resource.path().to_path_buf(),
@@ -199,6 +291,7 @@ fn to_response(r: SearchResults) -> Response {
         files: r.stats.sync.resources_discovered,
         segments_embedded: r.stats.sync.segments_embedded,
         took_ms: r.stats.total_ms,
+        index: None,
     }
 }
 
@@ -229,13 +322,20 @@ impl GemmaSearchServer {
 impl ServerHandler for GemmaSearchServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("gemma-search", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "gemma-search",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(INSTRUCTIONS)
     }
 }
 
-pub fn serve(roots: Vec<PathBuf>, factory: EngineFactory) -> Result<()> {
-    let server = GemmaSearchServer::new(roots, factory)?;
+pub fn serve(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> Result<()> {
+    let server = GemmaSearchServer::new(roots, factory, background)?;
+    if background {
+        let s = server.clone();
+        std::thread::spawn(move || s.background_index());
+    }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

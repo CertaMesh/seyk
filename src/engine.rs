@@ -197,6 +197,7 @@ impl SearchEngine {
             discovery: DiscoveryOptions::default(),
             preview_chars: Some(240),
             progress: None,
+            sync: true,
         }
     }
 
@@ -550,6 +551,7 @@ pub struct SearchRequest<'e> {
     discovery: DiscoveryOptions,
     preview_chars: Option<usize>,
     progress: Option<ProgressFn<'e>>,
+    sync: bool,
 }
 
 impl<'e> SearchRequest<'e> {
@@ -606,6 +608,14 @@ impl<'e> SearchRequest<'e> {
         self
     }
 
+    /// With `false`, search only what is already cached and embed nothing. For
+    /// callers where a separate indexer (see `watch`) keeps the cache fresh, so a
+    /// search never waits for a large first index. Changed files may be stale.
+    pub fn sync(mut self, sync: bool) -> Self {
+        self.sync = sync;
+        self
+    }
+
     pub fn execute(self) -> Result<SearchResults> {
         let started = Instant::now();
         let engine = self.engine;
@@ -618,7 +628,14 @@ impl<'e> SearchRequest<'e> {
                 resources: resources.len(),
             });
         }
-        let sync = engine.sync(&resources, self.progress)?;
+        let sync = if self.sync {
+            engine.sync(&resources, self.progress)?
+        } else {
+            SyncStats {
+                resources_discovered: resources.len(),
+                ..Default::default()
+            }
+        };
 
         let dim = engine.embedder.dimension().get();
         let mut query_vectors = Vec::with_capacity(self.queries.len());
@@ -704,7 +721,13 @@ fn fuse_max(per_query: impl Iterator<Item = Vec<Scored>>, limit: usize) -> Vec<F
             match best.get(&scored.id) {
                 Some(b) if b.scored.score >= scored.score => {}
                 _ => {
-                    best.insert(scored.id, Fused { scored, query_index });
+                    best.insert(
+                        scored.id,
+                        Fused {
+                            scored,
+                            query_index,
+                        },
+                    );
                 }
             }
         }

@@ -17,7 +17,12 @@ fn several_queries_keep_each_segments_best_score() {
         .build()
         .unwrap();
     let file_of = |h: &gemma_search::SearchHit| {
-        h.resource.path().file_name().unwrap().to_string_lossy().into_owned()
+        h.resource
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
     };
 
     let single = engine
@@ -36,7 +41,11 @@ fn several_queries_keep_each_segments_best_score() {
 
     assert_eq!(both.queries, ["alpha garden", "beta river"]);
     let river = both.hits.iter().find(|h| file_of(h) == "river.md").unwrap();
-    let garden = both.hits.iter().find(|h| file_of(h) == "garden.md").unwrap();
+    let garden = both
+        .hits
+        .iter()
+        .find(|h| file_of(h) == "garden.md")
+        .unwrap();
     assert_eq!(river.query_index, 1);
     assert_eq!(garden.query_index, 0);
     // Fused scores are the plain cosine of the best query, not a blend.

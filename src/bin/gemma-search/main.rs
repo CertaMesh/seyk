@@ -109,6 +109,10 @@ enum Command {
         paths: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
+        /// Keep running and re-index whenever files change.
+        #[cfg(feature = "watch")]
+        #[arg(long)]
+        watch: bool,
         #[command(flatten)]
         filter: FilterArgs,
         #[command(flatten)]
@@ -126,6 +130,9 @@ enum Command {
     Mcp {
         /// Folders the server may search. Defaults to the current directory.
         roots: Vec<PathBuf>,
+        /// Do not index in the background; each search embeds what it needs first.
+        #[arg(long)]
+        no_watch: bool,
         #[command(flatten)]
         model: ModelArgs,
     },
@@ -213,11 +220,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Index {
             paths,
             json,
+            #[cfg(feature = "watch")]
+            watch,
             filter,
             model,
         } => {
             let engine = engine(&model, false)?;
             let paths = default_paths(paths)?;
+            #[cfg(feature = "watch")]
+            if watch {
+                return watch_and_index(&engine, &paths, &filter.discovery(), json);
+            }
             let progress = Progress::new(true);
             let report = |e: ProgressEvent| progress.event(e);
             let result = engine
@@ -253,9 +266,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         #[cfg(feature = "mcp")]
-        Command::Mcp { roots, model } => {
+        Command::Mcp {
+            roots,
+            no_watch,
+            model,
+        } => {
             let roots = default_paths(roots)?;
-            mcp::serve(roots, Box::new(move || engine(&model, false)))?;
+            mcp::serve(roots, Box::new(move || engine(&model, false)), !no_watch)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Model { action, model } => {
@@ -280,6 +297,53 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Runs until interrupted. Each pass prints one line (or one JSON object).
+#[cfg(feature = "watch")]
+fn watch_and_index(
+    engine: &SearchEngine,
+    paths: &[PathBuf],
+    discovery: &DiscoveryOptions,
+    json: bool,
+) -> Result<ExitCode> {
+    use gemma_search::watch::{WatchOptions, watch};
+    let progress = Progress::new(!json);
+    let report = |e: ProgressEvent| progress.event(e);
+    if !json {
+        eprintln!(
+            "Watching {} for changes. Ctrl-C to stop.",
+            paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let mut first = true;
+    watch(
+        engine,
+        paths,
+        discovery,
+        &WatchOptions::default(),
+        Some(&report),
+        |pass| {
+            progress.finish();
+            let quiet_ok = !std::mem::take(&mut first);
+            match pass {
+                Ok(r) if json => println!("{}", serde_json::to_string(&r).unwrap_or_default()),
+                // Quiet when a burst of events changed nothing we index.
+                Ok(r)
+                    if quiet_ok
+                        && r.sync.resources_updated == 0
+                        && r.resources_removed == 0
+                        && r.sync.skipped.is_empty() => {}
+                Ok(r) => print!("{}", format_index_report(&r)),
+                Err(e) => eprintln!("error: {e}"),
+            }
+        },
+    )?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {

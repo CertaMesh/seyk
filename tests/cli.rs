@@ -87,8 +87,10 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "gemma-search");
     let tools = &responses[1]["result"]["tools"];
     assert_eq!(tools[0]["name"], "search");
-    assert!(tools[0]["inputSchema"]["required"]
-        .as_array()
-        .unwrap()
-        .contains(&Value::from("queries")));
+    assert!(
+        tools[0]["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("queries"))
+    );
 }

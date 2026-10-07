@@ -41,6 +41,8 @@ mod error;
 pub mod index;
 mod resource;
 pub mod segment;
+#[cfg(feature = "watch")]
+pub mod watch;
 
 pub use cache::{CacheStats, EmbeddingCache, MemoryCache, SqliteCache};
 pub use discovery::DiscoveryOptions;
