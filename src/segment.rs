@@ -9,7 +9,7 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 
 /// Bump when segmentation output changes for the same input and config.
-const TEXT_ALGORITHM_VERSION: u32 = 1;
+const TEXT_ALGORITHM_VERSION: u32 = 2;
 
 /// How a text resource should be parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,28 +23,35 @@ pub enum TextFormat {
 /// Size limits for text segments, in characters.
 ///
 /// Defaults are chosen for retrieval quality, not to fill the 8K context.
+/// A vector that averages several ideas scores lower for a query matching only
+/// one of them, so segments follow the author's own units: every paragraph of
+/// at least `min_chars` is its own segment. Shorter fragments (labels, one-line
+/// notes) are merged with their neighbours up to `target_chars`.
+///
 /// Gemma's tokenizer averages roughly four characters per token on English
-/// prose, so the target of ~1,000 characters is about 250 tokens and the hard
-/// maximum of 1,800 is about 450. A passage of that size usually covers one
-/// idea, which keeps its vector specific. Long chunks average several ideas
-/// together and a query matching one of them scores lower.
+/// prose: 60 characters is a short sentence, the 1,000-character target is
+/// about 250 tokens and the 1,800-character maximum about 450.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextSegmenterConfig {
-    /// Stop adding paragraphs once a chunk reaches this size.
+    /// Paragraphs at least this long are never merged with each other.
+    pub min_chars: usize,
+    /// Stop merging short fragments once a chunk reaches this size.
     pub target_chars: usize,
     /// No chunk is longer than this. Longer paragraphs are split at sentences.
     pub max_chars: usize,
-    /// When a section is split, a trailing paragraph up to this size is
-    /// repeated at the start of the next chunk to keep local context.
+    /// When a long paragraph is cut at a sentence, its last sentence (if no
+    /// longer than this) is repeated at the start of the next piece. There is
+    /// no overlap across paragraph breaks the author chose.
     pub overlap_chars: usize,
 }
 
 impl Default for TextSegmenterConfig {
     fn default() -> Self {
         Self {
+            min_chars: 60,
             target_chars: 1000,
             max_chars: 1800,
-            overlap_chars: 400,
+            overlap_chars: 300,
         }
     }
 }
@@ -83,8 +90,8 @@ impl TextSegmenter {
     pub fn version(&self) -> String {
         let c = &self.config;
         format!(
-            "text-v{TEXT_ALGORITHM_VERSION}:t{}:m{}:o{}",
-            c.target_chars, c.max_chars, c.overlap_chars
+            "text-v{TEXT_ALGORITHM_VERSION}:n{}:t{}:m{}:o{}",
+            c.min_chars, c.target_chars, c.max_chars, c.overlap_chars
         )
     }
 
@@ -98,37 +105,26 @@ impl TextSegmenter {
 
         let mut out = Vec::new();
         let mut current: Vec<Block> = Vec::new();
-        let mut current_len = 0;
+        // Length of the non-heading text in `current`.
+        let mut body_len = 0;
 
         for block in blocks {
             let len = block.range.len();
             let only_headings = current.iter().all(|b| b.is_heading);
+            let min = self.config.min_chars;
 
-            if block.is_heading && !only_headings {
-                // A heading always starts a new chunk.
+            // A heading always starts a new chunk; a heading-only chunk merges forward.
+            let new_section = block.is_heading && !only_headings;
+            // Two substantial paragraphs are separate ideas.
+            let both_substantial = !block.is_heading && body_len >= min && len >= min;
+            let too_big = !only_headings && body_len + len > self.config.target_chars;
+            if new_section || both_substantial || too_big {
                 self.flush(source, &lines, &mut current, &mut out);
-                current_len = 0;
-            } else if !current.is_empty()
-                && !only_headings
-                && current_len + len > self.config.target_chars
-            {
-                let carry = current
-                    .last()
-                    .filter(|b| {
-                        current.len() > 1
-                            && !b.is_heading
-                            && b.range.len() <= self.config.overlap_chars
-                    })
-                    .cloned()
-                    .filter(|b| b.range.len() + len <= self.config.max_chars);
-                self.flush(source, &lines, &mut current, &mut out);
-                current_len = 0;
-                if let Some(c) = carry {
-                    current_len += c.range.len();
-                    current.push(c);
-                }
+                body_len = 0;
             }
-            current_len += len;
+            if !block.is_heading {
+                body_len += len;
+            }
             current.push(block);
         }
         self.flush(source, &lines, &mut current, &mut out);
@@ -186,7 +182,13 @@ impl TextSegmenter {
                     .unwrap_or(window.len());
                 let piece_end = start + cut;
                 out.push(trimmed_block(source, start..piece_end, &block));
-                start = skip_whitespace(source, piece_end);
+                // Repeat the piece's last sentence so a thought cut in half is
+                // still whole in one of the two pieces.
+                let piece = source[start..piece_end].trim_end();
+                let overlap_start = rfind_sentence_end(&piece[..piece.len().saturating_sub(1)], 0)
+                    .map(|i| skip_whitespace(source, start + i))
+                    .filter(|&s| s > start && piece_end - s <= self.config.overlap_chars);
+                start = overlap_start.unwrap_or_else(|| skip_whitespace(source, piece_end));
             }
             if start < block.range.end {
                 out.push(trimmed_block(source, start..block.range.end, &block));
@@ -500,6 +502,45 @@ mod tests {
                 &piece.text[piece.text.len() - 10..]
             );
             assert_eq!(&src[piece.byte_range.clone()], piece.text);
+        }
+    }
+
+    #[test]
+    fn substantial_paragraphs_stay_separate_and_fragments_merge() {
+        let src = "Grief: after the funeral her chest felt packed with wet sand.\n\n\
+                   Memory: she is certain the argument happened in winter, not summer.\n\n\
+                   TODO\n\n\
+                   Inheritance: a temper, a way of folding shirts, the silence at dinner.\n";
+        let s = seg(src, TextFormat::Plain);
+        let texts: Vec<&str> = s.iter().map(|x| x.text.as_str()).collect();
+        assert_eq!(texts.len(), 3, "{texts:#?}");
+        assert!(texts[0].starts_with("Grief"));
+        assert!(
+            texts[1].starts_with("Memory") && texts[1].ends_with("TODO"),
+            "fragment joins its neighbour"
+        );
+        assert!(texts[2].starts_with("Inheritance"));
+        assert_eq!((s[1].line_start, s[1].line_end), (3, 5));
+    }
+
+    #[test]
+    fn split_paragraphs_overlap_by_one_sentence() {
+        let src = (0..60)
+            .map(|i| format!("Sentence number {i} is about the long walk home."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let s = seg(&src, TextFormat::Plain);
+        assert!(s.len() > 1);
+        for pair in s.windows(2) {
+            let last_sentence = pair[0].text.rsplit(". ").next().unwrap();
+            assert!(
+                pair[1]
+                    .text
+                    .starts_with(last_sentence.trim_end_matches('.')),
+                "{:?}",
+                &pair[1].text[..40]
+            );
+            assert!(pair[1].byte_range.start < pair[0].byte_range.end);
         }
     }
 

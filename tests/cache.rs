@@ -19,6 +19,7 @@ fn shared_engine(
         .shared_embedder(embedder.clone())
         .cache(cache)
         .segmenter(TextSegmenter::new(TextSegmenterConfig {
+            min_chars: 0,
             target_chars: 20,
             max_chars: 100,
             overlap_chars: 0,
@@ -123,6 +124,7 @@ fn model_and_segmenter_profiles_invalidate_vectors() {
         .shared_embedder(embedder.clone())
         .cache(SqliteCache::open(&cache).unwrap())
         .segmenter(TextSegmenter::new(TextSegmenterConfig {
+            min_chars: 0,
             target_chars: 10,
             max_chars: 100,
             overlap_chars: 0,
