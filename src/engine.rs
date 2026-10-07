@@ -284,14 +284,16 @@ impl SearchEngine {
         // Only inputs the cache has never seen go to the model.
         let all_hashes: Vec<String> = pending
             .iter()
-            .flat_map(|p| p.jobs.iter().map(|j| j.hash.clone()))
+            .flat_map(|p| p.jobs.iter().map(|j| j.segment.input_hash.clone()))
             .collect();
         let already = self.with_cache(|c| c.known_inputs(pid, &all_hashes))?;
         let mut queued: HashSet<&str> = HashSet::new();
         let mut work: Vec<(usize, &Job)> = Vec::new();
         for (ri, p) in pending.iter().enumerate() {
             for j in &p.jobs {
-                if !already.contains(&j.hash) && queued.insert(j.hash.as_str()) {
+                if !already.contains(&j.segment.input_hash)
+                    && queued.insert(j.segment.input_hash.as_str())
+                {
                     work.push((ri, j));
                 }
             }
@@ -299,7 +301,9 @@ impl SearchEngine {
 
         let total = work.len();
         let started = Instant::now();
-        let mut failed: HashMap<usize, String> = HashMap::new();
+        // Keyed by input, not resource: a deduplicated input belongs to every
+        // resource that contains it, and all of them are incomplete if it fails.
+        let mut failed: HashMap<String, String> = HashMap::new();
         let mut done = 0;
         let mut written = 0;
         if let Some(p) = progress {
@@ -308,11 +312,13 @@ impl SearchEngine {
         for batch in work.chunks(self.batch_size) {
             let results = self.embed_batch(batch);
             let mut store = Vec::with_capacity(batch.len());
-            for ((ri, job), res) in batch.iter().zip(results) {
+            for ((_, job), res) in batch.iter().zip(results) {
                 match res {
-                    Ok(v) => store.push((job.hash.clone(), v)),
+                    Ok(v) => store.push((job.segment.input_hash.clone(), v)),
                     Err(e) => {
-                        failed.entry(*ri).or_insert_with(|| e.to_string());
+                        failed
+                            .entry(job.segment.input_hash.clone())
+                            .or_insert_with(|| e.to_string());
                     }
                 }
             }
@@ -341,12 +347,16 @@ impl SearchEngine {
         pending: &[Pending],
         from: usize,
         upto: usize,
-        failed: &HashMap<usize, String>,
+        failed: &HashMap<String, String>,
         stats: &mut SyncStats,
     ) -> Result<usize> {
         let pid = self.profile_id.as_str();
-        for (i, p) in pending.iter().enumerate().take(upto).skip(from) {
-            if let Some(reason) = failed.get(&i) {
+        for p in pending.iter().take(upto).skip(from) {
+            if let Some(reason) = p
+                .jobs
+                .iter()
+                .find_map(|j| failed.get(&j.segment.input_hash))
+            {
                 stats.skipped.push(skip(&p.path, reason.clone()));
                 continue;
             }
@@ -412,7 +422,6 @@ impl SearchEngine {
                         let hash =
                             input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
                         Job {
-                            hash: hash.clone(),
                             segment: CachedSegment {
                                 locator: ResourceLocator::Text {
                                     byte_start: s.byte_range.start as u64,
@@ -434,7 +443,6 @@ impl SearchEngine {
             ResourceKind::Image => {
                 let hash = input_hash(&["image", &blake3::hash(&bytes).to_hex()]);
                 Ok(vec![Job {
-                    hash: hash.clone(),
                     segment: CachedSegment {
                         locator: ResourceLocator::WholeResource,
                         heading: None,
@@ -454,7 +462,8 @@ struct Pending {
 }
 
 struct Job {
-    hash: String,
+    /// `segment.input_hash` identifies the model input; identical inputs in
+    /// different resources are embedded once.
     segment: CachedSegment,
     input: JobInput,
 }
@@ -822,7 +831,8 @@ impl<'e> IndexRequest<'e> {
 /// Reads previews, at most once per file per search.
 #[derive(Default)]
 struct PreviewReader {
-    files: HashMap<PathBuf, Option<Vec<u8>>>,
+    /// Each file read once per search, with the digest of exactly those bytes.
+    files: HashMap<PathBuf, Option<(Vec<u8>, String)>>,
 }
 
 impl PreviewReader {
@@ -841,13 +851,17 @@ impl PreviewReader {
         else {
             return None;
         };
-        let bytes = self
+        let (bytes, digest) = self
             .files
             .entry(path.to_path_buf())
-            .or_insert_with(|| std::fs::read(path).ok())
+            .or_insert_with(|| {
+                let bytes = std::fs::read(path).ok()?;
+                let digest = blake3::hash(&bytes).to_hex().to_string();
+                Some((bytes, digest))
+            })
             .as_ref()?;
         // If the file changed after it was embedded, the byte range may be wrong.
-        if blake3::hash(bytes).to_hex().as_str() != meta.content_hash {
+        if *digest != meta.content_hash {
             return None;
         }
         let slice = bytes.get(*byte_start as usize..*byte_end as usize)?;

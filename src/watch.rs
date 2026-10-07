@@ -128,7 +128,10 @@ fn relevant(event: &notify::Event, roots: &[PathBuf], discovery: &DiscoveryOptio
         // Judge only the part below a root, so a root inside `~/.notes` is fine.
         // Roots can nest (`/repo` and `/repo/.notes`); any root admitting the
         // path is enough, whatever order the roots came in.
-        let mut below = roots.iter().filter_map(|r| p.strip_prefix(r).ok()).peekable();
+        let mut below = roots
+            .iter()
+            .filter_map(|r| p.strip_prefix(r).ok())
+            .peekable();
         if below.peek().is_none() {
             return !ignored(p, discovery);
         }
@@ -221,11 +224,19 @@ mod tests {
             }
         });
         let mut ran_at = None;
-        debounce_loop(&rx, ms(50), |&r| r, || {
-            ran_at.get_or_insert(started.elapsed());
-        });
+        debounce_loop(
+            &rx,
+            ms(50),
+            |&r| r,
+            || {
+                ran_at.get_or_insert(started.elapsed());
+            },
+        );
         sender.join().unwrap();
         let ran_at = ran_at.expect("pass ran");
-        assert!(ran_at < ms(400), "pass postponed by ignored churn: {ran_at:?}");
+        assert!(
+            ran_at < ms(400),
+            "pass postponed by ignored churn: {ran_at:?}"
+        );
     }
 }
