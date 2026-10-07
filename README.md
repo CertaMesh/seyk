@@ -7,22 +7,25 @@
 Local semantic search over your own files, built on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
 
-Ask a question in your own words, point it at a folder, and get back the passages
-that mean the same thing, even when they share no words with the question:
+Ask a question in your own words, or type an exact name, and get back the
+passages that match. Meaning, keywords and file names are searched together:
 
 ```console
-$ seyk search "how I fixed my sleep" ~/notes -n 2
-0.686  habits.md:1
-       Phone stays in the kitchen after ten now. Since then I drift off within minutes instead of scrolling until one.
+$ seyk search "turning into my dad" ~/notes -n 1
+1.000  father.md:1-3  § Father  [meaning 0.70]
+       He used to slam the door when he was angry. Last week I caught myself doing exactly the same thing, and my son flinched the way I used to.
 
-0.620  work.md:1
-       Ship the pricing page before the conference. The old one still lists the beta plan.
+$ seyk search "INC-18372" ~/notes -n 1
+1.000  work.md:1-3  § Work  [meaning 0.76+words]
+       Ship the pricing page before the conference. INC-18372 is still open: the old page lists the beta plan.
 
-Searched 3 segments: 3 files (0 unchanged, 3 new or changed), 3 segments embedded in 0.3s
+$ seyk search "father.md" ~/notes -n 1
+1.000  father.md:1-3  § Father  [meaning 0.74+words+name]
+       He used to slam the door when he was angry. Last week I caught myself doing exactly the same thing, and my son flinched the way I used to.
 ```
 
-(Real output from a three-note folder. The best match shares no words with the
-question.)
+(Real output from a three-note folder. The first match shares no words with the
+question; the tag in brackets says what found each hit.)
 
 It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
@@ -142,7 +145,8 @@ seyk cache clear
 |---|---|
 | `-n, --limit` | Number of results (default 10) |
 | `-q, --also` | Another phrasing to search for too (repeatable) |
-| `--min-score` | Hide results below this cosine similarity |
+| `--mode` | `hybrid` (default: meaning + keywords + file names), `semantic` or `lexical` |
+| `--min-score` | Hide meaning matches below this cosine similarity (keyword and name matches are kept) |
 | `--dimension` | 768, 512, 256 (default) or 128 |
 | `--precision` | `q8` (default) or `fp32` |
 | `--include` / `--exclude` | Globs; a pattern without `/` matches the file name |
@@ -153,15 +157,38 @@ seyk cache clear
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
 
-Scores are cosine similarities. Use them to rank results within one search. They
-are not calibrated probabilities, and unrelated text rarely scores near zero, so
-pick a `--min-score` by looking at your own results.
+### Scores and tags
+
+In the default **hybrid** mode, three lists are ranked separately and merged by
+position (reciprocal rank fusion):
+
+- **meaning**: cosine similarity between the question and each passage;
+- **words**: keyword relevance (BM25) over the text, heading, file name and path;
+- **name**: the query names the file (`father.md`, `father` or `notes/father.md`).
+
+The hybrid score only depends on **where a hit ranked in each list**, scaled so
+1.000 means first everywhere something was found. It says nothing about how
+good the match is in absolute terms: with three unrelated notes, the third one
+still scores close to 1. **The tag shows the strength**: `meaning 0.70` is the
+cosine, `words` means the keywords matched and `name` means the file name did.
+
+Keywords count fully for names, identifiers (`INC-18372`, `Session::restore()`)
+and one- or two-word queries. In a question written in prose they count less
+(0.3), so incidental shared words only break ties between passages of similar
+meaning.
+
+`--mode semantic` gives the old behaviour: the score is the cosine itself. Use
+it to rank within one search; it is not a calibrated probability, and unrelated
+text rarely scores near zero, so pick a `--min-score` by looking at your own
+results. `--mode lexical` never loads or runs the model's query side.
 
 ## Agents (MCP)
 
 `seyk mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server
 over stdio. Agents get one tool, `search`, that takes one to eight phrasings and
-returns ranked passages as path, line range, heading, score and preview. The agent
+returns ranked passages as path, line range, heading, score, preview and
+`matched` (`meaning`, `words`, `name`). An optional `mode` switches between
+`hybrid` (default), `semantic` and `lexical`. The agent
 then reads those lines itself and writes the answer. Seyk never generates text.
 
 ```bash
@@ -185,8 +212,8 @@ claude mcp add seyk -- seyk mcp .
   progress, `ready`, `pass_failed` or `stopped`).
 - **Confined to its folders.** The tool refuses paths outside the folders the
   server was started with.
-- **For code, it complements grep.** Use Seyk for "where do we retry failed
-  payments?" and grep for `retryPayment(`.
+- **For code, it complements grep.** Hybrid search finds `retryPayment` by name
+  too, but grep is still the right tool for every exact occurrence of `retryPayment(`.
 
 ```bash
 seyk daemon status    # pid, sessions, and each watched folder's index state
@@ -266,8 +293,8 @@ their own embedder can use `default-features = false`.
 
 ## How caching works
 
-The original files stay the source of truth. Nothing is copied: the cache holds
-only file metadata, segment locations and vectors.
+The original files stay the source of truth. The cache holds file metadata,
+segment locations, vectors and a keyword index (see the privacy note below).
 
 There are three ways to search:
 
@@ -305,7 +332,10 @@ The hard links exist because ONNX Runtime refuses weight files that live behind 
 Hugging Face cache's symlinks.
 
 **Privacy.** Files, queries and embeddings never leave the machine. Treat the cache
-as sensitive: embeddings can leak information about the text they came from. The
+as sensitive. Embeddings can leak information about the text they came from, and
+the keyword index (a SQLite FTS5 table) stores **every word of every indexed file
+with its position**. It keeps no copy of the original text, but most of it,
+lowercased and without punctuation, can be rebuilt from the index. The
 cache directory is created `0700` and the file `0600`. `seyk cache clear`
 deletes every vector.
 
@@ -408,6 +438,10 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   (a story whose details keep shifting, for "memory becoming unreliable") can rank
   below an unrelated note that shares a word ("memory card … unreliable"). See
   [docs/benchmarks.md](docs/benchmarks.md#retrieval-smoke-test).
+- **Hybrid can push a good meaning match down.** On a real folder of book drafts,
+  hybrid search moved 7 of 8 target passages into the top 10 (semantic
+  alone: 6 of 8), but one poetic query fell from 19th to 25th because keyword
+  hits crowded it out. `--mode semantic` is there for those cases.
 - **First search of a large folder is slow.** Embedding on the CPU managed roughly
   5–6 segments per second on a busy machine, about 30 minutes for 10,000
   segments. After that, only changes are embedded. Run `index --watch` or the MCP
@@ -451,9 +485,10 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 | `discovery` | Walk paths, apply excludes and globs, classify files |
 | `segment` | Turn text into segments with exact byte and line ranges |
 | `embedder` | `Embedder` trait and `ResourceInput`; `embedder::gemma` is the EmbeddingGemma 2 backend |
-| `cache` | `EmbeddingCache` trait, `SqliteCache`, `MemoryCache`, profiles |
+| `cache` | `EmbeddingCache` trait, `SqliteCache`, `MemoryCache`, profiles, keyword index |
+| `lexical` | Tokenizer and keyword query (BM25) shared by both caches |
 | `index` | `VectorIndex` trait and `BruteForceIndex` |
-| `engine` | `SearchEngine`: lazy sync, ranking, previews, `index` |
+| `engine` | `SearchEngine`: lazy sync, hybrid ranking (rank fusion), previews, `index` |
 | `watch` | Re-index on file changes (`index --watch`, MCP background indexing) |
 | `src/bin/seyk/main.rs` | Argument parsing and formatting only |
 | `src/bin/seyk/mcp.rs` | The MCP server: tool schema, root confinement, background indexing |

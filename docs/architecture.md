@@ -66,3 +66,83 @@ later phases can see what was deliberately left alone and why.
 - The vector key `(profile, input hash)`: it is what makes reuse safe.
 - The CLI's simple form, `seyk search "…" <paths>`.
 - The MCP server and daemon. They predate this roadmap and are kept as they are.
+
+## Phase 1 report: hybrid text search
+
+### What was implemented
+
+- **Keyword search.** `src/lexical.rs` holds one tokenizer and query builder
+  (the same rules as FTS5's `unicode61 remove_diacritics 2`, minus common
+  function words), used by both caches. An identifier such as
+  `Session::restore()` becomes a group of tokens that must appear side by side. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
+  with columns for file name, path, heading and body, ranked by BM25.
+  `MemoryCache` runs the same BM25 in memory, so `--no-cache` behaves the same.
+- **Schema v2.** Opening a v1 cache clears only the `resources` rows (so every
+  file is re-read once and gets keyword rows); the expensive embeddings are kept.
+- **File-name matches.** A query that is a file's name, stem or trailing path
+  (`father.md`, `father`, `people/father.md`) is its own signal, independent of
+  both the model and the keyword index.
+- **Fusion.** Semantic, keyword and file-name lists are merged with reciprocal
+  rank fusion (k = 60). File names weigh 3. Keywords weigh 1.0 for names,
+  identifiers and one- or two-word queries, and 0.3 for questions in prose
+  (`keyword_weight`). Scores are normalised so 1.0 means first on every signal
+  that found anything.
+- **Explainable hits.** `SearchHit.signals` (`MatchSignals`) records the cosine,
+  the BM25 score and whether the name matched. The CLI prints it as a tag
+  (`[meaning 0.69+words+name]`); the MCP tool returns `matched`.
+- **Modes.** `SearchMode::{Hybrid, Semantic, Lexical}`, `--mode` on the CLI,
+  `mode` on the MCP tool. Semantic mode is the v0.1.0 behaviour, score included.
+
+### Evaluation
+
+A real folder of book drafts, eight queries, each with one known target passage. Rank of the target (lower is better):
+
+| Query | Semantic | Hybrid (prose weight 0.3) |
+|---|---:|---:|
+| detached from reality | 9 | 1 |
+| grief as something physical | 1 | 7 |
+| toy / wet roof | 1 | 1 |
+| fanatics | 1 | 2 (a duplicated passage took 1st) |
+| tattoos | 1 | 1 |
+| loss you can't feel | 18 | 2 |
+| ink on the skin | 19 | 25 |
+| dream city | 7 | 7 |
+
+- Targets in the top 10 went from **6 of 8 to 7 of 8**.
+- Two character files that semantic search did not put in the top 3 for their
+  own names now rank **first**.
+- Prose keyword weights of **1.0 and 0.15 were both worse overall** than 0.3.
+  At 1.0, common words in long questions dominate; at 0.15, keywords barely
+  break ties.
+
+### What was deliberately not done
+
+- **No learned or calibrated weights.** Eight queries are enough to reject bad
+  settings, not to fit parameters. The constants are documented and overridable
+  (`--lexical-weight`, hidden).
+- **No user-facing query syntax.** Identifiers become phrases automatically, but
+  quotes, `AND`/`OR` and field filters (`name:`) are not supported.
+- **No change to segmentation or the embedding cache key.** Retrieval quality
+  numbers above rely on both staying as they were.
+- **No query expansion or reranking model.** Both would add a second model.
+
+### What we learned
+
+- **The weight has to depend on the query.** One global keyword weight cannot
+  serve both `INC-18372` and "where did I write about loss you can't feel":
+  the first is all keyword, the second is all meaning.
+- **Rank fusion hides strength.** A hybrid score of 0.97 can be a weak match
+  that happens to rank second of three. That is why hits carry their signals
+  and the CLI shows the cosine.
+- **A keyword index is not content-free.** Contentless FTS5 still stores every
+  token and position, so the README's privacy note had to change.
+- **Two regressions remain** ("grief as something physical" 1 → 7, "ink on the
+  skin" 19 → 25): keyword hits on a common word push a purely thematic passage
+  down. `--mode semantic` covers those cases for now.
+
+### What should happen next
+
+Phase 2: give resources an identity that is not a path (a URI-like
+`ResourceId`), put reading behind a `ResourceProvider` with a filesystem
+implementation, and add `ResourceLocator::ImageRegion`, without changing
+behaviour. Phase 3 then builds `extract(&hit)` on top of the provider.
