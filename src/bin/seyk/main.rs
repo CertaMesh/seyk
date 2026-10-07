@@ -5,7 +5,7 @@ mod daemon;
 #[cfg(feature = "mcp")]
 mod mcp;
 
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -123,6 +123,9 @@ enum Command {
         /// Embed everything in memory and keep nothing on disk.
         #[arg(long)]
         no_cache: bool,
+        /// Do not read previews. JSON hits retain preview: null.
+        #[arg(long)]
+        no_preview: bool,
         /// Print results as JSON.
         #[arg(long)]
         json: bool,
@@ -130,6 +133,18 @@ enum Command {
         filter: FilterArgs,
         #[command(flatten)]
         model: ModelArgs,
+    },
+    /// Extract exact text from one hit in a search JSON document; no model needed.
+    Extract {
+        /// Search JSON file, or - to read standard input.
+        #[arg(long, value_name = "FILE|-")]
+        from_json: PathBuf,
+        /// Zero-based hit index in the search results.
+        #[arg(long, default_value_t = 0)]
+        hit: usize,
+        /// Emit a versioned extraction JSON document instead of raw text.
+        #[arg(long)]
+        json: bool,
     },
     /// Embed files ahead of time so later searches are fast. Optional.
     Index {
@@ -245,6 +260,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             limit,
             min_score,
             no_cache,
+            no_preview,
             json,
             filter,
             model,
@@ -261,6 +277,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .limit(limit)
                 .discovery(filter.discovery())
                 .progress(&report);
+            if no_preview {
+                req = req.previews(None);
+            }
             if let Some(s) = min_score {
                 req = req.min_score(s);
             }
@@ -280,6 +299,36 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     format_results(&results, &cwd(), color(&std::io::stdout()))
                 )?;
                 eprint!("{}", format_summary(&results));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Extract {
+            from_json,
+            hit,
+            json,
+        } => {
+            let input: Box<dyn Read> = if from_json == Path::new("-") {
+                Box::new(std::io::stdin().lock())
+            } else {
+                Box::new(
+                    std::fs::File::open(&from_json)
+                        .with_context(|| format!("reading {}", from_json.display()))?,
+                )
+            };
+            let selected = read_search_hit(input, hit)?;
+            let extracted = seyk::extract_resource(
+                &seyk::FsProvider,
+                &seyk::TextExtractor,
+                &selected.resource,
+                &selected.locator,
+                &selected.metadata,
+            )?;
+            let mut out = std::io::stdout().lock();
+            if json {
+                serde_json::to_writer_pretty(&mut out, &json_output(&extracted))?;
+                writeln!(out)?;
+            } else {
+                out.write_all(extracted.text.as_bytes())?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -494,6 +543,25 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
         out.push_str(&format!("  {state:<14} {}\n", folder.display()));
     }
     out
+}
+
+/// A search envelope is required so incompatible versions cannot be mistaken
+/// for usable byte locators. Parsing and selection happen before any source read.
+fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
+    let value: serde_json::Value = serde_json::from_reader(input).context("invalid search JSON")?;
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(u64::from(JSON_SCHEMA_VERSION))
+    {
+        bail!("expected search JSON schema_version {JSON_SCHEMA_VERSION}");
+    }
+    let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
+    results
+        .hits
+        .into_iter()
+        .nth(index)
+        .with_context(|| format!("no hit at index {index}"))
 }
 
 fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
@@ -933,5 +1001,39 @@ mod tests {
             }),
             " @ 00:42:10–00:43:05"
         );
+    }
+    #[test]
+    fn no_preview_parses_and_keeps_v2_null_shape() {
+        let cli =
+            Cli::try_parse_from(["seyk", "search", "alpha", "--no-preview", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Search {
+                no_preview: true,
+                json: true,
+                ..
+            }
+        ));
+        let mut results = results();
+        for hit in &mut results.hits {
+            hit.preview = None;
+        }
+        let value = serde_json::to_value(json_output(&results)).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        assert!(
+            value["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|hit| hit.get("preview").is_some_and(serde_json::Value::is_null))
+        );
+        let input = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            read_search_hit(input.as_slice(), 1).unwrap(),
+            results.hits[1]
+        );
+        let mut malformed = value;
+        malformed["hits"][0]["locator"] = serde_json::json!({"kind": "text"});
+        assert!(read_search_hit(malformed.to_string().as_bytes(), 0).is_err());
     }
 }
