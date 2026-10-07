@@ -245,7 +245,7 @@ fn hashes(items: &[&str]) -> Vec<String> {
 #[test]
 fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
     let mut cache = MemoryCache::new();
-    let path = &ResourceId::from_path("/notes.txt").unwrap();
+    let path = &ResourceId::from_path(std::env::temp_dir().join("notes.txt")).unwrap();
     for (id, value) in [("a", 1.0), ("b", 2.0)] {
         cache.register_profile(id, &profile(id)).unwrap();
         cache
@@ -293,7 +293,7 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
 #[test]
 fn memory_cache_accepts_writes_before_registration() {
     let mut cache = MemoryCache::new();
-    let path = &ResourceId::from_path("/notes.txt").unwrap();
+    let path = &ResourceId::from_path(std::env::temp_dir().join("notes.txt")).unwrap();
     // Batching writes vectors before their resource, so a vector without a
     // segment is known but not yet searchable.
     cache
@@ -324,8 +324,8 @@ fn memory_cache_accepts_writes_before_registration() {
 fn memory_cache_prunes_only_unreferenced_vectors() {
     let mut cache = MemoryCache::new();
     let (first, second) = (
-        &ResourceId::from_path("/first.txt").unwrap(),
-        &ResourceId::from_path("/second.txt").unwrap(),
+        &ResourceId::from_path(std::env::temp_dir().join("first.txt")).unwrap(),
+        &ResourceId::from_path(std::env::temp_dir().join("second.txt")).unwrap(),
     );
     cache
         .put_embeddings(

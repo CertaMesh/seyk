@@ -145,7 +145,9 @@ impl ResourceProvider for FsProvider {
         for root in &scope.roots {
             let root = file_path(root)?;
             let real = root.canonicalize().map_err(|e| Error::io(&root, e))?;
-            inside |= path.starts_with(real);
+            // The URI codec maps Windows VerbatimDisk and Disk paths to the
+            // same decoded representation, without statting the missing child.
+            inside |= path.starts_with(file_path(&ResourceId::from_path(real)?)?);
         }
         if !inside {
             return Ok(false);

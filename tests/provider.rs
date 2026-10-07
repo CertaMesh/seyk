@@ -268,7 +268,7 @@ fn filesystem_listing_preserves_discovery_and_deletion_is_conservative() {
     let old = discover(&[temp.path().to_path_buf()], &scope.discovery).unwrap();
     let listed = FsProvider.list(&scope).unwrap();
     assert_eq!(listed.len(), old.len());
-    assert_eq!(listed[0].id.to_file_path().unwrap(), old[0].path);
+    assert_eq!(listed[0].id, ResourceId::from_path(&old[0].path).unwrap());
     assert_eq!(FsProvider.read(&listed[0].id).unwrap(), b"alpha garden");
     assert!(
         listed[0]
@@ -284,7 +284,8 @@ fn filesystem_listing_preserves_discovery_and_deletion_is_conservative() {
     assert!(
         !FsProvider
             .is_deleted(
-                &ResourceId::from_path("/not-in-this-scope.md").unwrap(),
+                &ResourceId::from_path(temp.path().parent().unwrap().join("not-in-this-scope.md"))
+                    .unwrap(),
                 &scope
             )
             .unwrap()
@@ -347,4 +348,22 @@ fn descriptor_changes_match_cold_preparation_even_with_unknown_or_equal_versions
             }
         }
     }
+}
+
+#[test]
+fn filesystem_index_removes_deleted_resources_and_vectors() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("note.md");
+    std::fs::write(&path, "alpha garden").unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "fs-delete"))
+        .build()
+        .unwrap();
+    engine.index().paths([temp.path()]).execute().unwrap();
+    std::fs::remove_file(path).unwrap();
+    let report = engine.index().paths([temp.path()]).execute().unwrap();
+    assert_eq!(report.resources_removed, 1);
+    let stats = engine.with_cache(|c| c.stats()).unwrap();
+    assert_eq!(stats.profiles[0].resources, 0);
+    assert_eq!(stats.profiles[0].embeddings, 0);
 }

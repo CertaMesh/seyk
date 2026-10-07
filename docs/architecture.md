@@ -129,6 +129,11 @@ A real folder of book drafts, eight queries, each with one known target passage.
 
 ### What we learned
 
+Windows canonical paths use verbatim prefixes while decoded file URIs use disk
+prefixes. Deletion scope comparisons normalize through the same URI codec; the
+missing child is never canonicalized. Native CI covers actual file deletion,
+cache removal and orphan-vector pruning, with portable URI/cache fixtures.
+
 Content hashes alone cannot establish preparation freshness: title and kind/format
 also affect model inputs. Both version and content shortcuts now require the
 persisted descriptor fingerprint, including unknown-version providers. Tests
@@ -319,7 +324,8 @@ The updated library doctest compiles. Automated evidence includes:
 - URI round-trips for spaces, Unicode, reserved characters and non-UTF-8 Unix
   bytes. This Mac filesystem rejects creating non-UTF-8 filenames, so the output
   test constructs that identity directly. Native Windows drive-path and legacy-key tests are
-  included but were not executed on this Mac.
+  included; CI now runs fmt, Clippy and the default suite on Ubuntu, macOS and
+  Windows. Native Windows outcomes are recorded on PR #9.
 
 A real local EmbeddingGemma 2 q8 run (128 dimensions, text-only, debug binary)
 searched two synthetic Markdown notes, `garden.md` and `harbor.md`, using a
@@ -345,6 +351,11 @@ Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking chang
 Filesystem is the only real provider; the memory provider exists only in tests.
 
 ### What we learned
+
+Windows canonical paths use verbatim prefixes while decoded file URIs use disk
+prefixes. Deletion scope comparisons normalize through the same URI codec; the
+missing child is never canonicalized. Native CI covers actual file deletion,
+cache removal and orphan-vector pruning, with portable URI/cache fixtures.
 
 Content hashes alone cannot establish preparation freshness: title and kind/format
 also affect model inputs. Both version and content shortcuts now require the

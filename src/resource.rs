@@ -212,26 +212,28 @@ mod tests {
 
     #[test]
     fn uri_and_serde_round_trip() {
-        for path in ["/tmp/plain.md", "/tmp/hello world/文書 #?%.md"] {
-            let id = ResourceId::from_path(path).unwrap();
-            assert_eq!(id.to_file_path().unwrap(), Path::new(path));
+        for suffix in ["plain.md", "hello world/文書 #?%.md"] {
+            let path = std::env::temp_dir().join(suffix);
+            let id = ResourceId::from_path(&path).unwrap();
+            assert_eq!(id.to_file_path().unwrap(), path);
             assert_eq!(id.as_str().parse::<ResourceId>().unwrap(), id);
             assert_eq!(
                 serde_json::from_str::<ResourceId>(&serde_json::to_string(&id).unwrap()).unwrap(),
                 id
             );
         }
-        assert_eq!(
-            ResourceId::from_path("/tmp/a b").unwrap().as_str(),
+        let uri = if cfg!(windows) {
+            "file:///C:/tmp/a%20b"
+        } else {
             "file:///tmp/a%20b"
-        );
+        };
+        let id: ResourceId = uri.parse().unwrap();
         assert_eq!(
-            "file://localhost/tmp/a"
-                .parse::<ResourceId>()
-                .unwrap()
-                .as_str(),
-            "file:///tmp/a"
+            ResourceId::from_path(id.to_file_path().unwrap()).unwrap(),
+            id
         );
+        let alias = uri.replace("file:///", "file://localhost/");
+        assert_eq!(alias.parse::<ResourceId>().unwrap(), id);
         assert!(
             "mem://notes/chapter"
                 .parse::<ResourceId>()
@@ -258,8 +260,11 @@ mod tests {
             assert!(serde_json::from_value::<ResourceId>(serde_json::json!(uri)).is_err());
         }
         assert!(ResourceId::from_path("relative").is_err());
-        let id = ResourceId::from_path("/tmp/a/../b").unwrap();
-        assert_eq!(id.as_str(), "file:///tmp/b");
+        let id = ResourceId::from_path(std::env::temp_dir().join("a/../b")).unwrap();
+        assert_eq!(
+            id,
+            ResourceId::from_path(std::env::temp_dir().join("b")).unwrap()
+        );
         assert_eq!(id.as_str().parse::<ResourceId>().unwrap(), id);
     }
 
