@@ -24,7 +24,7 @@
 //!     .execute()?;
 //!
 //! for hit in results.hits {
-//!     println!("{:.3} {} {:?}", hit.score, hit.resource.path().display(), hit.locator);
+//!     println!("{:.3} {} {:?}", hit.score, hit.resource, hit.locator);
 //! }
 //! # Ok(())
 //! # }
@@ -40,6 +40,7 @@ mod engine;
 mod error;
 pub mod index;
 pub mod lexical;
+pub mod provider;
 mod resource;
 pub mod segment;
 #[cfg(feature = "watch")]
@@ -56,3 +57,7 @@ pub use engine::{
 };
 pub use error::{Error, Result};
 pub use resource::{Modality, ResourceId, ResourceLocator, ResourceMetadata};
+
+pub use provider::{
+    FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
+};

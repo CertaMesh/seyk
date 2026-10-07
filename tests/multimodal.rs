@@ -86,7 +86,8 @@ fn first_path(results: &seyk::SearchResults) -> PathBuf {
         .first()
         .expect("cross-modal query should return a hit")
         .resource
-        .path()
+        .to_file_path()
+        .expect("file resource")
         .to_path_buf()
 }
 

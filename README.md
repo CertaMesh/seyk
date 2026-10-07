@@ -257,10 +257,10 @@ let results = engine
 for hit in &results.hits {
     match &hit.locator {
         ResourceLocator::Text { line_start, line_end, .. } => {
-            println!("{:.3} {}:{line_start:?}-{line_end:?}", hit.score, hit.resource.path().display())
+            println!("{:.3} {}:{line_start:?}-{line_end:?}", hit.score, hit.resource)
         }
-        ResourceLocator::WholeResource => println!("{:.3} {}", hit.score, hit.resource.path().display()),
-        other => println!("{:.3} {} {other:?}", hit.score, hit.resource.path().display()),
+        ResourceLocator::WholeResource => println!("{:.3} {}", hit.score, hit.resource),
+        other => println!("{:.3} {} {other:?}", hit.score, hit.resource),
     }
 }
 
@@ -268,10 +268,30 @@ for hit in &results.hits {
 engine.index().paths(["~/notes"]).execute()?;
 ```
 
-Each `SearchHit` carries the resource path, a modality-independent
-`ResourceLocator` (`Text` byte and line range, `Page`, `Time`, or `WholeResource`),
+Each `SearchHit` carries a resource URI, a modality-independent
+`ResourceLocator` (`Text` byte and line range, `Page`, `Time`, `ImageRegion`, or
+`WholeResource`),
 the score, the resource metadata (modality, size, mtime, content hash), the
 Markdown heading path and an optional short preview.
+
+Resource identity migration (Phase 2): replace `hit.resource.path()` with
+`hit.resource.to_file_path()`, which returns `Option<PathBuf>`. Use the URI's
+`Display` implementation when displaying any resource, as in the example above;
+use the optional path when opening a local file. `ResourceId::from_path(path)?`
+now requires an absolute path and returns a `Result`. Request `.paths(...)`
+still accepts relative paths and `~/...`.
+
+CLI JSON objects and MCP search responses now include `schema_version: 2`.
+A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
+an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
+the JSON path is a display aid and can contain replacement characters.
+See the [Phase 2 report](docs/architecture.md#phase-2-report-resource-identity-and-providers)
+for all API changes and cache upgrade details.
+
+The engine uses `ResourceProvider` for enumeration, reads, freshness and deletion
+checks. `FsProvider` is the default. `ResourceProvider`, `ResourceScope`,
+`ProvidedResource` and `ResourceVersion` may change before 1.0; filesystem is the
+only supported provider. There are no remote connectors.
 
 Other backends plug in through the `Embedder` trait:
 
@@ -301,7 +321,7 @@ There are three ways to search:
 
 1. **Lazy cache (default).** For each file: if size and modification time match
    the cache, its vectors are reused without reading it. Otherwise the file is read
-   and hashed. If the content hash is unchanged only the mtime is updated.
+   and hashed. If the content hash is unchanged only its metadata and version are updated.
    Otherwise it is re-segmented, and only segments whose exact model input is new
    are sent to the model. Vectors are saved after every batch, so an interrupted
    first search keeps its progress.

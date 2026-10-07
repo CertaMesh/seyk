@@ -341,7 +341,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.total_ms as f64 / 1000.0
     );
     for s in &report.sync.skipped {
-        eprintln!("skipped {}: {}", s.path.display(), s.reason);
+        eprintln!("skipped {}: {}", s.resource, s.reason);
     }
 
     let segments = segment_corpus(&args.paths, &TextSegmenter::default());
@@ -365,8 +365,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut semantic_keys = HashSet::new();
         let mut no_overlap = 0;
         for (i, hit) in results.hits.iter().enumerate() {
-            let path = hit.resource.path();
-            let text = hit_text(path, &hit.locator, &mut files);
+            let path = hit.resource.to_file_path().expect("file resource");
+            let text = hit_text(&path, &hit.locator, &mut files);
             let overlap = keyword_score(&stems, &stems_of(&text));
             let mark = if overlap == 0 {
                 no_overlap += 1;
@@ -379,7 +379,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "  {}. {:.3}  {}{}{mark}",
                 i + 1,
                 hit.score,
-                display_path(path, &cwd),
+                display_path(&path, &cwd),
                 lines_of(&hit.locator)
             );
             if let Some(p) = &hit.preview {

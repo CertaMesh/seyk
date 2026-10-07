@@ -48,13 +48,7 @@ impl Endpoint {
         };
         std::fs::create_dir_all(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
-        for a in &model_args {
-            hasher.update(&(a.len() as u64).to_le_bytes());
-            hasher.update(a.as_bytes());
-        }
-        let id = &hasher.finalize().to_hex()[..12];
+        let id = endpoint_id(&model_args, crate::JSON_SCHEMA_VERSION);
         let mut spawn_args = vec!["daemon".to_string(), "run".to_string()];
         spawn_args.extend(model_args);
         Ok(Self {
@@ -64,6 +58,19 @@ impl Endpoint {
             spawn_args,
         })
     }
+}
+
+fn endpoint_id(model_args: &[String], schema_version: u32) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    // A new client must not reconnect to a daemon returning an older JSON shape.
+    hasher.update(b"json-schema");
+    hasher.update(&schema_version.to_le_bytes());
+    for a in model_args {
+        hasher.update(&(a.len() as u64).to_le_bytes());
+        hasher.update(a.as_bytes());
+    }
+    hasher.finalize().to_hex()[..12].to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -375,4 +382,26 @@ fn log_file(path: &Path) -> Result<File> {
         .append(true)
         .mode(0o600)
         .open(path)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn endpoint_changes_with_protocol_and_model_arguments() {
+        let args = vec!["--dimension".into(), "256".into()];
+        assert_eq!(endpoint_id(&args, 2), endpoint_id(&args, 2));
+        assert_ne!(endpoint_id(&args, 1), endpoint_id(&args, 2));
+        assert_ne!(
+            endpoint_id(&args, 2),
+            endpoint_id(&["--dimension".into(), "128".into()], 2)
+        );
+        let mut legacy = blake3::Hasher::new();
+        legacy.update(env!("CARGO_PKG_VERSION").as_bytes());
+        for a in &args {
+            legacy.update(&(a.len() as u64).to_le_bytes());
+            legacy.update(a.as_bytes());
+        }
+        assert_ne!(endpoint_id(&args, 2), &legacy.finalize().to_hex()[..12]);
+    }
 }

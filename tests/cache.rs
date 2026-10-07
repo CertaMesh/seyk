@@ -2,15 +2,15 @@ mod common;
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use common::FakeEmbedder;
 use seyk::cache::{CacheProfile, CachedResource, CachedSegment};
 use seyk::segment::{TextSegmenter, TextSegmenterConfig};
 use seyk::{
-    Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceLocator,
-    ResourceMetadata, SearchEngine, SqliteCache,
+    Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceId, ResourceLocator,
+    ResourceMetadata, ResourceVersion, SearchEngine, SqliteCache,
 };
 use tempfile::TempDir;
 
@@ -43,6 +43,10 @@ fn search(engine: &SearchEngine, root: &Path) -> seyk::SearchResults {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Solo #4349: timestamp changes need a writable Windows file handle"
+)]
 fn unchanged_and_mtime_only_changes_reuse_embeddings() {
     let temp = TempDir::new().unwrap();
     let file = temp.path().join("notes.txt");
@@ -105,16 +109,18 @@ fn model_and_segmenter_profiles_invalidate_vectors() {
     assert_ne!(first_profile, changed_dimension.profile_id());
     assert!(fake_dimension.resource_count() > 0);
     assert!(
-        second_results
-            .hits
-            .iter()
-            .all(|hit| hit.resource.path().exists())
+        second_results.hits.iter().all(|hit| hit
+            .resource
+            .to_file_path()
+            .expect("file resource")
+            .exists())
     );
     assert!(
-        first_results
-            .hits
-            .iter()
-            .all(|hit| hit.resource.path().exists())
+        first_results.hits.iter().all(|hit| hit
+            .resource
+            .to_file_path()
+            .expect("file resource")
+            .exists())
     );
     drop(changed_dimension);
 
@@ -186,6 +192,7 @@ fn memory_cache_is_ephemeral_and_sqlite_is_private() {
 
     let cache_path = temp.path().join("private.sqlite3");
     let cache = SqliteCache::open(&cache_path).unwrap();
+    assert_eq!(cache.path(), cache_path);
     #[cfg(unix)]
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&fs::metadata(cache.path()).unwrap().permissions())
@@ -212,6 +219,8 @@ fn profile(revision: &str) -> CacheProfile {
 
 fn resource(hashes: &[&str]) -> CachedResource {
     CachedResource {
+        descriptor_hash: Some("descriptor".into()),
+        version: ResourceVersion::known("fs:1:1"),
         metadata: ResourceMetadata {
             modality: Modality::Text,
             size_bytes: 1,
@@ -230,8 +239,8 @@ fn resource(hashes: &[&str]) -> CachedResource {
     }
 }
 
-fn paths(items: &[&Path]) -> HashSet<PathBuf> {
-    items.iter().map(|p| p.to_path_buf()).collect()
+fn paths(items: &[&ResourceId]) -> HashSet<ResourceId> {
+    items.iter().map(|p| (*p).clone()).collect()
 }
 
 fn hashes(items: &[&str]) -> Vec<String> {
@@ -241,7 +250,7 @@ fn hashes(items: &[&str]) -> Vec<String> {
 #[test]
 fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
     let mut cache = MemoryCache::new();
-    let path = Path::new("/notes.txt");
+    let path = &ResourceId::from_path(std::env::temp_dir().join("notes.txt")).unwrap();
     for (id, value) in [("a", 1.0), ("b", 2.0)] {
         cache.register_profile(id, &profile(id)).unwrap();
         cache
@@ -256,8 +265,14 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
         assert_eq!(found[0].vector, vec![value]);
     }
 
-    cache.touch_resource("a", path, Some(7)).unwrap();
-    cache.remove_resources("b", &[path.to_path_buf()]).unwrap();
+    let mut metadata = resource(&["h"]).metadata;
+    metadata.modified_ns = Some(7);
+    cache
+        .touch_resource("a", path, &metadata, &ResourceVersion::known("fs:1:7"))
+        .unwrap();
+    cache
+        .remove_resources("b", std::slice::from_ref(path))
+        .unwrap();
     assert_eq!(cache.prune_orphans("b").unwrap(), 1);
     assert_eq!(
         cache
@@ -283,7 +298,7 @@ fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
 #[test]
 fn memory_cache_accepts_writes_before_registration() {
     let mut cache = MemoryCache::new();
-    let path = Path::new("/notes.txt");
+    let path = &ResourceId::from_path(std::env::temp_dir().join("notes.txt")).unwrap();
     // Batching writes vectors before their resource, so a vector without a
     // segment is known but not yet searchable.
     cache
@@ -313,7 +328,10 @@ fn memory_cache_accepts_writes_before_registration() {
 #[test]
 fn memory_cache_prunes_only_unreferenced_vectors() {
     let mut cache = MemoryCache::new();
-    let (first, second) = (Path::new("/first.txt"), Path::new("/second.txt"));
+    let (first, second) = (
+        &ResourceId::from_path(std::env::temp_dir().join("first.txt")).unwrap(),
+        &ResourceId::from_path(std::env::temp_dir().join("second.txt")).unwrap(),
+    );
     cache
         .put_embeddings(
             "p",
@@ -336,11 +354,13 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
 
     let only_second = cache.vectors_for("p", &paths(&[second])).unwrap();
     assert_eq!(only_second.len(), 1);
-    assert_eq!(only_second[0].path, second);
+    assert_eq!(&only_second[0].resource, second);
 
     assert_eq!(cache.prune_orphans("p").unwrap(), 1);
     // A vector still used by another resource survives its sibling's removal.
-    cache.remove_resources("p", &[first.to_path_buf()]).unwrap();
+    cache
+        .remove_resources("p", std::slice::from_ref(first))
+        .unwrap();
     assert_eq!(cache.prune_orphans("p").unwrap(), 1);
     assert_eq!(
         cache
@@ -365,28 +385,34 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
         "/notes/alpha.md",
         "/notes/delta.md",
         "/notes/bravo.md",
-    ];
-    let wanted: HashSet<PathBuf> = names.iter().map(PathBuf::from).collect();
+    ]
+    .map(|name| std::env::temp_dir().join(name.trim_start_matches('/')));
+    let wanted: HashSet<ResourceId> = names
+        .iter()
+        .map(|p| ResourceId::from_path(p).unwrap())
+        .collect();
     let query = seyk::lexical::LexicalQuery::new(["quartz"]);
     let check = |cache: &mut dyn EmbeddingCache| {
         cache.register_profile("ties", &profile("ties")).unwrap();
-        for name in names {
+        for name in &names {
             let mut r = resource(&["first", "second"]);
             for segment in &mut r.segments {
                 segment.lexical_text = Some("quartz pebble".into());
             }
-            cache.put_resource("ties", Path::new(name), &r).unwrap();
+            cache
+                .put_resource("ties", &ResourceId::from_path(name).unwrap(), &r)
+                .unwrap();
         }
         let hits = cache.lexical_search("ties", &query, &wanted, 100).unwrap();
         assert_eq!(hits.len(), 8);
         assert!(hits.iter().all(|h| h.score == hits[0].score));
-        let order: Vec<_> = hits.into_iter().map(|h| (h.path, h.ordinal)).collect();
+        let order: Vec<_> = hits.into_iter().map(|h| (h.resource, h.ordinal)).collect();
         for limit in [0, 1, 3, 8] {
             let limited: Vec<_> = cache
                 .lexical_search("ties", &query, &wanted, limit)
                 .unwrap()
                 .into_iter()
-                .map(|h| (h.path, h.ordinal))
+                .map(|h| (h.resource, h.ordinal))
                 .collect();
             assert_eq!(limited, order[..limit]);
         }
@@ -396,13 +422,175 @@ fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
     let expected = check(&mut SqliteCache::open(db.path().join("cache.sqlite3")).unwrap());
     let mut sorted = expected.clone();
     sorted.sort_by(|a, b| {
-        a.0.as_os_str()
+        a.0.to_file_path()
+            .unwrap()
+            .as_os_str()
             .as_encoded_bytes()
-            .cmp(b.0.as_os_str().as_encoded_bytes())
+            .cmp(b.0.to_file_path().unwrap().as_os_str().as_encoded_bytes())
             .then(a.1.cmp(&b.1))
     });
     assert_eq!(expected, sorted);
     for _ in 0..20 {
         assert_eq!(check(&mut MemoryCache::new()), expected);
     }
+}
+
+#[test]
+fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() {
+    use rusqlite::Connection;
+    let notes = TempDir::new().unwrap();
+    let db = TempDir::new().unwrap();
+    fs::write(notes.path().join("alpha.md"), "quartz pebble alpha garden").unwrap();
+    fs::write(notes.path().join("beta.md"), "quartz pebble beta workshop").unwrap();
+    let file = db.path().join("cache.sqlite3");
+    let (engine, _) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    let before = engine
+        .search("quartz")
+        .paths([notes.path()])
+        .mode(seyk::SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    drop(engine);
+    let conn = Connection::open(&file).unwrap();
+    let snapshot = |conn: &Connection| {
+        let vectors = conn
+            .prepare("SELECT profile,input_hash,vector FROM embeddings ORDER BY profile,input_hash")
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let segments = conn
+            .prepare(
+                "SELECT rowid,path,ordinal,locator,heading,input_hash FROM segments ORDER BY rowid",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let fts = conn
+            .prepare("SELECT id,block FROM segments_fts_data ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        (vectors, segments, fts)
+    };
+    // Recreate the actual v3 resources layout, without provider state.
+    conn.execute_batch("ALTER TABLE resources DROP COLUMN version; ALTER TABLE resources DROP COLUMN descriptor_hash; UPDATE meta SET value='3' WHERE key='schema_version';").unwrap();
+    let stored = snapshot(&conn);
+    drop(conn);
+    let cache = SqliteCache::open(&file).unwrap();
+    let conn = Connection::open(&file).unwrap();
+    assert_eq!(snapshot(&conn), stored); // Migration preserves every existing byte/rowid.
+    drop(conn);
+    let (engine, fake) = shared_engine(cache, Dimension::D128, "r1");
+    let after = engine
+        .search("quartz")
+        .paths([notes.path()])
+        .mode(seyk::SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert_eq!(fake.resource_count(), 0);
+    assert_eq!(after.stats.sync.resources_updated, 2);
+    assert_eq!(after.hits, before.hits);
+    drop(engine);
+    let conn = Connection::open(&file).unwrap();
+    assert_eq!(snapshot(&conn).0, stored.0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "4"
+    );
+    drop(conn);
+    let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    engine
+        .index()
+        .paths([notes.path().join("alpha.md")])
+        .execute()
+        .unwrap();
+    assert_eq!(fake.resource_count(), 0);
+    assert_eq!(
+        engine
+            .with_cache(|c| Ok(c.resource_index(engine.profile_id())?.len()))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn both_caches_store_non_file_identities_and_opaque_versions() {
+    fn check(cache: &mut dyn EmbeddingCache) {
+        let id: ResourceId = "mem://book/note.txt".parse().unwrap();
+        cache.register_profile("p", &profile("r1")).unwrap();
+        let mut value = resource(&["generic"]);
+        value.version = ResourceVersion::known("opaque-revision-42");
+        value.segments[0].lexical_text = Some("quartz pebble".into());
+        cache
+            .put_embeddings("p", &[("generic".into(), vec![1.0])])
+            .unwrap();
+        cache.put_resource("p", &id, &value).unwrap();
+        let found = cache.resource("p", &id).unwrap().unwrap();
+        assert_eq!(found.version, value.version);
+        assert_eq!(found.descriptor_hash, value.descriptor_hash);
+        assert_eq!(
+            cache.resource_index("p").unwrap()[&id].descriptor_hash,
+            value.descriptor_hash
+        );
+        assert!(found.segments[0].lexical_text.is_none());
+        let wanted = HashSet::from([id.clone()]);
+        assert_eq!(cache.vectors_for("p", &wanted).unwrap()[0].resource, id);
+        let q = seyk::lexical::LexicalQuery::new(["quartz"]);
+        assert_eq!(
+            cache.lexical_search("p", &q, &wanted, 1).unwrap()[0].resource,
+            id
+        );
+        cache
+            .touch_resource("p", &id, &value.metadata, &ResourceVersion::known("next"))
+            .unwrap();
+        assert_eq!(
+            cache.resource_index("p").unwrap()[&id].version,
+            ResourceVersion::known("next")
+        );
+    }
+    check(&mut MemoryCache::new());
+    let temp = TempDir::new().unwrap();
+    let file = temp.path().join("generic.sqlite3");
+    check(&mut SqliteCache::open(&file).unwrap());
+    let cache = SqliteCache::open(&file).unwrap();
+    let id: ResourceId = "mem://book/note.txt".parse().unwrap();
+    assert_eq!(
+        cache
+            .resource("p", &id)
+            .unwrap()
+            .unwrap()
+            .descriptor_hash
+            .as_deref(),
+        Some("descriptor")
+    );
+    assert_eq!(
+        cache.resource("p", &id).unwrap().unwrap().version,
+        ResourceVersion::known("next")
+    );
 }

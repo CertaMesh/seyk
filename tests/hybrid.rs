@@ -76,7 +76,8 @@ fn search(engine: &SearchEngine, root: &Path, q: &str, mode: SearchMode) -> Sear
 fn top(r: &SearchResults) -> String {
     r.hits[0]
         .resource
-        .path()
+        .to_file_path()
+        .expect("file resource")
         .file_name()
         .unwrap()
         .to_string_lossy()
@@ -338,7 +339,7 @@ fn check_partial_root_migration(version: &str) {
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "3"
+        "4"
     );
 
     let assert_unsynced_search = |engine: &SearchEngine| {
@@ -448,7 +449,8 @@ fn equal_score_candidates_are_stable_before_fusion_and_top_k() {
                 .iter()
                 .map(|h| {
                     h.resource
-                        .path()
+                        .to_file_path()
+                        .expect("file resource")
                         .file_name()
                         .unwrap()
                         .to_string_lossy()

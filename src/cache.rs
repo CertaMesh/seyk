@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::embedder::ModelIdentity;
 use crate::embedding::{from_bytes, to_bytes};
 use crate::lexical::{FIELDS, LexicalDoc, LexicalQuery, order_free_text};
-use crate::{Error, Modality, ResourceLocator, ResourceMetadata, Result};
+use crate::{
+    Error, Modality, ResourceId, ResourceLocator, ResourceMetadata, ResourceVersion, Result,
+};
 
 /// Everything that determines a cached vector, besides the input itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,13 +58,27 @@ pub struct CachedSegment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedResource {
     pub metadata: ResourceMetadata,
+    pub version: ResourceVersion,
+    /// Preparation descriptor hash; absent for migrated legacy entries.
+    pub descriptor_hash: Option<String>,
     pub segments: Vec<CachedSegment>,
+}
+
+/// Resource metadata and the provider token used to index it.
+///
+/// Unstable: may change before 1.0 alongside the provider and cache contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedResourceState {
+    pub metadata: ResourceMetadata,
+    pub version: ResourceVersion,
+    /// Preparation descriptor hash; absent for migrated legacy entries.
+    pub descriptor_hash: Option<String>,
 }
 
 /// A cached segment joined with its vector, ready to search.
 #[derive(Debug, Clone)]
 pub struct StoredVector {
-    pub path: PathBuf,
+    pub resource: ResourceId,
     /// Position of the segment within its resource.
     pub ordinal: usize,
     pub segment: CachedSegment,
@@ -72,7 +88,7 @@ pub struct StoredVector {
 /// A segment matching a keyword query.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexicalHit {
-    pub path: PathBuf,
+    pub resource: ResourceId,
     pub ordinal: usize,
     /// BM25 relevance, higher is better. Only comparable within one query.
     pub score: f32,
@@ -96,27 +112,35 @@ pub struct CacheStats {
 }
 
 /// Storage for resource metadata, segment locators and vectors.
+///
+/// Unstable: exposes ResourceVersion and CachedResourceState, which may change
+/// before 1.0; filesystem is the only supported production provider.
 pub trait EmbeddingCache: Send {
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()>;
 
-    /// Every cached resource for a profile, keyed by path. Segments are not loaded.
-    fn resource_index(&self, profile: &str) -> Result<HashMap<PathBuf, ResourceMetadata>>;
+    /// Every cached resource for a profile, keyed by identity. Segments are not loaded.
+    fn resource_index(&self, profile: &str) -> Result<HashMap<ResourceId, CachedResourceState>>;
 
-    fn resource(&self, profile: &str, path: &Path) -> Result<Option<CachedResource>>;
+    fn resource(&self, profile: &str, path: &ResourceId) -> Result<Option<CachedResource>>;
 
     /// Replace a resource and its segments.
-    fn put_resource(&mut self, profile: &str, path: &Path, resource: &CachedResource)
-    -> Result<()>;
+    fn put_resource(
+        &mut self,
+        profile: &str,
+        path: &ResourceId,
+        resource: &CachedResource,
+    ) -> Result<()>;
 
-    /// Update only the stored mtime (content unchanged).
+    /// Update metadata and version when content is unchanged.
     fn touch_resource(
         &mut self,
         profile: &str,
-        path: &Path,
-        modified_ns: Option<i64>,
+        path: &ResourceId,
+        metadata: &ResourceMetadata,
+        version: &ResourceVersion,
     ) -> Result<()>;
 
-    fn remove_resources(&mut self, profile: &str, paths: &[PathBuf]) -> Result<()>;
+    fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()>;
 
     /// Which of `hashes` already have a vector.
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>>;
@@ -124,7 +148,7 @@ pub trait EmbeddingCache: Send {
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()>;
 
     /// All searchable vectors for the given paths.
-    fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>>;
+    fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>>;
 
     /// Segments of `paths` matching `query` by keyword, best first, at most `limit`.
     /// Equal scores are ordered by path bytes, then segment ordinal.
@@ -132,7 +156,7 @@ pub trait EmbeddingCache: Send {
         &self,
         profile: &str,
         query: &LexicalQuery,
-        paths: &HashSet<PathBuf>,
+        paths: &HashSet<ResourceId>,
         limit: usize,
     ) -> Result<Vec<LexicalHit>>;
 
@@ -154,10 +178,10 @@ pub struct MemoryCache {
     profiles: HashMap<String, CacheProfile>,
     // Bucketed by profile id, like the trait. Kept apart from `profiles`
     // because, unlike SQLite, writes may precede registration.
-    resources: HashMap<String, HashMap<PathBuf, CachedResource>>,
+    resources: HashMap<String, HashMap<ResourceId, CachedResource>>,
     vectors: HashMap<String, HashMap<String, Vec<f32>>>,
     /// Keyword index per profile and path, one document per segment.
-    lexical: HashMap<String, HashMap<PathBuf, Vec<LexicalDoc>>>,
+    lexical: HashMap<String, HashMap<ResourceId, Vec<LexicalDoc>>>,
 }
 
 impl MemoryCache {
@@ -172,17 +196,26 @@ impl EmbeddingCache for MemoryCache {
         Ok(())
     }
 
-    fn resource_index(&self, profile: &str) -> Result<HashMap<PathBuf, ResourceMetadata>> {
+    fn resource_index(&self, profile: &str) -> Result<HashMap<ResourceId, CachedResourceState>> {
         Ok(self
             .resources
             .get(profile)
             .into_iter()
             .flatten()
-            .map(|(path, r)| (path.clone(), r.metadata.clone()))
+            .map(|(path, r)| {
+                (
+                    path.clone(),
+                    CachedResourceState {
+                        metadata: r.metadata.clone(),
+                        version: r.version.clone(),
+                        descriptor_hash: r.descriptor_hash.clone(),
+                    },
+                )
+            })
             .collect())
     }
 
-    fn resource(&self, profile: &str, path: &Path) -> Result<Option<CachedResource>> {
+    fn resource(&self, profile: &str, path: &ResourceId) -> Result<Option<CachedResource>> {
         Ok(self
             .resources
             .get(profile)
@@ -193,7 +226,7 @@ impl EmbeddingCache for MemoryCache {
     fn put_resource(
         &mut self,
         profile: &str,
-        path: &Path,
+        path: &ResourceId,
         resource: &CachedResource,
     ) -> Result<()> {
         let docs = lexical_docs(path, resource);
@@ -205,31 +238,33 @@ impl EmbeddingCache for MemoryCache {
         self.resources
             .entry(profile.to_string())
             .or_default()
-            .insert(path.to_path_buf(), stored);
+            .insert(path.clone(), stored);
         self.lexical
             .entry(profile.to_string())
             .or_default()
-            .insert(path.to_path_buf(), docs);
+            .insert(path.clone(), docs);
         Ok(())
     }
 
     fn touch_resource(
         &mut self,
         profile: &str,
-        path: &Path,
-        modified_ns: Option<i64>,
+        path: &ResourceId,
+        metadata: &ResourceMetadata,
+        version: &ResourceVersion,
     ) -> Result<()> {
         if let Some(r) = self
             .resources
             .get_mut(profile)
             .and_then(|b| b.get_mut(path))
         {
-            r.metadata.modified_ns = modified_ns;
+            r.metadata = metadata.clone();
+            r.version = version.clone();
         }
         Ok(())
     }
 
-    fn remove_resources(&mut self, profile: &str, paths: &[PathBuf]) -> Result<()> {
+    fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
         if let Some(bucket) = self.resources.get_mut(profile) {
             for p in paths {
                 bucket.remove(p);
@@ -262,7 +297,7 @@ impl EmbeddingCache for MemoryCache {
         Ok(())
     }
 
-    fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>> {
+    fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
         let (Some(resources), Some(vectors)) =
             (self.resources.get(profile), self.vectors.get(profile))
         else {
@@ -276,7 +311,7 @@ impl EmbeddingCache for MemoryCache {
             for (ordinal, s) in r.segments.iter().enumerate() {
                 if let Some(v) = vectors.get(&s.input_hash) {
                     out.push(StoredVector {
-                        path: path.clone(),
+                        resource: path.clone(),
                         ordinal,
                         segment: s.clone(),
                         vector: v.clone(),
@@ -291,7 +326,7 @@ impl EmbeddingCache for MemoryCache {
         &self,
         profile: &str,
         query: &LexicalQuery,
-        paths: &HashSet<PathBuf>,
+        paths: &HashSet<ResourceId>,
         limit: usize,
     ) -> Result<Vec<LexicalHit>> {
         let Some(bucket) = self.lexical.get(profile) else {
@@ -305,7 +340,7 @@ impl EmbeddingCache for MemoryCache {
         let mut scored = crate::lexical::bm25(docs, query);
         scored.sort_by(|a, b| {
             b.1.total_cmp(&a.1)
-                .then_with(|| path_key(a.0.0).cmp(&path_key(b.0.0)))
+                .then_with(|| resource_key(a.0.0).cmp(&resource_key(b.0.0)))
                 .then_with(|| a.0.1.cmp(&b.0.1))
         });
         Ok(scored
@@ -313,7 +348,7 @@ impl EmbeddingCache for MemoryCache {
             .filter(|((path, _), _)| paths.contains(*path))
             .take(limit)
             .map(|((path, ordinal), score)| LexicalHit {
-                path: path.clone(),
+                resource: path.clone(),
                 ordinal,
                 score: score as f32,
             })
@@ -369,12 +404,8 @@ impl EmbeddingCache for MemoryCache {
 }
 
 /// One keyword-index document per segment: file name, path, heading and text.
-fn lexical_docs(path: &Path, resource: &CachedResource) -> Vec<LexicalDoc> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    let full = path.to_string_lossy();
+fn lexical_docs(path: &ResourceId, resource: &CachedResource) -> Vec<LexicalDoc> {
+    let (name, full) = path.labels();
     resource
         .segments
         .iter()
@@ -393,7 +424,7 @@ fn lexical_docs(path: &Path, resource: &CachedResource) -> Vec<LexicalDoc> {
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 /// Persistent cache in a single SQLite file.
 pub struct SqliteCache {
@@ -470,7 +501,7 @@ impl SqliteCache {
             // Invalidate both fast paths: every resource must be re-read and
             // re-segmented, reusing its vectors, on its next normal sync.
             tx.execute_batch("UPDATE resources SET modified_ns = NULL, content_hash = '';")?;
-        } else if version.as_deref() != Some(SCHEMA_VERSION) {
+        } else if !matches!(version.as_deref(), Some("3") | Some(SCHEMA_VERSION)) {
             // It is a cache: on any other schema change, start over.
             tx.execute_batch(
                 "DROP TABLE IF EXISTS segments_fts;
@@ -493,6 +524,7 @@ impl SqliteCache {
                  size_bytes INTEGER NOT NULL,
                  modified_ns INTEGER,
                  content_hash TEXT NOT NULL,
+                 version TEXT,
                  PRIMARY KEY (profile, path)
              );
              CREATE TABLE IF NOT EXISTS segments (
@@ -521,6 +553,31 @@ impl SqliteCache {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
+        // Add the provider token and preparation fingerprint: keys, segment rowids, FTS and vectors
+        // remain byte-for-byte intact when upgrading an existing v3 cache.
+        let has_version: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'version')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !has_version {
+            tx.execute_batch("ALTER TABLE resources ADD COLUMN version TEXT;")?;
+        }
+        let has_descriptor: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'descriptor_hash')",
+            [], |r| r.get(0),
+        )?;
+        if !has_descriptor {
+            tx.execute_batch("ALTER TABLE resources ADD COLUMN descriptor_hash TEXT;")?;
+        }
+        if matches!(version.as_deref(), Some("1" | "2" | "3")) {
+            tx.execute_batch(
+                r#"UPDATE resources SET version = CASE
+                WHEN modified_ns IS NOT NULL AND content_hash != ''
+                THEN '"fs:' || size_bytes || ':' || modified_ns || '"'
+                ELSE 'null' END;"#,
+            )?;
+        }
         tx.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             [SCHEMA_VERSION],
@@ -528,6 +585,43 @@ impl SqliteCache {
         tx.commit()?;
         Ok(())
     }
+}
+
+// File keys retain the legacy encoding and sort order. NUL cannot occur in
+// a valid file path, so it separates non-file identities without collisions.
+pub(crate) fn resource_key(id: &ResourceId) -> Vec<u8> {
+    match id.to_file_path() {
+        Some(path) => path_key(&path),
+        None => std::iter::once(0).chain(id.as_str().bytes()).collect(),
+    }
+}
+
+fn key_resource(bytes: Vec<u8>) -> rusqlite::Result<ResourceId> {
+    let result = if let Some(uri) = bytes.strip_prefix(&[0]) {
+        std::str::from_utf8(uri)
+            .map_err(|e| Error::Config(e.to_string()))
+            .and_then(str::parse)
+    } else {
+        ResourceId::from_path(key_path(bytes))
+    };
+    result.map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+    })
+}
+
+fn decode_version(value: Option<String>) -> rusqlite::Result<ResourceVersion> {
+    value
+        .map(|v| {
+            serde_json::from_str(&v).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
 }
 
 #[cfg(unix)]
@@ -542,7 +636,22 @@ fn key_path(b: Vec<u8>) -> PathBuf {
     PathBuf::from(std::ffi::OsString::from_vec(b))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn path_key(p: &Path) -> Vec<u8> {
+    // Discovery has always stored canonical Windows paths, including the
+    // verbatim drive prefix. URI decoding omits that prefix; restore it so a
+    // pre-v4 cache continues to use exactly the same keys.
+    use std::path::{Component, Prefix};
+    let raw = p.to_string_lossy();
+    match p.components().next() {
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)) => {
+            format!(r"\\?\{raw}").into_bytes()
+        }
+        _ => raw.into_owned().into_bytes(),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn path_key(p: &Path) -> Vec<u8> {
     p.to_string_lossy().into_owned().into_bytes()
 }
@@ -593,42 +702,49 @@ impl EmbeddingCache for SqliteCache {
         Ok(())
     }
 
-    fn resource_index(&self, profile: &str) -> Result<HashMap<PathBuf, ResourceMetadata>> {
+    fn resource_index(&self, profile: &str) -> Result<HashMap<ResourceId, CachedResourceState>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT path, modality, size_bytes, modified_ns, content_hash FROM resources WHERE profile = ?1",
+            "SELECT path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1",
         )?;
         let rows = stmt.query_map([profile], |r| {
+            let id = key_resource(r.get(0)?)?;
+            let metadata = ResourceMetadata {
+                modality: parse_modality(&r.get::<_, String>(1)?),
+                size_bytes: r.get::<_, i64>(2)? as u64,
+                modified_ns: r.get(3)?,
+                content_hash: r.get(4)?,
+            };
+            let version = decode_version(r.get(5)?)?;
             Ok((
-                key_path(r.get(0)?),
-                ResourceMetadata {
-                    modality: parse_modality(&r.get::<_, String>(1)?),
-                    size_bytes: r.get::<_, i64>(2)? as u64,
-                    modified_ns: r.get(3)?,
-                    content_hash: r.get(4)?,
+                id,
+                CachedResourceState {
+                    metadata,
+                    version,
+                    descriptor_hash: r.get(6)?,
                 },
             ))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    fn resource(&self, profile: &str, path: &Path) -> Result<Option<CachedResource>> {
-        let key = path_key(path);
+    fn resource(&self, profile: &str, path: &ResourceId) -> Result<Option<CachedResource>> {
+        let key = resource_key(path);
         let metadata = self
             .conn
             .query_row(
-                "SELECT modality, size_bytes, modified_ns, content_hash FROM resources WHERE profile = ?1 AND path = ?2",
+                "SELECT modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1 AND path = ?2",
                 params![profile, key],
                 |r| {
-                    Ok(ResourceMetadata {
+                    Ok((ResourceMetadata {
                         modality: parse_modality(&r.get::<_, String>(0)?),
                         size_bytes: r.get::<_, i64>(1)? as u64,
                         modified_ns: r.get(2)?,
                         content_hash: r.get(3)?,
-                    })
+                    }, decode_version(r.get(4)?)?, r.get::<_, Option<String>>(5)?))
                 },
             )
             .optional()?;
-        let Some(metadata) = metadata else {
+        let Some((metadata, version, descriptor_hash)) = metadata else {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare_cached(
@@ -652,16 +768,21 @@ impl EmbeddingCache for SqliteCache {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Some(CachedResource { metadata, segments }))
+        Ok(Some(CachedResource {
+            metadata,
+            version,
+            descriptor_hash,
+            segments,
+        }))
     }
 
     fn put_resource(
         &mut self,
         profile: &str,
-        path: &Path,
+        path: &ResourceId,
         resource: &CachedResource,
     ) -> Result<()> {
-        let key = path_key(path);
+        let key = resource_key(path);
         let tx = self.conn.transaction()?;
         delete_fts_rows(&tx, profile, &key)?;
         tx.execute(
@@ -670,15 +791,17 @@ impl EmbeddingCache for SqliteCache {
         )?;
         let m = &resource.metadata;
         tx.execute(
-            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 profile,
                 key,
                 m.modality.to_string(),
                 m.size_bytes as i64,
                 m.modified_ns,
-                m.content_hash
+                m.content_hash,
+                serde_json::to_string(&resource.version).map_err(json_err)?,
+                resource.descriptor_hash
             ],
         )?;
         {
@@ -689,12 +812,9 @@ impl EmbeddingCache for SqliteCache {
             let mut fts = tx.prepare_cached(
                 "INSERT INTO segments_fts (rowid, name, path, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
+            let (name, full) = path.labels();
             let name = order_free_text(&name);
-            let full = order_free_text(&path.to_string_lossy());
+            let full = order_free_text(&full);
             for (i, s) in resource.segments.iter().enumerate() {
                 stmt.execute(params![
                     profile,
@@ -720,23 +840,24 @@ impl EmbeddingCache for SqliteCache {
     fn touch_resource(
         &mut self,
         profile: &str,
-        path: &Path,
-        modified_ns: Option<i64>,
+        path: &ResourceId,
+        metadata: &ResourceMetadata,
+        version: &ResourceVersion,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE resources SET modified_ns = ?3 WHERE profile = ?1 AND path = ?2",
-            params![profile, path_key(path), modified_ns],
+            "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7 WHERE profile = ?1 AND path = ?2",
+            params![profile, resource_key(path), metadata.modified_ns, metadata.size_bytes as i64, serde_json::to_string(version).map_err(json_err)?, metadata.content_hash, metadata.modality.to_string()],
         )?;
         Ok(())
     }
 
-    fn remove_resources(&mut self, profile: &str, paths: &[PathBuf]) -> Result<()> {
+    fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
             let mut stmt =
                 tx.prepare_cached("DELETE FROM resources WHERE profile = ?1 AND path = ?2")?;
             for p in paths {
-                let key = path_key(p);
+                let key = resource_key(p);
                 delete_fts_rows(&tx, profile, &key)?;
                 stmt.execute(params![profile, key])?;
             }
@@ -772,7 +893,7 @@ impl EmbeddingCache for SqliteCache {
         Ok(())
     }
 
-    fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>> {
+    fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT s.path, s.locator, s.heading, s.input_hash, e.vector, s.ordinal
              FROM segments s JOIN embeddings e ON e.profile = s.profile AND e.input_hash = s.input_hash
@@ -782,13 +903,13 @@ impl EmbeddingCache for SqliteCache {
         let mut rows = stmt.query([profile])?;
         let mut out = Vec::new();
         while let Some(r) = rows.next()? {
-            let path = key_path(r.get(0)?);
+            let path = key_resource(r.get(0)?)?;
             if !paths.contains(&path) {
                 continue;
             }
             let locator: String = r.get(1)?;
             out.push(StoredVector {
-                path,
+                resource: path,
                 ordinal: r.get::<_, i64>(5)? as usize,
                 segment: CachedSegment {
                     locator: serde_json::from_str(&locator).map_err(json_err)?,
@@ -806,7 +927,7 @@ impl EmbeddingCache for SqliteCache {
         &self,
         profile: &str,
         query: &LexicalQuery,
-        paths: &HashSet<PathBuf>,
+        paths: &HashSet<ResourceId>,
         limit: usize,
     ) -> Result<Vec<LexicalHit>> {
         let Some(expr) = query.fts5() else {
@@ -827,10 +948,10 @@ impl EmbeddingCache for SqliteCache {
         while out.len() < limit
             && let Some(r) = rows.next()?
         {
-            let path = key_path(r.get(0)?);
+            let path = key_resource(r.get(0)?)?;
             if paths.contains(&path) {
                 out.push(LexicalHit {
-                    path,
+                    resource: path,
                     ordinal: r.get::<_, i64>(1)? as usize,
                     score: r.get::<_, f64>(2)? as f32,
                 });
@@ -885,5 +1006,18 @@ impl EmbeddingCache for SqliteCache {
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn file_keys_keep_the_legacy_canonical_drive_prefix() {
+        let id = ResourceId::from_path(r"C:\notes\chapter.md").unwrap();
+        let legacy = br"\\?\C:\notes\chapter.md".to_vec();
+        assert_eq!(resource_key(&id), legacy);
+        assert_eq!(key_resource(legacy).unwrap(), id);
     }
 }

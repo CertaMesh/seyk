@@ -18,6 +18,24 @@ use seyk::{
     SqliteCache, SyncStats, expand_tilde,
 };
 
+/// Machine-output protocol; legacy output had no version field.
+/// Any field addition, removal or rename after release requires a version bump.
+const JSON_SCHEMA_VERSION: u32 = 2;
+
+#[derive(serde::Serialize)]
+struct JsonOutput<'a, T: serde::Serialize> {
+    schema_version: u32,
+    #[serde(flatten)]
+    payload: &'a T,
+}
+
+fn json_output<T: serde::Serialize>(payload: &T) -> JsonOutput<'_, T> {
+    JsonOutput {
+        schema_version: JSON_SCHEMA_VERSION,
+        payload,
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "seyk",
@@ -253,7 +271,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             progress.finish();
             let mut out = std::io::stdout().lock();
             if json {
-                serde_json::to_writer_pretty(&mut out, &results)?;
+                serde_json::to_writer_pretty(&mut out, &json_output(&results))?;
                 writeln!(out)?;
             } else {
                 write!(
@@ -289,7 +307,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .execute()?;
             progress.finish();
             if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", serde_json::to_string_pretty(&json_output(&result))?);
             } else {
                 print!("{}", format_index_report(&result));
             }
@@ -301,7 +319,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 CacheAction::Stats { json } => {
                     let stats = cache.stats()?;
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&stats)?);
+                        println!("{}", serde_json::to_string_pretty(&json_output(&stats))?);
                     } else {
                         print!("{}", format_cache_stats(&stats));
                     }
@@ -342,7 +360,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 DaemonAction::Status { json } => match daemon::status(&endpoint)? {
                     None if json => println!("null"),
                     None => println!("No daemon running for this configuration."),
-                    Some(s) if json => println!("{}", serde_json::to_string_pretty(&s)?),
+                    Some(s) if json => {
+                        println!("{}", serde_json::to_string_pretty(&json_output(&s))?)
+                    }
                     Some(s) => print!("{}", format_daemon_status(&s)),
                 },
                 DaemonAction::Stop => {
@@ -411,7 +431,10 @@ fn watch_and_index(
             progress.finish();
             let quiet_ok = !std::mem::take(&mut first);
             match pass {
-                Ok(r) if json => println!("{}", serde_json::to_string(&r).unwrap_or_default()),
+                Ok(r) if json => println!(
+                    "{}",
+                    serde_json::to_string(&json_output(&r)).unwrap_or_default()
+                ),
                 // Quiet when a burst of events changed nothing we index.
                 Ok(r)
                     if quiet_ok
@@ -595,7 +618,14 @@ fn format_locator(locator: &ResourceLocator) -> String {
         ResourceLocator::Time { start_ms, end_ms } => {
             format!(" @ {}–{}", clock(*start_ms), clock(*end_ms))
         }
+        ResourceLocator::ImageRegion {
+            x,
+            y,
+            width,
+            height,
+        } => format!(" region {x},{y} {width}x{height}"),
         ResourceLocator::WholeResource => String::new(),
+        _ => String::new(),
     }
 }
 
@@ -637,7 +667,10 @@ fn format_hit(
     let mut s = format!(
         "{:.3}  {bold}{}{}{reset}",
         hit.score,
-        display_path(hit.resource.path(), base),
+        hit.resource
+            .to_file_path()
+            .map(|p| display_path(&p, base))
+            .unwrap_or_else(|| hit.resource.to_string()),
         format_locator(&hit.locator)
     );
     if let Some(h) = &hit.heading {
@@ -697,7 +730,14 @@ fn format_summary(r: &SearchResults) -> String {
         r.stats.total_ms as f64 / 1000.0
     );
     for s in r.stats.sync.skipped.iter().take(5) {
-        out.push_str(&format!("  skipped {}: {}\n", s.path.display(), s.reason));
+        out.push_str(&format!(
+            "  skipped {}: {}\n",
+            s.path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| s.resource.to_string()),
+            s.reason
+        ));
     }
     out
 }
@@ -716,7 +756,14 @@ fn format_index_report(r: &IndexReport) -> String {
     }
     out.push('\n');
     for s in &r.sync.skipped {
-        out.push_str(&format!("  skipped {}: {}\n", s.path.display(), s.reason));
+        out.push_str(&format!(
+            "  skipped {}: {}\n",
+            s.path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| s.resource.to_string()),
+            s.reason
+        ));
     }
     out
 }
@@ -757,9 +804,13 @@ mod tests {
     use super::*;
     use seyk::{MatchSignals, Modality, ResourceId, ResourceMetadata, SearchStats};
 
+    fn test_path(path: &str) -> PathBuf {
+        std::env::temp_dir().join(path.trim_start_matches('/'))
+    }
+
     fn hit(path: &str, score: f32, locator: ResourceLocator, preview: Option<&str>) -> SearchHit {
         SearchHit {
-            resource: ResourceId::from_path(path),
+            resource: ResourceId::from_path(test_path(path)).unwrap(),
             locator,
             score,
             metadata: ResourceMetadata {
@@ -807,9 +858,9 @@ mod tests {
 
     #[test]
     fn human_output() {
-        let out = format_results(&results(), Path::new("/book"), false);
+        let out = format_results(&results(), &test_path("/book"), false);
         assert_eq!(
-            out,
+            out.replace('\\', "/"),
             "0.914  characters/father.md:81-96\n       He notices himself repeating the same gestures...\n\n0.500  photos/kitchen.jpg\n"
         );
     }
@@ -819,7 +870,7 @@ mod tests {
         let mut r = results();
         r.queries.push("dad".into());
         r.hits[1].query_index = 1;
-        let out = format_results(&r, Path::new("/book"), false);
+        let out = format_results(&r, &test_path("/book"), false);
         assert!(out.contains("father.md:81-96  ← \"father\"\n"), "{out}");
         assert!(out.contains("kitchen.jpg  ← \"dad\"\n"), "{out}");
     }
@@ -833,7 +884,7 @@ mod tests {
             filename: true,
             ..Default::default()
         };
-        let out = format_results(&r, Path::new("/book"), false);
+        let out = format_results(&r, &test_path("/book"), false);
         assert!(
             out.contains("father.md:81-96  [meaning 0.91+words]\n"),
             "{out}"
@@ -843,14 +894,34 @@ mod tests {
 
     #[test]
     fn json_output_mirrors_library_types() {
-        let v: serde_json::Value = serde_json::to_value(results()).unwrap();
+        let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
+        assert_eq!(v["schema_version"], 2);
         let first = &v["hits"][0];
-        assert_eq!(first["resource"], "/book/characters/father.md");
+        assert_eq!(
+            first["resource"],
+            ResourceId::from_path(test_path("/book/characters/father.md"))
+                .unwrap()
+                .as_str()
+        );
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");
         let back: SearchResults = serde_json::from_value(v).unwrap();
         assert_eq!(back, results());
+    }
+
+    #[test]
+    fn generic_hit_json_has_uri_and_human_output_has_a_fallback() {
+        let mut r = results();
+        r.hits[0].resource = "mem://book/chapter".parse().unwrap();
+        let value = serde_json::to_value(json_output(&r)).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
+        assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
+        assert_eq!(
+            serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
+            2
+        );
     }
 
     #[test]

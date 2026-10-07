@@ -32,6 +32,7 @@ walkdir = "2"
 globset = "0.4"
 notify = { version = "8", optional = true }
 dirs = "6"
+url = "2.5.8"
 
 ort = { version = "=2.0.0-rc.13", optional = true }
 tokenizers = { version = "0.23", optional = true, default-features = false, features = ["onig"] }
