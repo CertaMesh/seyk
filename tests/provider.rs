@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 struct Item {
     bytes: Vec<u8>,
     revision: usize,
+    title: String,
+    kind: ResourceKind,
 }
 #[derive(Default)]
 struct Notes {
@@ -33,6 +35,8 @@ impl Notes {
             Item {
                 bytes: text.as_bytes().to_vec(),
                 revision,
+                title: "notes".into(),
+                kind: ResourceKind::Text(TextFormat::Plain),
             },
         );
     }
@@ -60,11 +64,11 @@ impl ResourceProvider for Notes {
             .filter(|(id, _)| in_scope(id, scope))
             .map(|(id, item)| ProvidedResource {
                 id: id.clone(),
-                kind: ResourceKind::Text(TextFormat::Plain),
+                kind: item.kind,
                 size_bytes: item.bytes.len() as u64,
                 modified_ns: None,
                 version: self.token(item),
-                title: Some("notes".into()),
+                title: Some(item.title.clone()),
             })
             .collect())
     }
@@ -306,4 +310,41 @@ fn path_convenience_resolves_symlinks_before_uri_dot_normalization() {
         results.hits[0].resource.to_file_path().unwrap(),
         temp.path().join("real/target.txt").canonicalize().unwrap()
     );
+}
+
+#[test]
+fn descriptor_changes_match_cold_preparation_even_with_unknown_or_equal_versions() {
+    for unknown in [false, true] {
+        for bump in [false, true] {
+            let notes = Arc::new(Notes::default());
+            notes.unknown.store(unknown, Ordering::SeqCst);
+            let id: ResourceId = "mem://book/note".parse().unwrap();
+            notes.set(id.as_str(), "# Heading\nhello world");
+            let (warm, _) = engine(notes.clone());
+            warm.index().roots(roots()).execute().unwrap();
+            for change_kind in [false, true] {
+                {
+                    let mut items = notes.items.lock().unwrap();
+                    let item = items.get_mut(&id).unwrap();
+                    item.title = "new title".into();
+                    if change_kind {
+                        item.kind = ResourceKind::Text(TextFormat::Markdown);
+                    }
+                    if bump {
+                        item.revision += 1;
+                    }
+                }
+                let report = warm.index().roots(roots()).execute().unwrap();
+                assert_eq!(report.sync.resources_updated, 1);
+                let (cold, _) = engine(notes.clone());
+                cold.index().roots(roots()).execute().unwrap();
+                let cached = |e: &SearchEngine| {
+                    e.with_cache(|c| c.resource(e.profile_id(), &id))
+                        .unwrap()
+                        .unwrap()
+                };
+                assert_eq!(cached(&warm), cached(&cold));
+            }
+        }
+    }
 }

@@ -129,6 +129,11 @@ A real folder of book drafts, eight queries, each with one known target passage.
 
 ### What we learned
 
+Content hashes alone cannot establish preparation freshness: title and kind/format
+also affect model inputs. Both version and content shortcuts now require the
+persisted descriptor fingerprint, including unknown-version providers. Tests
+compare warm and cold caches after title-only and format-only changes.
+
 - **The weight has to depend on the query.** One global keyword weight cannot
   serve both `INC-18372` and "where did I write about loss you can't feel":
   the first is all keyword, the second is all meaning.
@@ -242,10 +247,10 @@ and per-session candidates do not expand that scope.
 The public cache API uses ResourceId, while file identities retain the existing
 BLOB path keys in SQLite, including canonical Windows drive prefixes. Non-file IDs use a NUL-prefixed UTF-8 URI key, which
 cannot collide with a valid local filename. Legacy SQL column names remain
-internal details. The v4 migration only adds and populates an opaque `version`
-column. It retains resource keys, segment rowids, contentless FTS rows, input
-hashes, profiles and vector bytes. A v3 cache needs neither a keyword rebuild
-nor re-embedding. v1/v2 upgrades still perform the Phase 1 privacy invalidation,
+internal details. The v4 migration adds an opaque `version` and nullable `descriptor_hash`
+column. Legacy fingerprints are unknown, forcing preparation on the next sync. It retains resource keys, segment rowids, contentless FTS rows, input
+hashes, profiles and vector bytes. A v3 cache retains its keyword index until sync and reuses byte-identical
+model inputs without re-embedding. v1/v2 upgrades still perform the Phase 1 privacy invalidation,
 retaining vectors across partial-scope rebuilds.
 
 This is a one-way schema upgrade. Old binaries treat unfamiliar cache versions
@@ -286,7 +291,8 @@ Public Rust API breaks:
   and `lexical_search` take ResourceId keys/collections instead of Path keys.
   `touch_resource` now accepts full metadata plus a ResourceVersion instead of
   only an optional mtime.
-- `CachedResource` gains a required `version` field. `StoredVector.path` and
+- `CachedResource` gains required `version` and `descriptor_hash` fields;
+  `CachedResourceState` also exposes the fingerprint. `StoredVector.path` and
   `LexicalHit.path` become `resource: ResourceId`.
 
 ResourceProvider, ResourceScope, ProvidedResource and ResourceVersion are
@@ -339,6 +345,11 @@ Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking chang
 Filesystem is the only real provider; the memory provider exists only in tests.
 
 ### What we learned
+
+Content hashes alone cannot establish preparation freshness: title and kind/format
+also affect model inputs. Both version and content shortcuts now require the
+persisted descriptor fingerprint, including unknown-version providers. Tests
+compare warm and cold caches after title-only and format-only changes.
 
 File identity affects cache keys, deterministic ranking and model title inputs,
 not just result display. Keeping the old file-key codec avoids a cache rebuild

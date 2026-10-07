@@ -214,6 +214,7 @@ fn profile(revision: &str) -> CacheProfile {
 
 fn resource(hashes: &[&str]) -> CachedResource {
     CachedResource {
+        descriptor_hash: Some("descriptor".into()),
         version: ResourceVersion::known("fs:1:1"),
         metadata: ResourceMetadata {
             modality: Modality::Text,
@@ -486,11 +487,15 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
             .unwrap();
         (vectors, segments, fts)
     };
-    // Recreate the actual v3 resources layout, with no version column.
-    conn.execute_batch("ALTER TABLE resources DROP COLUMN version; UPDATE meta SET value='3' WHERE key='schema_version';").unwrap();
+    // Recreate the actual v3 resources layout, without provider state.
+    conn.execute_batch("ALTER TABLE resources DROP COLUMN version; ALTER TABLE resources DROP COLUMN descriptor_hash; UPDATE meta SET value='3' WHERE key='schema_version';").unwrap();
     let stored = snapshot(&conn);
     drop(conn);
-    let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
+    let cache = SqliteCache::open(&file).unwrap();
+    let conn = Connection::open(&file).unwrap();
+    assert_eq!(snapshot(&conn), stored); // Migration preserves every existing byte/rowid.
+    drop(conn);
+    let (engine, fake) = shared_engine(cache, Dimension::D128, "r1");
     let after = engine
         .search("quartz")
         .paths([notes.path()])
@@ -498,11 +503,11 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
         .execute()
         .unwrap();
     assert_eq!(fake.resource_count(), 0);
-    assert_eq!(after.stats.sync.resources_unchanged, 2);
+    assert_eq!(after.stats.sync.resources_updated, 2);
     assert_eq!(after.hits, before.hits);
     drop(engine);
     let conn = Connection::open(&file).unwrap();
-    assert_eq!(snapshot(&conn), stored);
+    assert_eq!(snapshot(&conn).0, stored.0);
     assert_eq!(
         conn.query_row(
             "SELECT value FROM meta WHERE key='schema_version'",
@@ -542,6 +547,11 @@ fn both_caches_store_non_file_identities_and_opaque_versions() {
         cache.put_resource("p", &id, &value).unwrap();
         let found = cache.resource("p", &id).unwrap().unwrap();
         assert_eq!(found.version, value.version);
+        assert_eq!(found.descriptor_hash, value.descriptor_hash);
+        assert_eq!(
+            cache.resource_index("p").unwrap()[&id].descriptor_hash,
+            value.descriptor_hash
+        );
         assert!(found.segments[0].lexical_text.is_none());
         let wanted = HashSet::from([id.clone()]);
         assert_eq!(cache.vectors_for("p", &wanted).unwrap()[0].resource, id);
@@ -564,6 +574,15 @@ fn both_caches_store_non_file_identities_and_opaque_versions() {
     check(&mut SqliteCache::open(&file).unwrap());
     let cache = SqliteCache::open(&file).unwrap();
     let id: ResourceId = "mem://book/note.txt".parse().unwrap();
+    assert_eq!(
+        cache
+            .resource("p", &id)
+            .unwrap()
+            .unwrap()
+            .descriptor_hash
+            .as_deref(),
+        Some("descriptor")
+    );
     assert_eq!(
         cache.resource("p", &id).unwrap().unwrap().version,
         ResourceVersion::known("next")

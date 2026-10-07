@@ -69,6 +69,14 @@ pub struct ProvidedResource {
     pub title: Option<String>,
 }
 
+impl ProvidedResource {
+    /// Hash every descriptor field that influences preparation, independently of bytes.
+    pub(crate) fn fingerprint(&self) -> String {
+        let encoded = serde_json::to_vec(&(self.kind, &self.title)).expect("descriptor serializes");
+        blake3::hash(&encoded).to_hex().to_string()
+    }
+}
+
 /// Enumerate, read and check freshness without coupling the engine to local files.
 ///
 /// Unstable: may change before 1.0; filesystem is the only supported provider.

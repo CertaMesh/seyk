@@ -59,6 +59,8 @@ pub struct CachedSegment {
 pub struct CachedResource {
     pub metadata: ResourceMetadata,
     pub version: ResourceVersion,
+    /// Preparation descriptor hash; absent for migrated legacy entries.
+    pub descriptor_hash: Option<String>,
     pub segments: Vec<CachedSegment>,
 }
 
@@ -67,6 +69,8 @@ pub struct CachedResource {
 pub struct CachedResourceState {
     pub metadata: ResourceMetadata,
     pub version: ResourceVersion,
+    /// Preparation descriptor hash; absent for migrated legacy entries.
+    pub descriptor_hash: Option<String>,
 }
 
 /// A cached segment joined with its vector, ready to search.
@@ -199,6 +203,7 @@ impl EmbeddingCache for MemoryCache {
                     CachedResourceState {
                         metadata: r.metadata.clone(),
                         version: r.version.clone(),
+                        descriptor_hash: r.descriptor_hash.clone(),
                     },
                 )
             })
@@ -543,7 +548,7 @@ impl SqliteCache {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
-        // Add only the provider token: keys, segment rowids, FTS and vectors
+        // Add the provider token and preparation fingerprint: keys, segment rowids, FTS and vectors
         // remain byte-for-byte intact when upgrading an existing v3 cache.
         let has_version: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'version')",
@@ -552,6 +557,13 @@ impl SqliteCache {
         )?;
         if !has_version {
             tx.execute_batch("ALTER TABLE resources ADD COLUMN version TEXT;")?;
+        }
+        let has_descriptor: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'descriptor_hash')",
+            [], |r| r.get(0),
+        )?;
+        if !has_descriptor {
+            tx.execute_batch("ALTER TABLE resources ADD COLUMN descriptor_hash TEXT;")?;
         }
         if matches!(version.as_deref(), Some("1" | "2" | "3")) {
             tx.execute_batch(
@@ -687,7 +699,7 @@ impl EmbeddingCache for SqliteCache {
 
     fn resource_index(&self, profile: &str) -> Result<HashMap<ResourceId, CachedResourceState>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT path, modality, size_bytes, modified_ns, content_hash, version FROM resources WHERE profile = ?1",
+            "SELECT path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1",
         )?;
         let rows = stmt.query_map([profile], |r| {
             let id = key_resource(r.get(0)?)?;
@@ -698,7 +710,14 @@ impl EmbeddingCache for SqliteCache {
                 content_hash: r.get(4)?,
             };
             let version = decode_version(r.get(5)?)?;
-            Ok((id, CachedResourceState { metadata, version }))
+            Ok((
+                id,
+                CachedResourceState {
+                    metadata,
+                    version,
+                    descriptor_hash: r.get(6)?,
+                },
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -708,7 +727,7 @@ impl EmbeddingCache for SqliteCache {
         let metadata = self
             .conn
             .query_row(
-                "SELECT modality, size_bytes, modified_ns, content_hash, version FROM resources WHERE profile = ?1 AND path = ?2",
+                "SELECT modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1 AND path = ?2",
                 params![profile, key],
                 |r| {
                     Ok((ResourceMetadata {
@@ -716,11 +735,11 @@ impl EmbeddingCache for SqliteCache {
                         size_bytes: r.get::<_, i64>(1)? as u64,
                         modified_ns: r.get(2)?,
                         content_hash: r.get(3)?,
-                    }, decode_version(r.get(4)?)?))
+                    }, decode_version(r.get(4)?)?, r.get::<_, Option<String>>(5)?))
                 },
             )
             .optional()?;
-        let Some((metadata, version)) = metadata else {
+        let Some((metadata, version, descriptor_hash)) = metadata else {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare_cached(
@@ -747,6 +766,7 @@ impl EmbeddingCache for SqliteCache {
         Ok(Some(CachedResource {
             metadata,
             version,
+            descriptor_hash,
             segments,
         }))
     }
@@ -766,8 +786,8 @@ impl EmbeddingCache for SqliteCache {
         )?;
         let m = &resource.metadata;
         tx.execute(
-            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash, version)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 profile,
                 key,
@@ -775,7 +795,8 @@ impl EmbeddingCache for SqliteCache {
                 m.size_bytes as i64,
                 m.modified_ns,
                 m.content_hash,
-                serde_json::to_string(&resource.version).map_err(json_err)?
+                serde_json::to_string(&resource.version).map_err(json_err)?,
+                resource.descriptor_hash
             ],
         )?;
         {

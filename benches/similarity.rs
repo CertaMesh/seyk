@@ -156,6 +156,7 @@ fn filled_cache(
             .map(|s| (s.input_hash.clone(), rng.unit_vector(dim.get())))
             .collect();
         let resource = CachedResource {
+            descriptor_hash: None,
             version: ResourceVersion::known("fs:10000:0"),
             metadata: ResourceMetadata {
                 modality: Modality::Text,

@@ -309,6 +309,7 @@ impl SearchEngine {
                 ));
                 continue;
             }
+            let descriptor_hash = r.fingerprint();
             let cached = known.get(&r.id);
             let version = match self.provider.version(&r.id) {
                 Ok(v) => v,
@@ -324,7 +325,9 @@ impl SearchEngine {
                     .push(skip(&r.id, "resource changed after discovery"));
                 continue;
             }
-            if cached.is_some_and(|m| m.version.matches(&version)) {
+            if cached.is_some_and(|m| {
+                m.version.matches(&version) && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
+            }) {
                 stats.resources_unchanged += 1;
                 continue;
             }
@@ -349,7 +352,10 @@ impl SearchEngine {
                 continue;
             }
             let content_hash = blake3::hash(&bytes).to_hex().to_string();
-            if let Some(m) = cached.filter(|m| m.metadata.content_hash == content_hash) {
+            if let Some(m) = cached.filter(|m| {
+                m.metadata.content_hash == content_hash
+                    && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
+            }) {
                 let mut metadata = m.metadata.clone();
                 metadata.size_bytes = bytes.len() as u64;
                 metadata.modified_ns = r.modified_ns;
@@ -368,6 +374,7 @@ impl SearchEngine {
                     resource: r.id.clone(),
                     metadata,
                     version,
+                    descriptor_hash,
                     jobs,
                 }),
                 Err(reason) => stats.skipped.push(skip(&r.id, reason)),
@@ -456,6 +463,7 @@ impl SearchEngine {
             let resource = CachedResource {
                 metadata: p.metadata.clone(),
                 version: p.version.clone(),
+                descriptor_hash: Some(p.descriptor_hash.clone()),
                 segments: p.jobs.iter().map(|j| j.segment.clone()).collect(),
             };
             self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
@@ -555,6 +563,7 @@ impl SearchEngine {
 }
 
 struct Pending {
+    descriptor_hash: String,
     resource: ResourceId,
     version: ResourceVersion,
     metadata: ResourceMetadata,
