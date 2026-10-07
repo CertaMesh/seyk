@@ -33,6 +33,7 @@ fn min_cosine() -> f32 {
         Precision::Fp32 => 0.999,
         // The export reports worst-case cosine 0.9997 for q8 against fp32.
         Precision::Q8 => 0.995,
+        precision => panic!("no parity threshold for {precision:?}"),
     }
 }
 

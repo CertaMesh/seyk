@@ -81,3 +81,97 @@ fn object_safe_adapters_forward_tasks_and_check_counts() {
             .is_err()
     );
 }
+
+#[test]
+fn normalize_handles_extreme_finite_scales_and_rejects_invalid_inputs() {
+    for scale in [1e20_f32, 1e-30, f32::MAX, f32::from_bits(1)] {
+        let mut values = [scale, scale];
+        normalize(&mut values).unwrap();
+        assert!((values[0] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-7);
+        assert_eq!(values[0], values[1]);
+    }
+    for mut values in [vec![0.0, 0.0], vec![], vec![f32::NAN], vec![f32::INFINITY]] {
+        let before: Vec<_> = values.iter().map(|v| v.to_bits()).collect();
+        assert!(normalize(&mut values).is_err());
+        assert_eq!(
+            values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            before
+        );
+    }
+}
+
+struct Overrides(Mock);
+impl Embedder for Overrides {
+    fn identity(&self) -> &ModelIdentity {
+        self.0.identity()
+    }
+    fn dimension(&self) -> Dimension {
+        Dimension::D768
+    }
+    fn supports(&self, modality: Modality) -> bool {
+        modality == Modality::Video
+    }
+    fn embed_batch(&self, _: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
+        Err(Error::Embedding("batch override".into()))
+    }
+    fn embed(&self, _: seyk_embed::ResourceInput<'_>, _: EmbeddingTask) -> Result<Embedding> {
+        Err(Error::Embedding("embed override".into()))
+    }
+    fn embed_text(&self, _: &str, _: EmbeddingTask) -> Result<Embedding> {
+        Err(Error::Embedding("text override".into()))
+    }
+    fn embed_query(&self, _: &str) -> Result<Embedding> {
+        Err(Error::Embedding("query override".into()))
+    }
+    fn embed_resources(&self, _: &[seyk_embed::ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+        Err(Error::Embedding("resources override".into()))
+    }
+    fn embed_text_document(&self, _: Option<&str>, _: &str) -> Result<Embedding> {
+        Err(Error::Embedding("document override".into()))
+    }
+}
+
+#[test]
+fn wrappers_preserve_every_method_override() {
+    fn verify(model: impl Embedder) {
+        assert_eq!(model.identity().model_id, "mock");
+        assert_eq!(model.dimension(), Dimension::D768);
+        assert!(model.supports(Modality::Video));
+        assert!(!model.supports(Modality::Text));
+        let errors = [
+            (model.embed_batch(&[]).unwrap_err(), "batch override"),
+            (
+                model
+                    .embed(
+                        seyk_embed::ResourceInput::Text {
+                            title: None,
+                            text: "x",
+                        },
+                        EmbeddingTask::Clustering,
+                    )
+                    .unwrap_err(),
+                "embed override",
+            ),
+            (
+                model
+                    .embed_text("x", EmbeddingTask::Clustering)
+                    .unwrap_err(),
+                "text override",
+            ),
+            (model.embed_query("x").unwrap_err(), "query override"),
+            (
+                model.embed_resources(&[]).unwrap_err(),
+                "resources override",
+            ),
+            (
+                model.embed_text_document(None, "x").unwrap_err(),
+                "document override",
+            ),
+        ];
+        for (error, expected) in errors {
+            assert!(matches!(error, Error::Embedding(message) if message == expected));
+        }
+    }
+    verify(Box::new(Overrides(mock(false))) as Box<dyn Embedder>);
+    verify(std::sync::Arc::new(Overrides(mock(false))) as std::sync::Arc<dyn Embedder>);
+}

@@ -310,15 +310,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let cwd = std::env::current_dir()?;
 
-    let embedder = GemmaEmbedder::load(GemmaConfig {
-        precision: args.precision,
-        source: args
+    let embedder = GemmaEmbedder::load({
+        let mut config = GemmaConfig::default();
+        config.precision = args.precision;
+        config.source = args
             .model_dir
             .clone()
-            .map_or_else(ModelSource::default, ModelSource::Directory),
-        dimension: args.dimension,
-        vision: false,
-        ..Default::default()
+            .map_or_else(ModelSource::default, ModelSource::Directory);
+        config.dimension = args.dimension;
+        config.vision = false;
+        config
     })?;
     let builder = SearchEngine::builder().embedder(embedder);
     let engine = if args.no_cache {

@@ -127,6 +127,24 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
     fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
         (**self).embed_batch(requests)
     }
+    fn dimension(&self) -> Dimension {
+        (**self).dimension()
+    }
+    fn embed(&self, input: ResourceInput<'_>, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed(input, task)
+    }
+    fn embed_text(&self, text: &str, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed_text(text, task)
+    }
+    fn embed_query(&self, query: &str) -> Result<Embedding> {
+        (**self).embed_query(query)
+    }
+    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+        (**self).embed_resources(inputs)
+    }
+    fn embed_text_document(&self, title: Option<&str>, text: &str) -> Result<Embedding> {
+        (**self).embed_text_document(title, text)
+    }
 }
 impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     fn identity(&self) -> &ModelIdentity {
@@ -137,5 +155,23 @@ impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     }
     fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
         (**self).embed_batch(requests)
+    }
+    fn dimension(&self) -> Dimension {
+        (**self).dimension()
+    }
+    fn embed(&self, input: ResourceInput<'_>, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed(input, task)
+    }
+    fn embed_text(&self, text: &str, task: EmbeddingTask) -> Result<Embedding> {
+        (**self).embed_text(text, task)
+    }
+    fn embed_query(&self, query: &str) -> Result<Embedding> {
+        (**self).embed_query(query)
+    }
+    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>> {
+        (**self).embed_resources(inputs)
+    }
+    fn embed_text_document(&self, title: Option<&str>, text: &str) -> Result<Embedding> {
+        (**self).embed_text_document(title, text)
     }
 }

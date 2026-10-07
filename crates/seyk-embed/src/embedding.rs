@@ -121,6 +121,7 @@ impl Embedding {
     }
 }
 
+// Preserve the historical model-output arithmetic and cached vector bytes.
 pub(crate) fn l2_normalize(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
@@ -177,14 +178,25 @@ pub fn cosine_similarity(a: &Embedding, b: &Embedding) -> Result<f32> {
     Ok(product / denominator)
 }
 
-/// L2-normalize in place. A zero vector remains zero; nonfinite values fail.
+/// L2-normalize in place using f64 accumulation to avoid f32 overflow/underflow.
+/// Zero (including empty) and non-finite inputs fail without modifying the input.
 pub fn normalize(values: &mut [f32]) -> Result<()> {
     if values.iter().any(|v| !v.is_finite()) {
         return Err(Error::Embedding(
             "cannot normalize non-finite values".into(),
         ));
     }
-    l2_normalize(values);
+    let norm = values
+        .iter()
+        .map(|&v| f64::from(v).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 {
+        return Err(Error::Embedding("cannot normalize a zero vector".into()));
+    }
+    for value in values {
+        *value = (f64::from(*value) / norm) as f32;
+    }
     Ok(())
 }
 

@@ -23,12 +23,13 @@ pub fn config(dimension: Dimension) -> GemmaConfig {
     let source = std::env::var_os("SEYK_MODEL")
         .map(|p| ModelSource::Directory(PathBuf::from(p)))
         .unwrap_or_default();
-    GemmaConfig {
-        source,
-        dimension,
-        precision: precision(),
-        vision: false,
-        ..Default::default()
+    {
+        let mut config = GemmaConfig::default();
+        config.source = source;
+        config.dimension = dimension;
+        config.precision = precision();
+        config.vision = false;
+        config
     }
 }
 

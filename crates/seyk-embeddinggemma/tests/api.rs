@@ -72,11 +72,12 @@ fn invalid_config_and_missing_local_files_fail_without_download() {
 #[test]
 #[ignore = "needs local EmbeddingGemma 2 weights"]
 fn batch_tasks_order_stability_and_unsupported_inputs() {
-    let mut config = GemmaConfig {
-        vision: false,
-        dimension: Dimension::D128,
-        batch_size: 2,
-        ..Default::default()
+    let mut config = {
+        let mut config = GemmaConfig::default();
+        config.vision = false;
+        config.dimension = Dimension::D128;
+        config.batch_size = 2;
+        config
     };
     if let Some(path) = std::env::var_os("SEYK_MODEL") {
         config.source = ModelSource::Directory(path.into());
@@ -139,4 +140,18 @@ fn image_tasks_are_rejected_before_decoding() {
         ),
         Err(Error::UnsupportedTask { .. })
     ));
+}
+
+#[test]
+fn backend_only_consumers_can_use_vector_helpers() {
+    let mut values = [3.0, 4.0];
+    seyk_embeddinggemma::normalize(&mut values).unwrap();
+    assert!((seyk_embeddinggemma::dot_product(&values, &values).unwrap() - 1.0).abs() < 1e-6);
+    let embedding =
+        seyk_embeddinggemma::Embedding::from_raw(values.to_vec(), Dimension::try_from(2).unwrap())
+            .unwrap();
+    assert!(
+        (seyk_embeddinggemma::cosine_similarity(&embedding, &embedding).unwrap() - 1.0).abs()
+            < 1e-6
+    );
 }

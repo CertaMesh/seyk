@@ -582,12 +582,13 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
             }
         }
     };
-    Ok(GemmaConfig {
-        source,
-        dimension: args.dimension,
-        precision: args.precision,
-        vision: cfg!(feature = "image") && !args.text_only,
-        ..Default::default()
+    Ok({
+        let mut config = GemmaConfig::default();
+        config.source = source;
+        config.dimension = args.dimension;
+        config.precision = args.precision;
+        config.vision = cfg!(feature = "image") && !args.text_only;
+        config
     })
 }
 

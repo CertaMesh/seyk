@@ -37,7 +37,7 @@ use tokenizers::Tokenizer;
 
 pub use seyk_embed::{
     Dimension, Embedder, Embedding, EmbeddingRequest, EmbeddingTask, Error, Modality,
-    ModelIdentity, ResourceInput, Result,
+    ModelIdentity, ResourceInput, Result, cosine_similarity, dot_product, normalize,
 };
 
 /// The upstream model the ONNX export was converted from.
@@ -66,6 +66,7 @@ const MAX_SOFT_TOKENS: usize = 280;
 /// Weight precision. `float16` is deliberately absent: the model card warns
 /// that its activations overflow fp16 and silently produce NaN or degraded vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Precision {
     /// Full precision (~1.1 GB text model).
     Fp32,
@@ -106,6 +107,7 @@ impl std::str::FromStr for Precision {
 
 /// Where model files come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ModelSource {
     /// A Hugging Face repository in the standard HF cache (`$HF_HOME`, default `~/.cache/huggingface`).
     HuggingFace { repo: String, revision: String },
@@ -123,6 +125,7 @@ impl Default for ModelSource {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GemmaConfig {
     pub source: ModelSource,
     pub dimension: Dimension,

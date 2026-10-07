@@ -130,7 +130,10 @@ zero vectors is undefined and the checked helper returns an error.
 
 `dot_product`, `cosine_similarity` and `normalize` are small helpers, not a
 numerical framework. `dot_product` rejects dimension mismatch and nonfinite
-results. `Embedding::cosine` retains the existing fast dot-product convenience
+results. `normalize` uses f64 accumulation and rejects zero or non-finite input
+without modifying it; model-output construction retains its legacy arithmetic
+for cache compatibility. The backend re-exports all three helpers.
+`Embedding::cosine` retains the existing fast dot-product convenience
 for same-width normalized embeddings. Model metadata lives once in
 `ModelIdentity`, not redundantly on every vector; tasks/modalities are on requests.
 
@@ -160,6 +163,9 @@ SQLite, resource discovery or agent integration.
 
 `use seyk::SearchEngine` and search module paths remain supported. The root
 `seyk` package is the compatibility facade and CLI/MCP composition package.
+There is no separate `seyk-cli` crate because keeping the root package preserves
+`use seyk::SearchEngine`, `cargo install --git https://github.com/CertaMesh/seyk seyk`,
+the release `--bin seyk` path and the existing install script.
 `seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ...}` remains available under
 `onnx`; `GemmaEmbedder` is an alias for `EmbeddingGemma2`. Source installation
 still uses `cargo install --locked --git https://github.com/CertaMesh/seyk seyk`.
@@ -178,7 +184,10 @@ When embedding errors enter core, existing variants remain `Error::Embedding`,
 Only the new unsupported task case adds `UnsupportedTask`. Direct backend calls
 return `seyk_embed::Error`; `?` converts it into `seyk::Error` in existing functions
 returning `seyk::Result`. Enums are non-exhaustive; downstream matches need a
-fallback for future variants.
+fallback for future variants. `Precision`, `ModelSource` and `GemmaConfig` are
+also non-exhaustive: construct config with `GemmaConfig::default()` and set
+its public fields, or use `EmbeddingGemma2::builder()`, rather than a config
+struct literal.
 
 ### Cache writes require explicit lexical input
 
