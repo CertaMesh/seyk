@@ -119,7 +119,7 @@ pub struct SearchResults {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IndexReport {
     pub sync: SyncStats,
-    /// Cache entries removed because their files no longer exist under the indexed paths.
+    /// Cache entries removed after the provider confirms in-scope deletion.
     pub resources_removed: usize,
     pub total_ms: u64,
 }
@@ -213,7 +213,7 @@ impl SearchEngineBuilder {
     }
 }
 
-/// Semantic search over local files.
+/// Search over provider resources; local files are the default.
 pub struct SearchEngine {
     provider: Arc<dyn ResourceProvider>,
     embedder: Arc<dyn Embedder>,

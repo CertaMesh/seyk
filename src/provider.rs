@@ -76,6 +76,8 @@ pub trait ResourceProvider: Send + Sync {
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>>;
+    /// A known token must change when the resource bytes change. Use unknown
+    /// when freshness cannot be established; the engine will reread and hash.
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion>;
     /// True only for confirmed deletion inside scope. Errors and exclusions
     /// must not count as deletion. The conservative default retains entries.

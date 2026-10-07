@@ -198,3 +198,159 @@ Ranks are lower-is-better; `>30` means absent from the first 30 results.
 | 8 | 7 | 8 | 7 | 7 | 7 | 7 | 0 |
 
 All eight weight-0.3 ranks are unchanged, and default ranks match them.
+
+
+## Phase 2 report: resource identity and providers
+
+### What was implemented
+
+`ResourceId` is a validated URI serialized as a string. Local resources use
+`file:///...`, with percent-encoded path bytes; Unix non-UTF-8 names round-trip.
+The ID supports Display, parsing, scheme inspection and optional conversion to
+a local path. Filesystem request paths resolve symlinks before URI normalization,
+so a path such as `link/../note.md` keeps its filesystem meaning. Non-file IDs
+are representable but the filesystem provider rejects them for access.
+
+`ResourceLocator::ImageRegion { x, y, width, height }` reserves a rectangle in
+original-image pixels: top-left origin, x increases right, y increases down.
+Nothing produces it yet. Existing locator variants and fields are unchanged.
+
+The engine now receives a synchronous `ResourceProvider: Send + Sync` for
+listing, reading, version checks and confirmed in-scope deletion. `FsProvider`
+retains discovery filters and the no-follow directory walk. Library requests
+keep `.paths(...)` and can also accept `.roots(...)` with URI identities.
+The provider's descriptor supplies content kind, size, optional mtime, opaque
+version and the title prefix used by embedding. All engine/cache identities
+are ResourceId values; `discover()` remains a filesystem compatibility helper.
+
+Known equal versions skip rereading. Unknown versions always reread and hash;
+identical content and model inputs still reuse vectors. Fs versions encode size
+and mtime. Version checks around reads detect changes during indexing, and
+previews still validate the hash of the bytes they actually read. The engine
+has no resource filesystem reads, stats, existence checks or canonicalization.
+Deletion requires a provider's positive confirmation inside the request scope;
+filter exclusion or a permissions error does not establish deletion.
+
+File titles, lexical name/path fields, model input hashes, cache profiles,
+segmentation and file tie-break ordering are preserved. Watchers, daemon
+transport and MCP confinement remain filesystem-specific. MCP continues to
+canonicalize requested paths against session roots before searching; discovery
+and per-session candidates do not expand that scope.
+
+### Cache v4
+
+The public cache API uses ResourceId, while file identities retain the existing
+BLOB path keys in SQLite, including canonical Windows drive prefixes. Non-file IDs use a NUL-prefixed UTF-8 URI key, which
+cannot collide with a valid local filename. Legacy SQL column names remain
+internal details. The v4 migration only adds and populates an opaque `version`
+column. It retains resource keys, segment rowids, contentless FTS rows, input
+hashes, profiles and vector bytes. A v3 cache needs neither a keyword rebuild
+nor re-embedding. v1/v2 upgrades still perform the Phase 1 privacy invalidation,
+retaining vectors across partial-scope rebuilds.
+
+This is a one-way schema upgrade. Old binaries treat unfamiliar cache versions
+as disposable and can clear v4; do not run old and new binaries against the
+same cache. Separate cache files permit side-by-side versions. Existing
+forensic-erasure limitations of old keyword indexes remain unchanged.
+
+### JSON and public API migration
+
+The old unversioned machine output is legacy v1. CLI JSON objects now have a
+flattened `schema_version: 2` field: search, index/watch, cache stats and daemon
+status. No-running-daemon output remains `null`. MCP's existing JSON content
+block also has the version; no separate structuredContent channel was added.
+
+CLI search retains queries/mode/hits/stats. A hit now contains, for example,
+`"resource": "file:///notes/my%20note.md"` instead of a path string. MCP hits add
+that resource field and retain `"path": "/notes/my note.md"` for opening files.
+MCP paths are optional for non-file IDs. The URI is the lossless identity;
+JSON display paths replace invalid UTF-8 bytes. Skipped resources expose a URI
+and optional local path. Human CLI output for existing files is unchanged.
+The daemon endpoint hash includes the JSON protocol version, so new clients
+do not reuse a daemon serving the old output shape.
+
+Public Rust API breaks:
+
+- `ResourceId::path()` is removed. Replace it with `to_file_path() -> Option<PathBuf>`;
+  use `Display` or `as_str()` when a URI is wanted.
+- `ResourceId::from_path` is fallible and requires an absolute local path
+  (remote UNC hosts are rejected); its serde
+  representation and parser use URIs, so legacy serialized path strings are
+  rejected. File URIs normalize aliases; ordering retains local Path ordering
+  for file/file comparisons and uses URI order for non-file identities.
+- Exhaustive ResourceLocator matches must handle the new ImageRegion variant.
+- `SkippedResource` adds `resource: ResourceId`; `path` becomes `Option<PathBuf>`.
+- `EmbeddingCache::resource_index` returns
+  `HashMap<ResourceId, CachedResourceState>` containing metadata and version.
+  `resource`, `put_resource`, `touch_resource`, `remove_resources`, `vectors_for`
+  and `lexical_search` take ResourceId keys/collections instead of Path keys.
+  `touch_resource` now accepts full metadata plus a ResourceVersion instead of
+  only an optional mtime.
+- `CachedResource` gains a required `version` field. `StoredVector.path` and
+  `LexicalHit.path` become `resource: ResourceId`.
+
+ResourceProvider, ResourceScope, ProvidedResource and ResourceVersion are
+explicitly unstable: they may change before 1.0; filesystem is the only supported
+provider. They are not an authorization/ACL framework. Direct library
+SearchResults serialization includes URI hits but does not add the CLI envelope.
+
+### Verification and demo
+
+The required Rust 1.99 fmt and all-target Clippy checks pass. The default test
+suite passes 102 tests with 9 existing weight/reference-dependent tests ignored.
+The updated library doctest compiles. Automated evidence includes:
+
+- A test-only memory provider driving indexing, semantic/lexical/hybrid retrieval,
+  previews, updates, unknown versions, read races and scoped deletion without
+  source files. FsProvider retains discovery and symlink path semantics.
+- Both caches supporting opaque URI identities; a reconstructed v3 schema
+  migrating with unchanged vector bytes, segment rowids, FTS bytes and ranked
+  hits, zero embedding calls, and retained entries across reopening/partial scopes.
+- Existing ranking, cache reuse, privacy migration, failure isolation, watcher,
+  shared-hub and daemon relay tests. Human output golden tests are unchanged.
+- Versioned CLI/MCP JSON, explicit MCP paths, shared-cache session isolation,
+  symlink escape rejection, and daemon protocol separation.
+- URI round-trips for spaces, Unicode, reserved characters and non-UTF-8 Unix
+  bytes. This Mac filesystem rejects creating non-UTF-8 filenames, so the output
+  test constructs that identity directly. Native Windows drive-path and legacy-key tests are
+  included but were not executed on this Mac.
+
+A real local EmbeddingGemma 2 q8 run (128 dimensions, text-only, debug binary)
+searched two synthetic Markdown notes, `garden.md` and `harbor.md`, using a
+throwaway cache. The first describes growing tomatoes/basil; the second describes
+ships and a lighthouse. No private corpus was used.
+
+| Pass | Query / mode | Top hit | Segments embedded | Search time |
+|---|---|---|---:|---:|
+| Cold | `garden.md` / hybrid | garden.md | 2 | 2556 ms |
+| Warm | `garden.md` / hybrid | garden.md | 0 | 668 ms |
+| Semantic | `vegetables growing outside` / semantic | garden.md | 0 | 488 ms |
+
+All responses carried schema version 2, file URIs and previews. Both later
+passes reported two unchanged resources. Times are the engine's reported search
+time, excluding model load; process wall times were 12307, 10804 and 8643 ms.
+This is an end-to-end smoke demo, not a scale/performance benchmark or a rerun
+of the private Phase 1 relevance evaluation.
+
+### What was deliberately not implemented
+
+No remote provider, provider registry, stable third-party connector API,
+Extractor/extract(), OCR, transcription, ACL/tenancy, new model or ranking change.
+Filesystem is the only real provider; the memory provider exists only in tests.
+
+### What we learned
+
+File identity affects cache keys, deterministic ranking and model title inputs,
+not just result display. Keeping the old file-key codec avoids a cache rebuild
+and preserves tie ordering. Enumeration omission cannot prove deletion because
+filters and errors also omit resources. URI normalization must happen after
+filesystem path resolution when accepting CLI paths with symlinks and `..`.
+The old daemon's output contract also needs an identity boundary during upgrades.
+
+### What should happen next
+
+Phase 3 can add the separate Extractor abstraction and a text-only implementation
+on top of provider reads and current locators. Before broader providers, revisit
+scope semantics and version guarantees with a real implementation. Size/mtime
+blind spots and filesystem TOCTOU remain limitations; this refactor does not
+claim atomic snapshots or introduce an ACL layer.
