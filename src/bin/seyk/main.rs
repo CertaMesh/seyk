@@ -595,6 +595,12 @@ fn format_locator(locator: &ResourceLocator) -> String {
         ResourceLocator::Time { start_ms, end_ms } => {
             format!(" @ {}–{}", clock(*start_ms), clock(*end_ms))
         }
+        ResourceLocator::ImageRegion {
+            x,
+            y,
+            width,
+            height,
+        } => format!(" region {x},{y} {width}x{height}"),
         ResourceLocator::WholeResource => String::new(),
     }
 }
@@ -637,7 +643,7 @@ fn format_hit(
     let mut s = format!(
         "{:.3}  {bold}{}{}{reset}",
         hit.score,
-        display_path(hit.resource.path(), base),
+        display_path(&hit.resource.to_file_path().expect("file resource"), base),
         format_locator(&hit.locator)
     );
     if let Some(h) = &hit.heading {
@@ -759,7 +765,7 @@ mod tests {
 
     fn hit(path: &str, score: f32, locator: ResourceLocator, preview: Option<&str>) -> SearchHit {
         SearchHit {
-            resource: ResourceId::from_path(path),
+            resource: ResourceId::from_path(path).unwrap(),
             locator,
             score,
             metadata: ResourceMetadata {
@@ -845,7 +851,7 @@ mod tests {
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(results()).unwrap();
         let first = &v["hits"][0];
-        assert_eq!(first["resource"], "/book/characters/father.md");
+        assert_eq!(first["resource"], "file:///book/characters/father.md");
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");

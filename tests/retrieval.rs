@@ -63,7 +63,8 @@ fn search(engine: &SearchEngine, dir: &Path, query: &str) -> SearchResults {
 fn top_file(r: &SearchResults) -> String {
     r.hits[0]
         .resource
-        .path()
+        .to_file_path()
+        .expect("file resource")
         .file_name()
         .unwrap()
         .to_string_lossy()
@@ -131,7 +132,7 @@ fn locator_points_at_the_matching_section() {
     else {
         panic!()
     };
-    let source = fs::read_to_string(hit.resource.path()).unwrap();
+    let source = fs::read_to_string(hit.resource.to_file_path().expect("file resource")).unwrap();
     let text = &source[byte_start as usize..byte_end as usize];
     assert!(text.starts_with("## Remembering wrong"), "{text:?}");
     assert_eq!(line_start, Some(7));

@@ -18,7 +18,8 @@ fn several_queries_keep_each_segments_best_score() {
         .unwrap();
     let file_of = |h: &seyk::SearchHit| {
         h.resource
-            .path()
+            .to_file_path()
+            .expect("file resource")
             .file_name()
             .unwrap()
             .to_string_lossy()

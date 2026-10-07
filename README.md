@@ -257,10 +257,10 @@ let results = engine
 for hit in &results.hits {
     match &hit.locator {
         ResourceLocator::Text { line_start, line_end, .. } => {
-            println!("{:.3} {}:{line_start:?}-{line_end:?}", hit.score, hit.resource.path().display())
+            println!("{:.3} {}:{line_start:?}-{line_end:?}", hit.score, hit.resource)
         }
-        ResourceLocator::WholeResource => println!("{:.3} {}", hit.score, hit.resource.path().display()),
-        other => println!("{:.3} {} {other:?}", hit.score, hit.resource.path().display()),
+        ResourceLocator::WholeResource => println!("{:.3} {}", hit.score, hit.resource),
+        other => println!("{:.3} {} {other:?}", hit.score, hit.resource),
     }
 }
 

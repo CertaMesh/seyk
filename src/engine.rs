@@ -816,7 +816,7 @@ impl<'e> SearchRequest<'e> {
                 .preview_chars
                 .and_then(|n| previews.preview(&key.0, &segment.locator, &metadata, n));
             hits.push(SearchHit {
-                resource: ResourceId::from_path(&key.0),
+                resource: ResourceId::from_path(&key.0)?,
                 locator: segment.locator.clone(),
                 score,
                 signals,

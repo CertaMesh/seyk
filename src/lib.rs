@@ -24,7 +24,7 @@
 //!     .execute()?;
 //!
 //! for hit in results.hits {
-//!     println!("{:.3} {} {:?}", hit.score, hit.resource.path().display(), hit.locator);
+//!     println!("{:.3} {} {:?}", hit.score, hit.resource, hit.locator);
 //! }
 //! # Ok(())
 //! # }

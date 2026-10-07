@@ -403,7 +403,7 @@ fn to_response(r: SearchResults) -> Response {
                 }),
                 _ => None,
             },
-            path: h.resource.path().to_path_buf(),
+            path: h.resource.to_file_path().expect("file resource"),
             score: (h.score * 1000.0).round() / 1000.0,
             heading: h.heading,
             matched: [

@@ -105,16 +105,18 @@ fn model_and_segmenter_profiles_invalidate_vectors() {
     assert_ne!(first_profile, changed_dimension.profile_id());
     assert!(fake_dimension.resource_count() > 0);
     assert!(
-        second_results
-            .hits
-            .iter()
-            .all(|hit| hit.resource.path().exists())
+        second_results.hits.iter().all(|hit| hit
+            .resource
+            .to_file_path()
+            .expect("file resource")
+            .exists())
     );
     assert!(
-        first_results
-            .hits
-            .iter()
-            .all(|hit| hit.resource.path().exists())
+        first_results.hits.iter().all(|hit| hit
+            .resource
+            .to_file_path()
+            .expect("file resource")
+            .exists())
     );
     drop(changed_dimension);
 
