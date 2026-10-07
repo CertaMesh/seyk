@@ -60,24 +60,13 @@ fn parse_args() -> Result<Args, String> {
 /// Peak resident set size of this process so far, in MiB.
 #[cfg(unix)]
 fn peak_rss_mib() -> Option<f64> {
-    // Declared by hand to avoid a libc dependency. Layout matches 64-bit
-    // macOS and Linux: two timevals, then 14 longs starting with ru_maxrss.
-    #[repr(C)]
-    struct Rusage {
-        utime: [i64; 2],
-        stime: [i64; 2],
-        maxrss: i64,
-        _rest: [i64; 13],
-    }
-    unsafe extern "C" {
-        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
-    }
-    let mut u = std::mem::MaybeUninit::<Rusage>::zeroed();
-    // SAFETY: RUSAGE_SELF (0) with a correctly sized, writable struct.
-    if unsafe { getrusage(0, u.as_mut_ptr()) } != 0 {
+    let mut u = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: a writable rusage for getrusage to fill.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, u.as_mut_ptr()) } != 0 {
         return None;
     }
-    let maxrss = unsafe { u.assume_init() }.maxrss as f64;
+    // SAFETY: getrusage succeeded, and the struct was zeroed beforehand.
+    let maxrss = unsafe { u.assume_init() }.ru_maxrss as f64;
     // macOS reports bytes, Linux kilobytes.
     let bytes = if cfg!(target_os = "macos") {
         maxrss
@@ -100,12 +89,9 @@ fn rss() -> String {
 /// comparable, so every row records how busy it was.
 #[cfg(unix)]
 fn load_average() -> String {
-    unsafe extern "C" {
-        fn getloadavg(loadavg: *mut f64, nelem: i32) -> i32;
-    }
     let mut l = [0.0f64; 3];
     // SAFETY: the buffer holds the three values requested.
-    if unsafe { getloadavg(l.as_mut_ptr(), 3) } != 3 {
+    if unsafe { libc::getloadavg(l.as_mut_ptr(), 3) } != 3 {
         return "n/a".into();
     }
     format!("{:.1} {:.1} {:.1}", l[0], l[1], l[2])

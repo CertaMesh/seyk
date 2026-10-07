@@ -212,9 +212,12 @@ fn stem(word: &str) -> &str {
     }
 }
 
-/// How many distinct query content words occur in `text`.
-fn keyword_score(stems: &[&str], text: &str) -> usize {
-    let present: HashSet<String> = words(text).map(|w| stem(&w).to_string()).collect();
+fn stems_of(text: &str) -> HashSet<String> {
+    words(text).map(|w| stem(&w).to_string()).collect()
+}
+
+/// How many distinct query content words occur among `present` stems.
+fn keyword_score(stems: &[&str], present: &HashSet<String>) -> usize {
     stems.iter().filter(|s| present.contains(**s)).count()
 }
 
@@ -223,6 +226,8 @@ struct Segment {
     path: PathBuf,
     lines: (u64, u64),
     text: String,
+    /// Computed once, since every query scores every segment.
+    stems: HashSet<String>,
 }
 
 fn segment_corpus(paths: &[PathBuf], segmenter: &TextSegmenter) -> Vec<Segment> {
@@ -248,6 +253,7 @@ fn segment_corpus(paths: &[PathBuf], segmenter: &TextSegmenter) -> Vec<Segment> 
                 .map(|s| Segment {
                     path: r.path.clone(),
                     lines: (s.line_start, s.line_end),
+                    stems: stems_of(&s.text),
                     text: s.text,
                 }),
         );
@@ -361,7 +367,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (i, hit) in results.hits.iter().enumerate() {
             let path = hit.resource.path();
             let text = hit_text(path, &hit.locator, &mut files);
-            let overlap = keyword_score(&stems, &text);
+            let overlap = keyword_score(&stems, &stems_of(&text));
             let mark = if overlap == 0 {
                 no_overlap += 1;
                 "  [no keyword overlap]".to_string()
@@ -385,7 +391,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut ranked: Vec<(usize, &Segment)> = segments
             .iter()
-            .map(|s| (keyword_score(&stems, &s.text), s))
+            .map(|s| (keyword_score(&stems, &s.stems), s))
             .filter(|(score, _)| *score > 0)
             .collect();
         // Stable sort keeps file order among ties, so output is reproducible.

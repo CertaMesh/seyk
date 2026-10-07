@@ -930,6 +930,7 @@ dependencies = [
  "globset",
  "hf-hub",
  "image",
+ "libc",
  "notify",
  "ort",
  "predicates",

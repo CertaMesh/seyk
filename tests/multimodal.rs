@@ -7,7 +7,7 @@ use gemma_search::SearchEngine;
 use gemma_search::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision, vision};
 use gemma_search::embedder::{Embedder, ResourceInput};
 use image::{ImageBuffer, Rgb};
-use serde_json::Value;
+use serde::Deserialize;
 
 fn rgb(r: u8, g: u8, b: u8) -> Rgb<u8> {
     Rgb([r, g, b])
@@ -90,81 +90,133 @@ fn first_path(results: &gemma_search::SearchResults) -> PathBuf {
         .to_path_buf()
 }
 
-fn json_f32s(value: &Value) -> Vec<f32> {
-    if let Some(values) = value.as_array() {
-        values.iter().flat_map(json_f32s).collect()
-    } else {
-        vec![value.as_f64().unwrap() as f32]
+/// Reference data from scripts/reference_image_embeddings.py.
+#[derive(Deserialize)]
+struct ImageReference {
+    images: Vec<ImageRecord>,
+}
+
+#[derive(Deserialize)]
+struct ImageRecord {
+    name: String,
+    path: PathBuf,
+    /// (width, height)
+    resized_size: [u32; 2],
+    pixel_values_shape: [usize; 2],
+    pixel_values: Vec<Vec<f32>>,
+    position_ids_shape: [usize; 2],
+    position_ids: Vec<[i64; 2]>,
+    num_soft_tokens: usize,
+    input_ids: Vec<u32>,
+    embedding: Vec<f32>,
+}
+
+impl ImageRecord {
+    /// Pixel patches flattened row-major, after checking them against the declared shape.
+    fn pixels(&self) -> Result<Vec<f32>, String> {
+        let [rows, width] = self.pixel_values_shape;
+        if self.pixel_values.len() != rows || self.pixel_values.iter().any(|r| r.len() != width) {
+            return Err(format!(
+                "{}: pixel values do not match [{rows}, {width}]",
+                self.name
+            ));
+        }
+        Ok(self.pixel_values.concat())
     }
+
+    /// Patch positions flattened as (x, y) pairs, after checking the declared shape.
+    fn positions(&self) -> Result<Vec<i64>, String> {
+        let rows = self.position_ids.len();
+        if self.position_ids_shape != [rows, 2] {
+            return Err(format!(
+                "{}: {rows} position rows, declared {:?}",
+                self.name, self.position_ids_shape
+            ));
+        }
+        Ok(self.position_ids.concat())
+    }
+}
+
+fn load_reference() -> ImageReference {
+    let path = std::env::var("GEMMA_IMAGE_REFERENCE_JSON")
+        .expect("set GEMMA_IMAGE_REFERENCE_JSON to the Python reference JSON");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn load_tokenizer(model_dir: &str) -> tokenizers::Tokenizer {
+    tokenizers::Tokenizer::from_file(Path::new(model_dir).join("tokenizer.json")).unwrap()
+}
+
+/// Checks Rust preprocessing and tokenisation against one reference record.
+/// Returns the image bytes, the preprocessed image and the largest pixel
+/// difference, which is reported rather than asserted.
+fn check_preprocessing(
+    record: &ImageRecord,
+    tokenizer: &tokenizers::Tokenizer,
+) -> (Vec<u8>, vision::Preprocessed, f32) {
+    let path = record.path.display();
+    let bytes = std::fs::read(&record.path).unwrap();
+    let pre = vision::preprocess(&bytes).unwrap();
+    assert_eq!([pre.width, pre.height], record.resized_size, "{path}");
+    assert_eq!(pre.soft_tokens, record.num_soft_tokens, "{path}");
+
+    let expected_pixels = record.pixels().unwrap();
+    assert_eq!(pre.pixel_values.len(), expected_pixels.len(), "{path}");
+    let max_pixel_diff = pre
+        .pixel_values
+        .iter()
+        .zip(&expected_pixels)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+    assert_eq!(
+        pre.position_ids,
+        record.positions().unwrap(),
+        "position ids differ for {path}"
+    );
+
+    let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
+    let actual_ids = tokenizer.encode(text, true).unwrap().get_ids().to_vec();
+    assert_eq!(actual_ids, record.input_ids, "token ids differ for {path}");
+    (bytes, pre, max_pixel_diff)
+}
+
+#[test]
+fn image_reference_records_check_declared_shapes() {
+    let json = r#"{"images": [{
+        "name": "tiny", "path": "tiny.png", "original_size": [2, 1],
+        "resized_size": [2, 1],
+        "pixel_values_shape": [2, 3], "pixel_values": [[0, 1, 2], [3, 4, 5]],
+        "position_ids_shape": [2, 2], "position_ids": [[0, 0], [-1, -1]],
+        "num_soft_tokens": 1, "input_ids": [1, 2], "embedding": [0.5]
+    }]}"#;
+    let mut record = serde_json::from_str::<ImageReference>(json)
+        .unwrap()
+        .images
+        .remove(0);
+    assert_eq!(record.pixels().unwrap(), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+    assert_eq!(record.positions().unwrap(), [0, 0, -1, -1]);
+
+    record.position_ids.pop();
+    assert!(record.positions().is_err());
+    record.pixel_values[1].pop();
+    assert!(record.pixels().is_err());
+    let triple = json.replace("[-1, -1]", "[-1, -1, -1]");
+    assert!(serde_json::from_str::<ImageReference>(&triple).is_err());
 }
 
 #[test]
 #[ignore = "needs generated Python reference tensors"]
 fn image_preprocessing_matches_python_reference() {
-    let reference_path = std::env::var("GEMMA_IMAGE_REFERENCE_JSON")
-        .expect("set GEMMA_IMAGE_REFERENCE_JSON to the Python reference JSON");
     let model_dir =
         std::env::var("GEMMA_ONNX_DIR").expect("set GEMMA_ONNX_DIR to the ONNX snapshot directory");
-    let root: Value = serde_json::from_slice(&std::fs::read(reference_path).unwrap()).unwrap();
-    let tokenizer =
-        tokenizers::Tokenizer::from_file(Path::new(&model_dir).join("tokenizer.json")).unwrap();
+    let reference = load_reference();
+    let tokenizer = load_tokenizer(&model_dir);
 
-    for record in root["images"].as_array().unwrap() {
-        let path = PathBuf::from(record["path"].as_str().unwrap());
-        let bytes = std::fs::read(&path).unwrap();
-        let pre = vision::preprocess(&bytes).unwrap();
-        let expected_size = record["resized_size"].as_array().unwrap();
-        assert_eq!(pre.width, expected_size[0].as_u64().unwrap() as u32);
-        assert_eq!(pre.height, expected_size[1].as_u64().unwrap() as u32);
-        assert_eq!(
-            pre.soft_tokens,
-            record["num_soft_tokens"].as_u64().unwrap() as usize
-        );
-
-        let expected_pixels = json_f32s(&record["pixel_values"]);
-        assert_eq!(pre.pixel_values.len(), expected_pixels.len());
-        let max_pixel_diff = pre
-            .pixel_values
-            .iter()
-            .zip(&expected_pixels)
-            .map(|(actual, expected)| (actual - expected).abs())
-            .fold(0.0f32, f32::max);
-        let expected_positions = record["position_ids"].as_array().unwrap();
-        let positions_match = pre
-            .position_ids
-            .chunks_exact(2)
-            .zip(expected_positions)
-            .all(|(actual, expected)| {
-                actual[0] == expected[0].as_i64().unwrap()
-                    && actual[1] == expected[1].as_i64().unwrap()
-            });
-        assert!(
-            positions_match,
-            "position ids differ for {}",
-            path.display()
-        );
-
-        let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
-        let actual_ids = tokenizer.encode(text, true).unwrap().get_ids().to_vec();
-        let expected_ids: Vec<u32> = record["input_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_u64().unwrap() as u32)
-            .collect();
-        assert_eq!(
-            actual_ids,
-            expected_ids,
-            "token ids differ for {}",
-            path.display()
-        );
+    for record in &reference.images {
+        let (_, pre, max_pixel_diff) = check_preprocessing(record, &tokenizer);
         println!(
             "{} resized={}x{} soft_tokens={} max_pixel_diff={:.7}",
-            record["name"].as_str().unwrap(),
-            pre.width,
-            pre.height,
-            pre.soft_tokens,
-            max_pixel_diff
+            record.name, pre.width, pre.height, pre.soft_tokens, max_pixel_diff
         );
     }
 }
@@ -172,15 +224,13 @@ fn image_preprocessing_matches_python_reference() {
 #[test]
 #[ignore = "needs generated Python reference tensors and EmbeddingGemma 2 weights"]
 fn image_preprocessing_and_embedding_matches_python_reference() {
-    let reference_path = std::env::var("GEMMA_IMAGE_REFERENCE_JSON")
-        .expect("set GEMMA_IMAGE_REFERENCE_JSON to the Python reference JSON");
     let model_dir =
         std::env::var("GEMMA_ONNX_DIR").expect("set GEMMA_ONNX_DIR to the ONNX snapshot directory");
     let precision: Precision = std::env::var("GEMMA_SEARCH_TEST_PRECISION")
         .unwrap_or_else(|_| "q8".into())
         .parse()
         .unwrap();
-    let root: Value = serde_json::from_slice(&std::fs::read(reference_path).unwrap()).unwrap();
+    let reference = load_reference();
     let embedder = GemmaEmbedder::load(GemmaConfig {
         source: ModelSource::Directory(model_dir.clone().into()),
         dimension: Dimension::D768,
@@ -191,76 +241,26 @@ fn image_preprocessing_and_embedding_matches_python_reference() {
         ..GemmaConfig::default()
     })
     .unwrap();
-    let tokenizer =
-        tokenizers::Tokenizer::from_file(Path::new(&model_dir).join("tokenizer.json")).unwrap();
+    let tokenizer = load_tokenizer(&model_dir);
 
     let cosine_floor = if precision == Precision::Fp32 {
         0.999
     } else {
         0.995
     };
-    for record in root["images"].as_array().unwrap() {
-        let path = PathBuf::from(record["path"].as_str().unwrap());
-        let bytes = std::fs::read(&path).unwrap();
-        let pre = vision::preprocess(&bytes).unwrap();
-        let expected_size = record["resized_size"].as_array().unwrap();
-        assert_eq!(pre.width, expected_size[0].as_u64().unwrap() as u32);
-        assert_eq!(pre.height, expected_size[1].as_u64().unwrap() as u32);
-        assert_eq!(
-            pre.soft_tokens,
-            record["num_soft_tokens"].as_u64().unwrap() as usize
-        );
-
-        let expected_pixels = json_f32s(&record["pixel_values"]);
-        let max_pixel_diff = pre
-            .pixel_values
-            .iter()
-            .zip(&expected_pixels)
-            .map(|(actual, expected)| (actual - expected).abs())
-            .fold(0.0f32, f32::max);
-        assert_eq!(pre.pixel_values.len(), expected_pixels.len());
-        let expected_positions = record["position_ids"].as_array().unwrap();
-        let positions_match = pre
-            .position_ids
-            .chunks_exact(2)
-            .zip(expected_positions)
-            .all(|(actual, expected)| {
-                actual[0] == expected[0].as_i64().unwrap()
-                    && actual[1] == expected[1].as_i64().unwrap()
-            });
-        assert!(
-            positions_match,
-            "position ids differ for {}",
-            path.display()
-        );
-
-        let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
-        let actual_ids = tokenizer.encode(text, true).unwrap().get_ids().to_vec();
-        let expected_ids: Vec<u32> = record["input_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_u64().unwrap() as u32)
-            .collect();
-        assert_eq!(
-            actual_ids,
-            expected_ids,
-            "token ids differ for {}",
-            path.display()
-        );
-
+    for record in &reference.images {
+        let (bytes, pre, max_pixel_diff) = check_preprocessing(record, &tokenizer);
         let actual = embedder
             .embed_resources(&[ResourceInput::Image { bytes: &bytes }])
             .unwrap()
             .pop()
             .unwrap();
         let expected =
-            gemma_search::Embedding::from_raw(json_f32s(&record["embedding"]), Dimension::D768)
-                .unwrap();
+            gemma_search::Embedding::from_raw(record.embedding.clone(), Dimension::D768).unwrap();
         let cosine = actual.cosine(&expected);
         println!(
             "{} precision={} resized={}x{} soft_tokens={} max_pixel_diff={:.7} cosine={:.7}",
-            record["name"].as_str().unwrap(),
+            record.name,
             precision.name(),
             pre.width,
             pre.height,
@@ -271,7 +271,7 @@ fn image_preprocessing_and_embedding_matches_python_reference() {
         assert!(
             cosine >= cosine_floor,
             "{} cosine {cosine:.7} below {cosine_floor}",
-            path.display()
+            record.path.display()
         );
     }
 }
