@@ -20,7 +20,7 @@ pub enum TextFormat {
     Code,
 }
 
-/// Size limits for text segments, in characters.
+/// Size limits for text segments, in UTF-8 bytes (characters, for ASCII text).
 ///
 /// Defaults are chosen for retrieval quality, not to fill the 8K context.
 /// A vector that averages several ideas scores lower for a query matching only
@@ -37,7 +37,8 @@ pub struct TextSegmenterConfig {
     pub min_chars: usize,
     /// Stop merging short fragments once a chunk reaches this size.
     pub target_chars: usize,
-    /// No chunk is longer than this. Longer paragraphs are split at sentences.
+    /// Longer paragraphs are split at sentences. A merged chunk can exceed this
+    /// slightly, since headings and the gaps between paragraphs are not counted.
     pub max_chars: usize,
     /// When a long paragraph is cut at a sentence, its last sentence (if no
     /// longer than this) is repeated at the start of the next piece. There is
@@ -81,6 +82,15 @@ struct Block {
     heading_path: Option<String>,
 }
 
+/// The chunk being built: one contiguous source span, gaps included.
+struct Pending {
+    range: Range<usize>,
+    /// Heading path of the last block added.
+    heading: Option<String>,
+    /// Bytes of non-heading text, so 0 means the chunk is only headings.
+    body_len: usize,
+}
+
 impl TextSegmenter {
     pub fn new(config: TextSegmenterConfig) -> Self {
         Self { config }
@@ -104,13 +114,13 @@ impl TextSegmenter {
         let lines = LineIndex::new(source);
 
         let mut out = Vec::new();
-        let mut current: Vec<Block> = Vec::new();
-        // Length of the non-heading text in `current`.
-        let mut body_len = 0;
+        let mut current: Option<Pending> = None;
 
         for block in blocks {
             let len = block.range.len();
-            let only_headings = current.iter().all(|b| b.is_heading);
+            // Every non-heading block is nonempty, so no body means only headings.
+            let body_len = current.as_ref().map_or(0, |c| c.body_len);
+            let only_headings = body_len == 0;
             let min = self.config.min_chars;
 
             // A heading always starts a new chunk; a heading-only chunk merges forward.
@@ -119,15 +129,25 @@ impl TextSegmenter {
             let both_substantial = !block.is_heading && body_len >= min && len >= min;
             let too_big = !only_headings && body_len + len > self.config.target_chars;
             if new_section || both_substantial || too_big {
-                self.flush(source, &lines, &mut current, &mut out);
-                body_len = 0;
+                self.flush(source, &lines, current.take(), &mut out);
             }
-            if !block.is_heading {
-                body_len += len;
+            let added = if block.is_heading { 0 } else { len };
+            match &mut current {
+                Some(c) => {
+                    c.range.end = block.range.end;
+                    c.heading = block.heading_path;
+                    c.body_len += added;
+                }
+                None => {
+                    current = Some(Pending {
+                        range: block.range,
+                        heading: block.heading_path,
+                        body_len: added,
+                    })
+                }
             }
-            current.push(block);
         }
-        self.flush(source, &lines, &mut current, &mut out);
+        self.flush(source, &lines, current, &mut out);
         out
     }
 
@@ -135,16 +155,17 @@ impl TextSegmenter {
         &self,
         source: &str,
         lines: &LineIndex,
-        current: &mut Vec<Block>,
+        pending: Option<Pending>,
         out: &mut Vec<TextSegment>,
     ) {
-        if current.is_empty() {
+        let Some(Pending {
+            range: Range { start, end },
+            heading,
+            ..
+        }) = pending
+        else {
             return;
-        }
-        let start = current.first().unwrap().range.start;
-        let end = current.last().unwrap().range.end;
-        let heading = current.last().unwrap().heading_path.clone();
-        current.clear();
+        };
         let text = &source[start..end];
         if text.trim().is_empty() {
             return;
@@ -169,26 +190,9 @@ impl TextSegmenter {
             }
             let mut start = block.range.start;
             while block.range.end - start > max {
-                let window_end = floor_char_boundary(source, start + max);
-                let window = &source[start..window_end];
-                // Prefer a sentence end, then any whitespace, past the halfway point.
-                let min = window.len() / 2;
-                let cut = rfind_sentence_end(window, min)
-                    .or_else(|| {
-                        window[min..]
-                            .rfind(char::is_whitespace)
-                            .map(|i| min + i + 1)
-                    })
-                    .unwrap_or(window.len());
-                let piece_end = start + cut;
+                let (piece_end, next) = self.split_point(source, start);
                 out.push(trimmed_block(source, start..piece_end, &block));
-                // Repeat the piece's last sentence so a thought cut in half is
-                // still whole in one of the two pieces.
-                let piece = source[start..piece_end].trim_end();
-                let overlap_start = rfind_sentence_end(&piece[..piece.len().saturating_sub(1)], 0)
-                    .map(|i| skip_whitespace(source, start + i))
-                    .filter(|&s| s > start && piece_end - s <= self.config.overlap_chars);
-                start = overlap_start.unwrap_or_else(|| skip_whitespace(source, piece_end));
+                start = next;
             }
             if start < block.range.end {
                 out.push(trimmed_block(source, start..block.range.end, &block));
@@ -196,6 +200,42 @@ impl TextSegmenter {
         }
         out.retain(|b| !b.range.is_empty());
         out
+    }
+}
+
+impl TextSegmenter {
+    /// Where the piece starting at `start` ends, and where the next one begins.
+    ///
+    /// Budgets are bytes, so every offset is snapped to a char boundary, and the
+    /// next start is always past `start`. A budget too small for even one char
+    /// still takes that whole char, so the caller always makes progress.
+    fn split_point(&self, source: &str, start: usize) -> (usize, usize) {
+        let mut window_end = floor_char_boundary(source, start + self.config.max_chars);
+        if window_end == start {
+            window_end += source[start..].chars().next().map_or(1, char::len_utf8);
+        }
+        let window = &source[start..window_end];
+        // Prefer a sentence end, then any whitespace, past the halfway point.
+        let half = window.len() / 2;
+        let cut = rfind_sentence_end(window, half)
+            .or_else(|| {
+                window
+                    .char_indices()
+                    .filter(|&(i, c)| i >= half && c.is_whitespace())
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+            })
+            .unwrap_or(window.len());
+        let piece_end = start + cut;
+        // Repeat the piece's last sentence so a thought cut in half is still
+        // whole in one of the two pieces. The piece is trimmed, so its own final
+        // punctuation is never followed by whitespace and cannot match.
+        let piece = source[start..piece_end].trim_end();
+        let next = rfind_sentence_end(piece, 0)
+            .map(|i| skip_whitespace(source, start + i))
+            .filter(|&s| s > start && piece_end - s <= self.config.overlap_chars)
+            .unwrap_or_else(|| skip_whitespace(source, piece_end));
+        (piece_end, next)
     }
 }
 
@@ -207,6 +247,8 @@ fn trimmed_block(source: &str, range: Range<usize>, like: &Block) -> Block {
     }
 }
 
+/// Offset just past the last ASCII sentence end at or after `min`. ASCII, so
+/// always a char boundary.
 fn rfind_sentence_end(window: &str, min: usize) -> Option<usize> {
     let bytes = window.as_bytes();
     (min..bytes.len().saturating_sub(1))
@@ -557,6 +599,49 @@ mod tests {
         let src = "Ünïcödé — „Zitat“ ✓. ".repeat(200);
         for s in seg(&src, TextFormat::Plain) {
             assert_eq!(&src[s.byte_range.clone()], s.text);
+        }
+    }
+
+    /// Every piece is nonempty, maps back to its source slice, and the pieces
+    /// cover the text in order.
+    fn assert_well_formed(src: &str, segs: &[TextSegment]) {
+        assert!(!segs.is_empty() || src.trim().is_empty());
+        let mut last_start = None;
+        for s in segs {
+            assert!(!s.text.is_empty());
+            assert_eq!(&src[s.byte_range.clone()], s.text);
+            assert!(last_start < Some(s.byte_range.start), "pieces must advance");
+            last_start = Some(s.byte_range.start);
+        }
+    }
+
+    #[test]
+    fn long_runs_without_punctuation_split_on_char_boundaries() {
+        // 2, 3 and 4 byte chars with no sentence end or ASCII space to cut at;
+        // these used to panic by slicing inside a char.
+        for unit in ["é", "日本語", "─", "🙂"] {
+            let src = unit.repeat(3000 / unit.len() + 1);
+            assert_well_formed(&src, &seg(&src, TextFormat::Plain));
+        }
+        // Multibyte whitespace (NBSP, em space) as the only cut points.
+        for ws in ['\u{a0}', '\u{2003}'] {
+            let src = format!("wörd{ws}").repeat(800);
+            assert_well_formed(&src, &seg(&src, TextFormat::Plain));
+        }
+    }
+
+    #[test]
+    fn tiny_budgets_still_make_progress() {
+        let src = "Ab é 日. Cd ─ 🙂! Ef gh.";
+        for max_chars in 0..6 {
+            let s = TextSegmenter::new(TextSegmenterConfig {
+                min_chars: 0,
+                target_chars: max_chars,
+                max_chars,
+                overlap_chars: 2,
+            })
+            .segment(src, TextFormat::Plain);
+            assert_well_formed(src, &s);
         }
     }
 
