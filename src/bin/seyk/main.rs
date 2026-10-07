@@ -1,5 +1,7 @@
 //! `seyk`: a thin command-line front end for the `seyk` crate.
 
+#[cfg(all(feature = "mcp", unix))]
+mod daemon;
 #[cfg(feature = "mcp")]
 mod mcp;
 
@@ -127,12 +129,27 @@ enum Command {
     },
     /// Serve semantic search to agents over MCP (stdio). The model stays loaded.
     #[cfg(feature = "mcp")]
+    ///
+    /// Sessions share one background daemon, which loads the model once and
+    /// exits after a quiet period. It starts on first use.
     Mcp {
         /// Folders the server may search. Defaults to the current directory.
         roots: Vec<PathBuf>,
-        /// Do not index in the background; each search embeds what it needs first.
+        /// Run the server in this process instead of the shared daemon.
+        #[arg(long)]
+        standalone: bool,
+        /// Do not index in the background; each search embeds what it needs
+        /// first. Implies --standalone.
         #[arg(long)]
         no_watch: bool,
+        #[command(flatten)]
+        model: ModelArgs,
+    },
+    /// The shared background process behind `seyk mcp`.
+    #[cfg(all(feature = "mcp", unix))]
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
         #[command(flatten)]
         model: ModelArgs,
     },
@@ -154,6 +171,24 @@ enum CacheAction {
     },
     /// Delete every cached embedding.
     Clear,
+}
+
+#[cfg(all(feature = "mcp", unix))]
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Run the daemon in the foreground. `seyk mcp` starts one automatically.
+    Run {
+        /// Exit after this many minutes without sessions.
+        #[arg(long, default_value_t = 15)]
+        idle_minutes: u64,
+    },
+    /// Show the running daemon, its sessions and folders.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop the running daemon. Connected sessions lose their search tool.
+    Stop,
 }
 
 #[derive(Subcommand)]
@@ -268,11 +303,43 @@ fn run(cli: Cli) -> Result<ExitCode> {
         #[cfg(feature = "mcp")]
         Command::Mcp {
             roots,
+            standalone,
             no_watch,
             model,
         } => {
             let roots = default_paths(roots)?;
-            mcp::serve(roots, Box::new(move || engine(&model, false)), !no_watch)?;
+            #[cfg(unix)]
+            if !standalone && !no_watch {
+                daemon::relay(&daemon::Endpoint::new(model.to_args()?)?, roots)?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let _ = standalone;
+            mcp::serve_standalone(roots, Box::new(move || engine(&model, false)), !no_watch)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(all(feature = "mcp", unix))]
+        Command::Daemon { action, model } => {
+            let endpoint = daemon::Endpoint::new(model.to_args()?)?;
+            match action {
+                DaemonAction::Run { idle_minutes } => daemon::run(
+                    &endpoint,
+                    Box::new(move || engine(&model, false)),
+                    std::time::Duration::from_secs(idle_minutes * 60),
+                )?,
+                DaemonAction::Status { json } => match daemon::status(&endpoint)? {
+                    None if json => println!("null"),
+                    None => println!("No daemon running for this configuration."),
+                    Some(s) if json => println!("{}", serde_json::to_string_pretty(&s)?),
+                    Some(s) => print!("{}", format_daemon_status(&s)),
+                },
+                DaemonAction::Stop => {
+                    if daemon::stop(&endpoint)? {
+                        println!("Stopped.");
+                    } else {
+                        println!("No daemon running for this configuration.");
+                    }
+                }
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Model { action, model } => {
@@ -344,6 +411,53 @@ fn watch_and_index(
         },
     )?;
     Ok(ExitCode::SUCCESS)
+}
+
+impl ModelArgs {
+    /// These options as flags, with paths made absolute, so a daemon started
+    /// from another directory resolves them the same way.
+    #[cfg(all(feature = "mcp", unix))]
+    fn to_args(&self) -> Result<Vec<String>> {
+        let mut a = vec![
+            "--dimension".to_string(),
+            self.dimension.get().to_string(),
+            "--precision".to_string(),
+            self.precision.name().to_string(),
+        ];
+        if let Some(m) = &self.model {
+            let p = expand_tilde(Path::new(m));
+            let m = if p.is_dir() {
+                p.canonicalize()?.display().to_string()
+            } else {
+                m.clone()
+            };
+            a.extend(["--model".to_string(), m]);
+        }
+        if self.text_only {
+            a.push("--text-only".to_string());
+        }
+        if let Some(c) = &self.cache_path {
+            let c = std::path::absolute(expand_tilde(c))?;
+            a.extend(["--cache-path".to_string(), c.display().to_string()]);
+        }
+        Ok(a)
+    }
+}
+
+#[cfg(all(feature = "mcp", unix))]
+fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
+    let mut out = format!(
+        "seyk daemon {} (pid {}), {} session(s)\n",
+        s.version, s.pid, s.sessions
+    );
+    for (folder, state) in &s.folders {
+        let state = serde_json::to_value(state)
+            .ok()
+            .and_then(|v| v["state"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        out.push_str(&format!("  {state:<14} {}\n", folder.display()));
+    }
+    out
 }
 
 fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
