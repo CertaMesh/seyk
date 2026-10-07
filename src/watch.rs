@@ -6,7 +6,7 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 
@@ -67,21 +67,50 @@ pub fn watch(
 
     // Watch before the first pass so edits made during it are not lost.
     run(&mut on_pass);
+    debounce_loop(
+        &rx,
+        options.debounce,
+        |event| matches!(event, Ok(e) if relevant(e, &paths, discovery)),
+        || run(&mut on_pass),
+    );
+    Ok(())
+}
+
+/// Run `pass` once things have been quiet for `debounce` after a relevant event.
+///
+/// One deadline is the whole state: `None` while idle, `Some` once a relevant
+/// event arrived. Only relevant events push it back, so build or VCS churn
+/// cannot postpone a pending pass forever. Returns when the channel closes.
+fn debounce_loop<E>(
+    rx: &mpsc::Receiver<E>,
+    debounce: Duration,
+    relevant: impl Fn(&E) -> bool,
+    mut pass: impl FnMut(),
+) {
+    // Far-future durations would overflow `Instant`; an hour is plenty.
+    let debounce = debounce.min(Duration::from_secs(3600));
+    let mut due: Option<Instant> = None;
     loop {
-        // Block until something relevant changes, then wait for quiet.
-        match rx.recv() {
-            Ok(Ok(event)) if relevant(&event, &paths, discovery) => {}
-            Ok(_) => continue,
-            Err(_) => return Ok(()),
-        }
-        loop {
-            match rx.recv_timeout(options.debounce) {
-                Ok(_) => continue,
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        let event = match due {
+            None => match rx.recv() {
+                Ok(e) => e,
+                Err(_) => return,
+            },
+            // Check before receiving, so a backlog of ignored events cannot starve it.
+            Some(d) if Instant::now() >= d => {
+                due = None;
+                pass();
+                continue;
             }
+            Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
+                Ok(e) => e,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            },
+        };
+        if relevant(&event) {
+            due = Some(Instant::now() + debounce);
         }
-        run(&mut on_pass);
     }
 }
 
@@ -96,12 +125,14 @@ fn relevant(event: &notify::Event, roots: &[PathBuf], discovery: &DiscoveryOptio
         return false;
     }
     event.paths.iter().any(|p| {
-        // Judge only the part below the root: a root inside `~/.notes` is fine.
-        let below = roots
-            .iter()
-            .find_map(|r| p.strip_prefix(r).ok())
-            .unwrap_or(p);
-        !ignored(below, discovery)
+        // Judge only the part below a root, so a root inside `~/.notes` is fine.
+        // Roots can nest (`/repo` and `/repo/.notes`); any root admitting the
+        // path is enough, whatever order the roots came in.
+        let mut below = roots.iter().filter_map(|r| p.strip_prefix(r).ok()).peekable();
+        if below.peek().is_none() {
+            return !ignored(p, discovery);
+        }
+        below.any(|b| !ignored(b, discovery))
     })
 }
 
@@ -136,5 +167,65 @@ mod tests {
         let event = notify::Event::new(EventKind::Any).add_path("/home/me/.notes/idea.md".into());
         assert!(relevant(&event, &["/home/me/.notes".into()], &d));
         assert!(!relevant(&event, &["/home/me".into()], &d));
+    }
+
+    #[test]
+    fn nested_roots_admit_in_any_order() {
+        let d = DiscoveryOptions::default();
+        let event = notify::Event::new(EventKind::Any).add_path("/repo/.notes/idea.md".into());
+        let parent: PathBuf = "/repo".into();
+        let hidden: PathBuf = "/repo/.notes".into();
+        assert!(relevant(&event, &[parent.clone(), hidden.clone()], &d));
+        assert!(relevant(&event, &[hidden, parent], &d));
+    }
+
+    /// Events are (relevant, gap before sending). Returns how many passes ran.
+    fn passes(events: Vec<(bool, Duration)>, debounce: Duration) -> usize {
+        let (tx, rx) = mpsc::channel();
+        let sender = std::thread::spawn(move || {
+            for (relevant, gap) in events {
+                std::thread::sleep(gap);
+                tx.send(relevant).unwrap();
+            }
+            // Leave time for a pending pass before closing the channel.
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let mut n = 0;
+        debounce_loop(&rx, debounce, |&r| r, || n += 1);
+        sender.join().unwrap();
+        n
+    }
+
+    #[test]
+    fn a_burst_of_relevant_changes_runs_one_pass() {
+        let ms = Duration::from_millis;
+        assert_eq!(passes(vec![(true, ms(0)); 20], ms(100)), 1);
+    }
+
+    #[test]
+    fn ignored_churn_neither_triggers_nor_postpones_a_pass() {
+        let ms = Duration::from_millis;
+        assert_eq!(passes(vec![(false, ms(5)); 40], ms(50)), 0);
+        // One real edit, then 600ms of ignored churn every 5ms: the pass must
+        // still run once, 50ms after the edit, not after the churn stops.
+        let mut events = vec![(true, ms(0))];
+        events.extend(vec![(false, ms(5)); 120]);
+        let started = Instant::now();
+        let (tx, rx) = mpsc::channel();
+        let sender = std::thread::spawn(move || {
+            for (r, gap) in events {
+                std::thread::sleep(gap);
+                if tx.send(r).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut ran_at = None;
+        debounce_loop(&rx, ms(50), |&r| r, || {
+            ran_at.get_or_insert(started.elapsed());
+        });
+        sender.join().unwrap();
+        let ran_at = ran_at.expect("pass ran");
+        assert!(ran_at < ms(400), "pass postponed by ignored churn: {ran_at:?}");
     }
 }
