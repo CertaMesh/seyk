@@ -221,8 +221,9 @@ impl TextSegmenter {
             .or_else(|| {
                 window
                     .char_indices()
-                    .filter(|&(i, c)| i >= half && c.is_whitespace())
-                    .last()
+                    .rev()
+                    .take_while(|&(i, _)| i >= half)
+                    .find(|&(_, c)| c.is_whitespace())
                     .map(|(i, c)| i + c.len_utf8())
             })
             .unwrap_or(window.len());
