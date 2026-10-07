@@ -2,12 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
+use image::{ImageBuffer, Rgb};
+use serde::Deserialize;
 use seyk::Dimension;
 use seyk::SearchEngine;
 use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision, vision};
 use seyk::embedder::{Embedder, ResourceInput};
-use image::{ImageBuffer, Rgb};
-use serde::Deserialize;
 
 fn rgb(r: u8, g: u8, b: u8) -> Rgb<u8> {
     Rgb([r, g, b])

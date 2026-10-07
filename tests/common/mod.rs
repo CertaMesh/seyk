@@ -5,9 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use seyk::{
-    Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInput, Result,
-};
+use seyk::{Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInput, Result};
 
 /// Deterministic text-only embedder used by integration tests.
 pub struct FakeEmbedder {

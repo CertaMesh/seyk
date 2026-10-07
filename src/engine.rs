@@ -945,9 +945,7 @@ mod tests {
     #[test]
     fn link_targets_are_not_embedded() {
         assert_eq!(
-            strip_link_targets(
-                "Sources: [main dossier](../people/Ada.md), ![map](img/map.png)."
-            ),
+            strip_link_targets("Sources: [main dossier](../people/Ada.md), ![map](img/map.png)."),
             "Sources: main dossier, !map."
         );
         assert_eq!(
