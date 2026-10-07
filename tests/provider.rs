@@ -550,3 +550,47 @@ fn memory_extraction_verifies_current_bytes_without_model_or_filesystem() {
         Err(Error::StaleResource { .. })
     ));
 }
+
+#[test]
+fn previews_share_one_verified_read_across_multiple_hits() {
+    let notes = Arc::new(Notes::default());
+    let first =
+        "alpha garden with basil and tomatoes, watered in the morning before the sun gets hot.";
+    let second =
+        "alpha harbor with ships and a lighthouse, watched in the evening as the sun goes down.";
+    notes.set("mem://book/notes.txt", &format!("{first}\n\n{second}"));
+    let (engine, _) = engine(notes.clone());
+    engine.index().roots(roots()).execute().unwrap();
+    notes.reads.store(0, Ordering::SeqCst);
+    let results = engine
+        .search("alpha")
+        .roots(roots())
+        .sync(false)
+        .execute()
+        .unwrap();
+    assert_eq!(results.hits.len(), 2);
+    assert_eq!(notes.reads.load(Ordering::SeqCst), 1);
+    for hit in &results.hits {
+        assert!(matches!(hit.preview.as_deref(), Some(p) if p == first || p == second));
+    }
+    notes.set("mem://book/notes.txt", "changed source");
+    notes.reads.store(0, Ordering::SeqCst);
+    let stale = engine
+        .search("alpha")
+        .roots(roots())
+        .sync(false)
+        .execute()
+        .unwrap();
+    assert_eq!(stale.hits.len(), 2);
+    assert!(stale.hits.iter().all(|hit| hit.preview.is_none()));
+    assert_eq!(notes.reads.load(Ordering::SeqCst), 1);
+    notes.reads.store(0, Ordering::SeqCst);
+    engine
+        .search("alpha")
+        .roots(roots())
+        .sync(false)
+        .previews(None)
+        .execute()
+        .unwrap();
+    assert_eq!(notes.reads.load(Ordering::SeqCst), 0);
+}
