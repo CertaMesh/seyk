@@ -1,7 +1,9 @@
 //! Embedding caches.
 //!
 //! A cache is an optimisation, not a corpus. It stores per-resource metadata,
-//! per-segment locators and embedding vectors, never the source content.
+//! per-segment locators, embedding vectors and a keyword index of each
+//! segment's words, never a readable copy of the source content. (The keyword
+//! index is still sensitive: much of a text can be pieced together from it.)
 //!
 //! Vectors are keyed by `(profile, input_hash)`:
 //! - the profile hashes everything that affects a vector (model, revision,
@@ -20,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::embedder::ModelIdentity;
 use crate::embedding::{from_bytes, to_bytes};
+use crate::lexical::{FIELDS, LexicalDoc, LexicalQuery};
 use crate::{Error, Modality, ResourceLocator, ResourceMetadata, Result};
 
 /// Everything that determines a cached vector, besides the input itself.
@@ -44,6 +47,10 @@ pub struct CachedSegment {
     pub heading: Option<String>,
     /// Hash of the exact model input for this segment.
     pub input_hash: String,
+    /// Text for the keyword index. Write-only: it is indexed on `put_resource`
+    /// and always `None` when read back, so the cache holds no readable copy.
+    #[serde(skip)]
+    pub lexical_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +63,19 @@ pub struct CachedResource {
 #[derive(Debug, Clone)]
 pub struct StoredVector {
     pub path: PathBuf,
+    /// Position of the segment within its resource.
+    pub ordinal: usize,
     pub segment: CachedSegment,
     pub vector: Vec<f32>,
+}
+
+/// A segment matching a keyword query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LexicalHit {
+    pub path: PathBuf,
+    pub ordinal: usize,
+    /// BM25 relevance, higher is better. Only comparable within one query.
+    pub score: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +126,15 @@ pub trait EmbeddingCache: Send {
     /// All searchable vectors for the given paths.
     fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>>;
 
+    /// Segments of `paths` matching `query` by keyword, best first, at most `limit`.
+    fn lexical_search(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        paths: &HashSet<PathBuf>,
+        limit: usize,
+    ) -> Result<Vec<LexicalHit>>;
+
     /// Drop vectors no segment refers to any more.
     fn prune_orphans(&mut self, profile: &str) -> Result<u64>;
 
@@ -128,6 +155,8 @@ pub struct MemoryCache {
     // because, unlike SQLite, writes may precede registration.
     resources: HashMap<String, HashMap<PathBuf, CachedResource>>,
     vectors: HashMap<String, HashMap<String, Vec<f32>>>,
+    /// Keyword index per profile and path, one document per segment.
+    lexical: HashMap<String, HashMap<PathBuf, Vec<LexicalDoc>>>,
 }
 
 impl MemoryCache {
@@ -166,10 +195,20 @@ impl EmbeddingCache for MemoryCache {
         path: &Path,
         resource: &CachedResource,
     ) -> Result<()> {
+        let docs = lexical_docs(path, resource);
+        // Like SQLite, keep no readable text: it is indexed, then dropped.
+        let mut stored = resource.clone();
+        for s in &mut stored.segments {
+            s.lexical_text = None;
+        }
         self.resources
             .entry(profile.to_string())
             .or_default()
-            .insert(path.to_path_buf(), resource.clone());
+            .insert(path.to_path_buf(), stored);
+        self.lexical
+            .entry(profile.to_string())
+            .or_default()
+            .insert(path.to_path_buf(), docs);
         Ok(())
     }
 
@@ -191,6 +230,11 @@ impl EmbeddingCache for MemoryCache {
 
     fn remove_resources(&mut self, profile: &str, paths: &[PathBuf]) -> Result<()> {
         if let Some(bucket) = self.resources.get_mut(profile) {
+            for p in paths {
+                bucket.remove(p);
+            }
+        }
+        if let Some(bucket) = self.lexical.get_mut(profile) {
             for p in paths {
                 bucket.remove(p);
             }
@@ -228,10 +272,11 @@ impl EmbeddingCache for MemoryCache {
             if !paths.contains(path) {
                 continue;
             }
-            for s in &r.segments {
+            for (ordinal, s) in r.segments.iter().enumerate() {
                 if let Some(v) = vectors.get(&s.input_hash) {
                     out.push(StoredVector {
                         path: path.clone(),
+                        ordinal,
                         segment: s.clone(),
                         vector: v.clone(),
                     });
@@ -239,6 +284,33 @@ impl EmbeddingCache for MemoryCache {
             }
         }
         Ok(out)
+    }
+
+    fn lexical_search(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        paths: &HashSet<PathBuf>,
+        limit: usize,
+    ) -> Result<Vec<LexicalHit>> {
+        let Some(bucket) = self.lexical.get(profile) else {
+            return Ok(Vec::new());
+        };
+        // Score against the whole profile, as FTS5 does, so document frequencies
+        // do not depend on which paths were asked for.
+        let docs = bucket
+            .iter()
+            .flat_map(|(path, docs)| docs.iter().enumerate().map(move |(i, d)| ((path, i), d)));
+        Ok(crate::lexical::bm25(docs, query)
+            .into_iter()
+            .filter(|((path, _), _)| paths.contains(*path))
+            .take(limit)
+            .map(|((path, ordinal), score)| LexicalHit {
+                path: path.clone(),
+                ordinal,
+                score: score as f32,
+            })
+            .collect())
     }
 
     fn prune_orphans(&mut self, profile: &str) -> Result<u64> {
@@ -289,11 +361,32 @@ impl EmbeddingCache for MemoryCache {
     }
 }
 
+/// One keyword-index document per segment: file name, path, heading and text.
+fn lexical_docs(path: &Path, resource: &CachedResource) -> Vec<LexicalDoc> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let full = path.to_string_lossy();
+    resource
+        .segments
+        .iter()
+        .map(|s| {
+            LexicalDoc::new(
+                &name,
+                &full,
+                s.heading.as_deref(),
+                s.lexical_text.as_deref().unwrap_or(""),
+            )
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 /// Persistent cache in a single SQLite file.
 pub struct SqliteCache {
@@ -351,8 +444,13 @@ impl SqliteCache {
                 |r| r.get(0),
             )
             .optional()?;
-        if version.as_deref() != Some(SCHEMA_VERSION) {
-            // It is a cache: on any schema change, start over rather than migrate.
+        if version.as_deref() == Some("1") {
+            // v2 adds the keyword index. Forget the resource list but keep every
+            // vector: the next sync re-reads files to index their words, and
+            // embeds nothing it has embedded before.
+            self.conn.execute_batch("DELETE FROM resources;")?;
+        } else if version.as_deref() != Some(SCHEMA_VERSION) {
+            // It is a cache: on any other schema change, start over.
             self.conn.execute_batch(
                 "DROP TABLE IF EXISTS embeddings;
                  DROP TABLE IF EXISTS segments;
@@ -391,6 +489,13 @@ impl SqliteCache {
                  input_hash TEXT NOT NULL,
                  vector BLOB NOT NULL,
                  PRIMARY KEY (profile, input_hash)
+             );
+             -- Contentless: stores the words' index, not the text. Row ids are
+             -- segments.rowid, so rows are deleted explicitly with their segments.
+             CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+                 name, path, heading, body,
+                 content = '', contentless_delete = 1,
+                 tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
         self.conn.execute(
@@ -431,6 +536,17 @@ fn restrict_permissions(p: &Path, mode: u32) {
 
 #[cfg(not(unix))]
 fn restrict_permissions(_: &Path, _: u32) {}
+
+/// Remove a resource's keyword rows. Contentless FTS rows are not covered by
+/// the foreign-key cascade, so they go first, while their segment rows exist.
+fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Result<()> {
+    tx.execute(
+        "DELETE FROM segments_fts WHERE rowid IN
+             (SELECT rowid FROM segments WHERE profile = ?1 AND path = ?2)",
+        params![profile, key],
+    )?;
+    Ok(())
+}
 
 fn parse_modality(s: &str) -> Modality {
     serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap_or(Modality::Text)
@@ -508,6 +624,7 @@ impl EmbeddingCache for SqliteCache {
                     locator: serde_json::from_str(&loc).map_err(json_err)?,
                     heading,
                     input_hash,
+                    lexical_text: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -522,6 +639,7 @@ impl EmbeddingCache for SqliteCache {
     ) -> Result<()> {
         let key = path_key(path);
         let tx = self.conn.transaction()?;
+        delete_fts_rows(&tx, profile, &key)?;
         tx.execute(
             "DELETE FROM resources WHERE profile = ?1 AND path = ?2",
             params![profile, key],
@@ -544,6 +662,14 @@ impl EmbeddingCache for SqliteCache {
                 "INSERT INTO segments (profile, path, ordinal, locator, heading, input_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
+            let mut fts = tx.prepare_cached(
+                "INSERT INTO segments_fts (rowid, name, path, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            let full = path.to_string_lossy();
             for (i, s) in resource.segments.iter().enumerate() {
                 stmt.execute(params![
                     profile,
@@ -552,6 +678,13 @@ impl EmbeddingCache for SqliteCache {
                     serde_json::to_string(&s.locator).map_err(json_err)?,
                     s.heading,
                     s.input_hash
+                ])?;
+                fts.execute(params![
+                    tx.last_insert_rowid(),
+                    name,
+                    full,
+                    s.heading,
+                    s.lexical_text.as_deref().unwrap_or("")
                 ])?;
             }
         }
@@ -578,7 +711,9 @@ impl EmbeddingCache for SqliteCache {
             let mut stmt =
                 tx.prepare_cached("DELETE FROM resources WHERE profile = ?1 AND path = ?2")?;
             for p in paths {
-                stmt.execute(params![profile, path_key(p)])?;
+                let key = path_key(p);
+                delete_fts_rows(&tx, profile, &key)?;
+                stmt.execute(params![profile, key])?;
             }
         }
         tx.commit()?;
@@ -614,7 +749,7 @@ impl EmbeddingCache for SqliteCache {
 
     fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.path, s.locator, s.heading, s.input_hash, e.vector
+            "SELECT s.path, s.locator, s.heading, s.input_hash, e.vector, s.ordinal
              FROM segments s JOIN embeddings e ON e.profile = s.profile AND e.input_hash = s.input_hash
              WHERE s.profile = ?1
              ORDER BY s.path, s.ordinal",
@@ -629,13 +764,52 @@ impl EmbeddingCache for SqliteCache {
             let locator: String = r.get(1)?;
             out.push(StoredVector {
                 path,
+                ordinal: r.get::<_, i64>(5)? as usize,
                 segment: CachedSegment {
                     locator: serde_json::from_str(&locator).map_err(json_err)?,
                     heading: r.get(2)?,
                     input_hash: r.get(3)?,
+                    lexical_text: None,
                 },
                 vector: from_bytes(&r.get::<_, Vec<u8>>(4)?),
             });
+        }
+        Ok(out)
+    }
+
+    fn lexical_search(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        paths: &HashSet<PathBuf>,
+        limit: usize,
+    ) -> Result<Vec<LexicalHit>> {
+        let Some(expr) = query.fts5() else {
+            return Ok(Vec::new());
+        };
+        let weights = FIELDS.map(|(_, w)| w.to_string()).join(", ");
+        // bm25() is lower-is-better; the requested paths are filtered here
+        // rather than in SQL so the rank order streams without a temp table.
+        let sql = format!(
+            "SELECT s.path, s.ordinal, -bm25(segments_fts, {weights})
+             FROM segments_fts JOIN segments s ON s.rowid = segments_fts.rowid
+             WHERE segments_fts MATCH ?1 AND s.profile = ?2
+             ORDER BY bm25(segments_fts, {weights})"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut rows = stmt.query(params![expr, profile])?;
+        let mut out = Vec::new();
+        while out.len() < limit
+            && let Some(r) = rows.next()?
+        {
+            let path = key_path(r.get(0)?);
+            if paths.contains(&path) {
+                out.push(LexicalHit {
+                    path,
+                    ordinal: r.get::<_, i64>(1)? as usize,
+                    score: r.get::<_, f64>(2)? as f32,
+                });
+            }
         }
         Ok(out)
     }
@@ -682,7 +856,7 @@ impl EmbeddingCache for SqliteCache {
 
     fn clear(&mut self) -> Result<()> {
         self.conn
-            .execute_batch("DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+            .execute_batch("DELETE FROM segments_fts; DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())

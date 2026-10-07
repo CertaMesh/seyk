@@ -224,6 +224,7 @@ fn resource(hashes: &[&str]) -> CachedResource {
                 locator: ResourceLocator::WholeResource,
                 heading: None,
                 input_hash: (*h).to_string(),
+                lexical_text: None,
             })
             .collect(),
     }

@@ -26,12 +26,12 @@ use seyk::{DiscoveryOptions, ProgressEvent, ResourceLocator, SearchEngine, Searc
 const MAX_QUERIES: usize = 8;
 const MAX_LIMIT: usize = 50;
 
-const INSTRUCTIONS: &str = "Local semantic search over the user's files with EmbeddingGemma 2. \
-It matches meaning, not keywords, so describe what the passage would say rather than asking \
-the question. Pass 2-4 different phrasings in one call; each hit keeps its best score. Hits \
-are pointers: read the file at the given lines before answering, and cite path:lines. \
-Prefer grep for exact identifiers or strings. The server indexes its folders in the \
-background; while `index.state` is \"indexing\", results cover only what is indexed so far.";
+const INSTRUCTIONS: &str = "Local search over the user's files, by meaning (EmbeddingGemma 2), \
+keywords and file names at once. Describe what the passage would say rather than only asking \
+the question, or name a file or identifier directly (\"pricing.md\", \"INC-18372\"). Pass 2-4 \
+different phrasings in one call. Each hit says what matched: \"meaning\", \"words\" or \"name\". \
+Hits are pointers: read the file at the given lines before answering, and cite path:lines. \
+The server indexes its folders in the background; while `index.state` is \"indexing\", results cover only what is indexed so far.";
 
 pub type EngineFactory = Box<dyn Fn() -> Result<SearchEngine> + Send + Sync>;
 
@@ -95,6 +95,9 @@ pub struct SearchParams {
     /// Skip files or folders matching these globs.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// "hybrid" (default: meaning, keywords and file names), "semantic" or
+    /// "lexical" (keywords and file names only).
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,7 +109,11 @@ struct Hit {
     score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     heading: Option<String>,
-    matched_query: String,
+    /// What found it: "meaning", "words" (keywords) and/or "name" (file name).
+    matched: Vec<&'static str>,
+    /// The phrasing that matched best by meaning, when meaning matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
 }
@@ -304,6 +311,9 @@ impl SeykServer {
             .paths(&paths)
             .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT))
             .sync(inline);
+        if let Some(m) = p.mode.as_deref() {
+            req = req.mode(m.parse()?);
+        }
         if let Some(s) = p.min_score {
             req = req.min_score(s);
         }
@@ -396,7 +406,18 @@ fn to_response(r: SearchResults) -> Response {
             path: h.resource.path().to_path_buf(),
             score: (h.score * 1000.0).round() / 1000.0,
             heading: h.heading,
-            matched_query: r.queries.get(h.query_index).cloned().unwrap_or_default(),
+            matched: [
+                (h.signals.semantic.is_some(), "meaning"),
+                (h.signals.lexical.is_some(), "words"),
+                (h.signals.filename, "name"),
+            ]
+            .into_iter()
+            .filter_map(|(on, t)| on.then_some(t))
+            .collect(),
+            matched_query: h
+                .signals
+                .semantic
+                .and_then(|_| r.queries.get(h.query_index).cloned()),
             preview: h.preview,
         })
         .collect();
@@ -541,6 +562,7 @@ mod tests {
                 min_score: None,
                 include: vec![],
                 exclude: vec![],
+                mode: None,
             })
             .unwrap()
     }
