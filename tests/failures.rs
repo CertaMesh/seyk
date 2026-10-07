@@ -97,6 +97,6 @@ fn memory_cache() {
 #[test]
 fn sqlite_cache() {
     shared_failed_input_marks_every_owner_incomplete(|t| {
-        SqliteCache::open(&t.path().join("cache.sqlite3")).unwrap()
+        SqliteCache::open(t.path().join("cache.sqlite3")).unwrap()
     });
 }

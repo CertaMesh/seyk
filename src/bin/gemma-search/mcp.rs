@@ -42,6 +42,8 @@ pub struct GemmaSearchServer {
     tool_router: ToolRouter<Self>,
 }
 
+/// Background indexing, as agents see it. Every transition replaces it whole,
+/// so a stale phase cannot outlive the event that ended it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum IndexStatus {
@@ -51,7 +53,12 @@ enum IndexStatus {
         segments_total: usize,
     },
     Ready,
-    Failed {
+    /// The last pass failed; the watcher still runs and retries on the next change.
+    PassFailed {
+        error: String,
+    },
+    /// Nothing keeps the cache fresh any more, so searches embed inline.
+    Stopped {
         error: String,
     },
 }
@@ -141,10 +148,16 @@ impl GemmaSearchServer {
         }
     }
 
-    fn status(&self) -> Option<IndexStatus> {
+    /// `None` means background indexing is off, never that the lock failed.
+    fn status(&self) -> Result<Option<IndexStatus>> {
         self.status
             .as_ref()
-            .and_then(|m| m.lock().ok().map(|g| g.clone()))
+            .map(|m| {
+                m.lock()
+                    .map(|g| g.clone())
+                    .map_err(|_| anyhow!("index status lock poisoned"))
+            })
+            .transpose()
     }
 
     /// Index the roots, then keep them fresh. Runs on its own thread for the
@@ -153,19 +166,21 @@ impl GemmaSearchServer {
         let engine = match self.engine() {
             Ok(e) => e,
             Err(e) => {
-                return self.set_status(IndexStatus::Failed {
+                return self.set_status(IndexStatus::Stopped {
                     error: format!("{e:#}"),
                 });
             }
         };
+        let indexing = |done, total| {
+            self.set_status(IndexStatus::Indexing {
+                segments_done: done,
+                segments_total: total,
+            })
+        };
+        indexing(0, 0);
         let progress = |e: ProgressEvent| {
-            if let ProgressEvent::Embedding { done, total } = e
-                && total > 0
-            {
-                self.set_status(IndexStatus::Indexing {
-                    segments_done: done,
-                    segments_total: total,
-                });
+            if let ProgressEvent::Embedding { done, total } = e {
+                indexing(done, total);
             }
         };
         let result = watch(
@@ -174,16 +189,21 @@ impl GemmaSearchServer {
             &DiscoveryOptions::default(),
             &WatchOptions::default(),
             Some(&progress),
-            |pass| match pass {
-                Ok(_) => self.set_status(IndexStatus::Ready),
-                Err(e) => eprintln!("gemma-search: index pass failed: {e}"),
+            |pass| {
+                self.set_status(match pass {
+                    Ok(_) => IndexStatus::Ready,
+                    Err(e) => IndexStatus::PassFailed {
+                        error: e.to_string(),
+                    },
+                })
             },
         );
-        if let Err(e) = result {
-            self.set_status(IndexStatus::Failed {
-                error: e.to_string(),
-            });
-        }
+        self.set_status(IndexStatus::Stopped {
+            error: match result {
+                Ok(()) => "file watcher stopped".into(),
+                Err(e) => e.to_string(),
+            },
+        });
     }
 
     fn run_search(&self, p: SearchParams) -> Result<Response> {
@@ -208,9 +228,11 @@ impl GemmaSearchServer {
                 .collect::<Result<Vec<_>>>()?
         };
 
-        let status = self.status();
-        // Embed inline only when no background indexer keeps the cache fresh.
-        let inline = matches!(status, None | Some(IndexStatus::Failed { .. }));
+        let status = self.status()?;
+        // Embed inline only when no background indexer keeps the cache fresh. A
+        // failed pass does not count: the watcher retries, and embedding here too
+        // would race it.
+        let inline = matches!(status, None | Some(IndexStatus::Stopped { .. }));
         let engine = self.engine()?;
         let mut queries = queries.into_iter();
         let first = queries.next().expect("checked non-empty");
@@ -349,6 +371,136 @@ pub fn serve(roots: Vec<PathBuf>, factory: EngineFactory, background: bool) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gemma_search::{
+        Dimension, Embedder, Embedding, MemoryCache, Modality, ModelIdentity, ResourceInput,
+    };
+    use std::time::{Duration, Instant};
+
+    /// Bag-of-words hashing, enough for lifecycle tests without model weights.
+    struct WordHash(ModelIdentity);
+
+    impl WordHash {
+        fn vector(&self, text: &str) -> gemma_search::Result<Embedding> {
+            let mut v = vec![0.0; 128];
+            for w in text.split_whitespace() {
+                v[blake3::hash(w.to_lowercase().as_bytes()).as_bytes()[0] as usize % 128] += 1.0;
+            }
+            Embedding::from_raw(v, Dimension::D128)
+        }
+    }
+
+    impl Embedder for WordHash {
+        fn identity(&self) -> &ModelIdentity {
+            &self.0
+        }
+        fn supports(&self, m: Modality) -> bool {
+            m == Modality::Text
+        }
+        fn embed_query(&self, q: &str) -> gemma_search::Result<Embedding> {
+            self.vector(q)
+        }
+        fn embed_resources(
+            &self,
+            inputs: &[ResourceInput<'_>],
+        ) -> gemma_search::Result<Vec<Embedding>> {
+            inputs
+                .iter()
+                .map(|i| match i {
+                    ResourceInput::Text { text, .. } => self.vector(text),
+                    _ => unreachable!(),
+                })
+                .collect()
+        }
+    }
+
+    fn fake_engine() -> Result<SearchEngine> {
+        Ok(SearchEngine::builder()
+            .embedder(WordHash(ModelIdentity {
+                model_id: "test/word-hash".into(),
+                revision: "1".into(),
+                variant: "test".into(),
+                dimension: Dimension::D128,
+                normalization: "l2".into(),
+                query_prompt: String::new(),
+                document_prompt: String::new(),
+                max_tokens: 512,
+            }))
+            .cache(MemoryCache::new())
+            .build()?)
+    }
+
+    fn wait_for(server: &GemmaSearchServer, done: impl Fn(&IndexStatus) -> bool) -> IndexStatus {
+        let started = Instant::now();
+        loop {
+            let s = server.status().unwrap().unwrap();
+            if done(&s) {
+                return s;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "stuck at {s:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn search(server: &GemmaSearchServer, q: &str) -> Response {
+        server
+            .run_search(SearchParams {
+                queries: vec![q.into()],
+                paths: vec![],
+                limit: None,
+                min_score: None,
+                include: vec![],
+                exclude: vec![],
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn background_index_reaches_ready_and_follows_changes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("keeper.md"),
+            "lighthouse keeper counts ships",
+        )
+        .unwrap();
+        let server =
+            GemmaSearchServer::new(vec![dir.path().into()], Box::new(fake_engine), true).unwrap();
+        let bg = server.clone();
+        std::thread::spawn(move || bg.background_index());
+
+        wait_for(&server, |s| matches!(s, IndexStatus::Ready));
+        let r = search(&server, "lighthouse ships");
+        assert_eq!(r.hits.len(), 1);
+        assert_eq!(r.segments_embedded, 0, "searches read the cache only");
+
+        std::fs::write(dir.path().join("bread.md"), "grandmother bakes bread").unwrap();
+        let started = Instant::now();
+        while search(&server, "grandmother bread").hits.len() < 2 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "change never indexed"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn failed_model_load_stops_background_indexing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let server = GemmaSearchServer::new(
+            vec![dir.path().into()],
+            Box::new(|| Err(anyhow!("no weights"))),
+            true,
+        )
+        .unwrap();
+        server.background_index();
+        assert!(matches!(
+            server.status().unwrap(),
+            Some(IndexStatus::Stopped { error }) if error.contains("no weights")
+        ));
+    }
 
     #[test]
     fn confine_rejects_paths_outside_roots() {
