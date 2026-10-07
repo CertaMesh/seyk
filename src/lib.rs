@@ -39,6 +39,7 @@ mod embedding;
 mod engine;
 mod error;
 pub mod index;
+pub mod lexical;
 mod resource;
 pub mod segment;
 #[cfg(feature = "watch")]
@@ -49,9 +50,9 @@ pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};
 pub use embedding::{Dimension, Embedding};
 pub use engine::{
-    IndexReport, IndexRequest, ProgressEvent, ProgressFn, SearchEngine, SearchEngineBuilder,
-    SearchHit, SearchRequest, SearchResults, SearchStats, SkippedResource, SyncStats, expand_tilde,
-    make_preview,
+    IndexReport, IndexRequest, MatchSignals, ProgressEvent, ProgressFn, SearchEngine,
+    SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults, SearchStats,
+    SkippedResource, SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
 pub use resource::{Modality, ResourceId, ResourceLocator, ResourceMetadata};

@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 
 use common::FakeEmbedder;
-use seyk::{Dimension, MemoryCache, SearchEngine};
+use seyk::{Dimension, MemoryCache, SearchEngine, SearchMode};
 use tempfile::TempDir;
 
 #[test]
@@ -27,6 +27,7 @@ fn several_queries_keep_each_segments_best_score() {
 
     let single = engine
         .search("beta river")
+        .mode(SearchMode::Semantic)
         .paths([temp.path()])
         .limit(1)
         .execute()
@@ -34,6 +35,7 @@ fn several_queries_keep_each_segments_best_score() {
     let both = engine
         .search("alpha garden")
         .query("beta river")
+        .mode(SearchMode::Semantic)
         .paths([temp.path()])
         .limit(2)
         .execute()

@@ -149,6 +149,7 @@ fn filled_cache(
                 },
                 heading: Some(format!("Section {s}")),
                 input_hash: format!("{f:06}-{s:02}"),
+                lexical_text: None,
             })
             .collect();
         let vectors: Vec<(String, Vec<f32>)> = segments

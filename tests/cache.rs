@@ -224,6 +224,7 @@ fn resource(hashes: &[&str]) -> CachedResource {
                 locator: ResourceLocator::WholeResource,
                 heading: None,
                 input_hash: (*h).to_string(),
+                lexical_text: None,
             })
             .collect(),
     }
@@ -355,4 +356,53 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
         1
     );
     assert_eq!(cache.prune_orphans("absent").unwrap(), 0);
+}
+
+#[test]
+fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
+    let names = [
+        "/notes/zulu.md",
+        "/notes/alpha.md",
+        "/notes/delta.md",
+        "/notes/bravo.md",
+    ];
+    let wanted: HashSet<PathBuf> = names.iter().map(PathBuf::from).collect();
+    let query = seyk::lexical::LexicalQuery::new(["quartz"]);
+    let check = |cache: &mut dyn EmbeddingCache| {
+        cache.register_profile("ties", &profile("ties")).unwrap();
+        for name in names {
+            let mut r = resource(&["first", "second"]);
+            for segment in &mut r.segments {
+                segment.lexical_text = Some("quartz pebble".into());
+            }
+            cache.put_resource("ties", Path::new(name), &r).unwrap();
+        }
+        let hits = cache.lexical_search("ties", &query, &wanted, 100).unwrap();
+        assert_eq!(hits.len(), 8);
+        assert!(hits.iter().all(|h| h.score == hits[0].score));
+        let order: Vec<_> = hits.into_iter().map(|h| (h.path, h.ordinal)).collect();
+        for limit in [0, 1, 3, 8] {
+            let limited: Vec<_> = cache
+                .lexical_search("ties", &query, &wanted, limit)
+                .unwrap()
+                .into_iter()
+                .map(|h| (h.path, h.ordinal))
+                .collect();
+            assert_eq!(limited, order[..limit]);
+        }
+        order
+    };
+    let db = TempDir::new().unwrap();
+    let expected = check(&mut SqliteCache::open(db.path().join("cache.sqlite3")).unwrap());
+    let mut sorted = expected.clone();
+    sorted.sort_by(|a, b| {
+        a.0.as_os_str()
+            .as_encoded_bytes()
+            .cmp(b.0.as_os_str().as_encoded_bytes())
+            .then(a.1.cmp(&b.1))
+    });
+    assert_eq!(expected, sorted);
+    for _ in 0..20 {
+        assert_eq!(check(&mut MemoryCache::new()), expected);
+    }
 }

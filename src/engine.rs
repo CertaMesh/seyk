@@ -11,19 +11,62 @@ use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, 
 use crate::discovery::{DiscoveredResource, DiscoveryOptions, ResourceKind, discover};
 use crate::embedder::{Embedder, ResourceInput};
 use crate::index::{BruteForceIndex, Scored, VectorIndex};
+use crate::lexical::LexicalQuery;
 use crate::segment::{TextFormat, TextSegmenter};
 use crate::{Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
 
 /// Bump when the way segments are turned into model inputs changes.
 const INPUT_FORMAT_VERSION: u32 = 2;
 
+/// How results are found and ranked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+    /// Meaning, keywords and file names, fused by rank. The default.
+    #[default]
+    Hybrid,
+    /// Embedding similarity only; `score` is the cosine similarity.
+    Semantic,
+    /// Keywords and file names only. The query is never embedded.
+    Lexical,
+}
+
+impl std::str::FromStr for SearchMode {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "hybrid" => Ok(Self::Hybrid),
+            "semantic" => Ok(Self::Semantic),
+            "lexical" | "keyword" => Ok(Self::Lexical),
+            other => Err(Error::Config(format!(
+                "unknown search mode {other:?}: use hybrid, semantic or lexical"
+            ))),
+        }
+    }
+}
+
+/// Which signals found a hit, with their raw scores.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MatchSignals {
+    /// Cosine similarity of the best-matching phrasing, when it ranked.
+    pub semantic: Option<f32>,
+    /// BM25 keyword relevance, when it ranked. Higher is better.
+    pub lexical: Option<f32>,
+    /// The query named this file (`father.md`, `father`, `notes/father.md`).
+    pub filename: bool,
+}
+
 /// One ranked match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub resource: ResourceId,
     pub locator: ResourceLocator,
-    /// Cosine similarity in `[-1, 1]`. Only comparable within one model profile.
+    /// Relevance. In hybrid and lexical mode a rank fusion in `(0, 1]`, where 1
+    /// means first on every signal that found anything; in semantic mode the
+    /// cosine similarity. Only comparable within one search.
     pub score: f32,
+    /// What found this hit. Use it to tell a meaning match from a name match.
+    pub signals: MatchSignals,
     pub metadata: ResourceMetadata,
     /// Markdown heading path of the segment, when there is one.
     pub heading: Option<String>,
@@ -65,6 +108,7 @@ pub struct SearchStats {
 pub struct SearchResults {
     /// Every phrasing that was searched, in the order given.
     pub queries: Vec<String>,
+    pub mode: SearchMode,
     pub hits: Vec<SearchHit>,
     pub stats: SearchStats,
 }
@@ -198,6 +242,8 @@ impl SearchEngine {
             preview_chars: Some(240),
             progress: None,
             sync: true,
+            mode: SearchMode::default(),
+            lexical_weight: None,
         }
     }
 
@@ -417,7 +463,7 @@ impl SearchEngine {
                         let title = segment_title(stem.as_deref(), s.heading.as_deref());
                         let model_text = match format {
                             TextFormat::Markdown => strip_link_targets(&s.text),
-                            TextFormat::Plain | TextFormat::Code => s.text,
+                            TextFormat::Plain | TextFormat::Code => s.text.clone(),
                         };
                         let hash =
                             input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
@@ -431,6 +477,9 @@ impl SearchEngine {
                                 },
                                 heading: s.heading,
                                 input_hash: hash,
+                                // Keywords come from the source as written,
+                                // link targets included: they are names too.
+                                lexical_text: Some(s.text),
                             },
                             input: JobInput::Text {
                                 title,
@@ -447,6 +496,8 @@ impl SearchEngine {
                         locator: ResourceLocator::WholeResource,
                         heading: None,
                         input_hash: hash,
+                        // Indexed by name and path only.
+                        lexical_text: Some(String::new()),
                     },
                     input: JobInput::Image { bytes },
                 }])
@@ -561,6 +612,8 @@ pub struct SearchRequest<'e> {
     preview_chars: Option<usize>,
     progress: Option<ProgressFn<'e>>,
     sync: bool,
+    mode: SearchMode,
+    lexical_weight: Option<f32>,
 }
 
 impl<'e> SearchRequest<'e> {
@@ -586,6 +639,22 @@ impl<'e> SearchRequest<'e> {
         self
     }
 
+    /// Override how much keyword rank counts against semantic rank in hybrid
+    /// mode (semantic is 1). By default it depends on the query, see
+    /// [`keyword_weight`]. Must be finite and non-negative; zero disables the
+    /// keyword signal in hybrid mode. Valid overrides are ignored in other modes.
+    pub fn lexical_weight(mut self, w: f32) -> Self {
+        self.lexical_weight = Some(w);
+        self
+    }
+
+    pub fn mode(mut self, mode: SearchMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Hide semantic matches below this cosine similarity. Keyword and file
+    /// name matches are kept: their relevance is not a cosine.
     pub fn min_score(mut self, s: f32) -> Self {
         self.min_score = Some(s);
         self
@@ -628,6 +697,14 @@ impl<'e> SearchRequest<'e> {
     pub fn execute(self) -> Result<SearchResults> {
         let started = Instant::now();
         let engine = self.engine;
+        if self
+            .lexical_weight
+            .is_some_and(|w| !w.is_finite() || w < 0.0)
+        {
+            return Err(Error::Config(
+                "lexical weight must be finite and non-negative".into(),
+            ));
+        }
         if self.paths.is_empty() {
             return Err(Error::Config("no paths to search".into()));
         }
@@ -646,72 +723,282 @@ impl<'e> SearchRequest<'e> {
             }
         };
 
-        let dim = engine.embedder.dimension().get();
-        let mut query_vectors = Vec::with_capacity(self.queries.len());
-        for q in &self.queries {
-            let v = engine.embedder.embed_query(q)?;
-            if v.dim() != dim {
-                return Err(Error::DimensionMismatch {
-                    expected: dim,
-                    actual: v.dim(),
-                });
-            }
-            query_vectors.push(v);
-        }
-
         let pid = engine.profile_id.as_str();
         let wanted: HashSet<PathBuf> = resources.iter().map(|r| r.path.clone()).collect();
-        let (stored, metadata) =
-            engine.with_cache(|c| Ok((c.vectors_for(pid, &wanted)?, c.resource_index(pid)?)))?;
+        let metadata = engine.with_cache(|c| c.resource_index(pid))?;
+        // Each signal contributes a deeper list than asked for, so a hit that is
+        // only moderately good on two signals can still surface.
+        let depth = (self.limit * 4).max(50);
 
-        let mut index = BruteForceIndex::with_capacity(dim, stored.len());
-        let mut entries = Vec::with_capacity(stored.len());
-        for v in stored {
-            // A wrong-sized vector means a corrupt cache; never compare it.
-            if v.vector.len() == dim {
-                index.add(&v.vector);
-                entries.push(v);
+        let mut segments = SegmentTable::default();
+        let mut semantic: Vec<(SegmentKey, f32, usize)> = Vec::new();
+        let mut searched = 0;
+        if self.mode != SearchMode::Lexical {
+            let dim = engine.embedder.dimension().get();
+            let mut query_vectors = Vec::with_capacity(self.queries.len());
+            for q in &self.queries {
+                let v = engine.embedder.embed_query(q)?;
+                if v.dim() != dim {
+                    return Err(Error::DimensionMismatch {
+                        expected: dim,
+                        actual: v.dim(),
+                    });
+                }
+                query_vectors.push(v);
+            }
+            let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
+            // Vector IDs break cosine ties, including at the top-k cutoff.
+            stored.sort_by_cached_key(|v| (crate::cache::path_key(&v.path), v.ordinal));
+            let mut index = BruteForceIndex::with_capacity(dim, stored.len());
+            let mut keys = Vec::with_capacity(stored.len());
+            for v in stored {
+                // A wrong-sized vector means a corrupt cache; never compare it.
+                if v.vector.len() == dim {
+                    index.add(&v.vector);
+                    keys.push(segments.insert(v.path, v.ordinal, v.segment));
+                }
+            }
+            searched = keys.len();
+            let min_score = self.min_score.unwrap_or(f32::MIN);
+            let take = if self.mode == SearchMode::Semantic {
+                self.limit
+            } else {
+                depth
+            };
+            semantic = fuse_max(
+                query_vectors
+                    .iter()
+                    .map(|q| index.search(q.as_slice(), take, min_score)),
+                take,
+            )
+            .into_iter()
+            .map(|f| (keys[f.scored.id].clone(), f.scored.score, f.query_index))
+            .collect();
+        }
+
+        let mut lexical: Vec<(SegmentKey, f32)> = Vec::new();
+        let mut named: Vec<SegmentKey> = Vec::new();
+        if self.mode != SearchMode::Semantic {
+            let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
+            lexical = engine
+                .with_cache(|c| c.lexical_search(pid, &query, &wanted, depth))?
+                .into_iter()
+                .map(|h| ((h.path, h.ordinal), h.score))
+                .collect();
+            named = resources
+                .iter()
+                .filter(|r| self.queries.iter().any(|q| names_file(q, &r.path)))
+                .map(|r| (r.path.clone(), 0))
+                .collect();
+            if self.mode == SearchMode::Lexical {
+                searched = lexical.len();
             }
         }
-        let min_score = self.min_score.unwrap_or(f32::MIN);
-        let scored = fuse_max(
-            query_vectors
-                .iter()
-                .map(|q| index.search(q.as_slice(), self.limit, min_score)),
-            self.limit,
-        );
+
+        let weight = match self.mode {
+            SearchMode::Hybrid => self
+                .lexical_weight
+                .unwrap_or_else(|| keyword_weight(&self.queries)),
+            _ => keyword_weight(&self.queries),
+        };
+        let ranked = rank(self.mode, &semantic, &lexical, weight, &named, self.limit);
 
         let mut previews = PreviewReader::default();
-        let hits = scored
-            .into_iter()
-            .filter_map(|s| {
-                let e = &entries[s.scored.id];
-                let metadata = metadata.get(&e.path)?.clone();
-                let preview = self
-                    .preview_chars
-                    .and_then(|n| previews.preview(&e.path, &e.segment.locator, &metadata, n));
-                Some(SearchHit {
-                    resource: ResourceId::from_path(&e.path),
-                    locator: e.segment.locator.clone(),
-                    score: s.scored.score,
-                    metadata,
-                    heading: e.segment.heading.clone(),
-                    preview,
-                    query_index: s.query_index,
-                })
-            })
-            .collect();
+        let mut hits = Vec::with_capacity(ranked.len());
+        for (key, score, signals, query_index) in ranked {
+            let Some(metadata) = metadata.get(&key.0).cloned() else {
+                continue;
+            };
+            let Some(segment) = segments.get_or_load(engine, pid, &key)? else {
+                continue;
+            };
+            let preview = self
+                .preview_chars
+                .and_then(|n| previews.preview(&key.0, &segment.locator, &metadata, n));
+            hits.push(SearchHit {
+                resource: ResourceId::from_path(&key.0),
+                locator: segment.locator.clone(),
+                score,
+                signals,
+                metadata,
+                heading: segment.heading.clone(),
+                preview,
+                query_index,
+            });
+        }
 
         Ok(SearchResults {
             queries: self.queries,
+            mode: self.mode,
             hits,
             stats: SearchStats {
                 sync,
-                segments_searched: entries.len(),
+                segments_searched: searched,
                 total_ms: started.elapsed().as_millis() as u64,
             },
         })
     }
+}
+
+/// A segment's identity within a search: its resource and position.
+type SegmentKey = (PathBuf, usize);
+
+/// Segments seen so far, filled from the vectors already loaded and, for hits
+/// found only by keyword or name, from the cache on demand.
+#[derive(Default)]
+struct SegmentTable {
+    segments: HashMap<SegmentKey, Option<CachedSegment>>,
+}
+
+impl SegmentTable {
+    fn insert(&mut self, path: PathBuf, ordinal: usize, segment: CachedSegment) -> SegmentKey {
+        let key = (path, ordinal);
+        self.segments.insert(key.clone(), Some(segment));
+        key
+    }
+
+    fn get_or_load(
+        &mut self,
+        engine: &SearchEngine,
+        pid: &str,
+        key: &SegmentKey,
+    ) -> Result<Option<&CachedSegment>> {
+        if !self.segments.contains_key(key) {
+            let segment = engine
+                .with_cache(|c| c.resource(pid, &key.0))?
+                .and_then(|r| r.segments.into_iter().nth(key.1));
+            self.segments.insert(key.clone(), segment);
+        }
+        Ok(self.segments[key].as_ref())
+    }
+}
+
+/// Whether `query` names this file: its name (`father.md`), its stem (`father`)
+/// or a trailing part of its path (`notes/father.md`), ignoring case.
+fn names_file(query: &str, path: &Path) -> bool {
+    let q = query
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim()
+        .replace('\\', "/")
+        .to_lowercase();
+    if q.is_empty() {
+        return false;
+    }
+    let full = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let path = Path::new(&full);
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    let stem = path.file_stem().map(|n| n.to_string_lossy().to_lowercase());
+    if name.as_deref() == Some(q.as_str()) || stem.as_deref() == Some(q.as_str()) {
+        return true;
+    }
+    q.contains('/') && {
+        full == q || (full.ends_with(&q) && full[..full.len() - q.len()].ends_with('/'))
+    }
+}
+
+/// How much keyword rank counts, relative to semantic rank, for these queries.
+///
+/// Names and identifiers (`father.md`, `INC-18372`, `Session::restore()`) or a
+/// word or two are what keywords are for, so they count fully. In a question
+/// in prose, shared words are mostly incidental ("old", "match"), so they only
+/// break ties between hits of similar meaning.
+pub fn keyword_weight(queries: &[String]) -> f32 {
+    let identifier = |w: &str| {
+        w.chars().any(|c| c.is_ascii_digit())
+            || w.trim_matches(|c: char| !c.is_alphanumeric())
+                .contains(['.', '_', ':', '-', '/', '#'])
+    };
+    let keywordish = queries.iter().any(|q| {
+        let words: Vec<&str> = q.split_whitespace().collect();
+        words.iter().any(|w| identifier(w)) || LexicalQuery::new([q.as_str()]).groups.len() <= 2
+    });
+    if keywordish {
+        1.0
+    } else {
+        PROSE_KEYWORD_WEIGHT
+    }
+}
+
+/// Keyword weight for questions in prose; see [`keyword_weight`].
+pub const PROSE_KEYWORD_WEIGHT: f32 = 0.3;
+
+/// Reciprocal rank fusion constant: damps the gap between the first few ranks
+/// so one signal's top hit cannot drown out a hit two signals agree on.
+const RRF_K: f32 = 60.0;
+/// A file the query names outweighs a semantic and a keyword first place.
+const FILENAME_WEIGHT: f32 = 3.0;
+
+/// Merge the signals into the final ranking.
+fn rank(
+    mode: SearchMode,
+    semantic: &[(SegmentKey, f32, usize)],
+    lexical: &[(SegmentKey, f32)],
+    lexical_weight: f32,
+    named: &[SegmentKey],
+    limit: usize,
+) -> Vec<(SegmentKey, f32, MatchSignals, usize)> {
+    if mode == SearchMode::Semantic {
+        return semantic
+            .iter()
+            .take(limit)
+            .map(|(k, cos, q)| {
+                let signals = MatchSignals {
+                    semantic: Some(*cos),
+                    ..Default::default()
+                };
+                (k.clone(), *cos, signals, *q)
+            })
+            .collect();
+    }
+    let rrf = |rank: usize, weight: f32| weight / (RRF_K + rank as f32 + 1.0);
+    let mut fused: HashMap<SegmentKey, (f32, MatchSignals, usize)> = HashMap::new();
+    for (rank, (k, cos, q)) in semantic.iter().enumerate() {
+        let e = fused.entry(k.clone()).or_default();
+        e.0 += rrf(rank, 1.0);
+        e.1.semantic = Some(*cos);
+        e.2 = *q;
+    }
+    if lexical_weight > 0.0 {
+        for (rank, (k, bm25)) in lexical.iter().enumerate() {
+            let e = fused.entry(k.clone()).or_default();
+            e.0 += rrf(rank, lexical_weight);
+            e.1.lexical = Some(*bm25);
+        }
+    }
+    for (rank, k) in named.iter().enumerate() {
+        let e = fused.entry(k.clone()).or_default();
+        e.0 += rrf(rank, FILENAME_WEIGHT);
+        e.1.filename = true;
+    }
+    // The best possible score: first place on every signal that found anything.
+    let best = [
+        (!semantic.is_empty(), 1.0),
+        (!lexical.is_empty(), lexical_weight),
+        (!named.is_empty(), FILENAME_WEIGHT),
+    ]
+    .iter()
+    .filter(|(found, w)| *found && *w > 0.0)
+    .map(|(_, w)| rrf(0, *w))
+    .sum::<f32>();
+    if best == 0.0 {
+        return Vec::new();
+    }
+    let mut out: Vec<_> = fused
+        .into_iter()
+        .map(|(k, (score, signals, q))| (k, score / best, signals, q))
+        .collect();
+    out.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| {
+                b.2.semantic
+                    .unwrap_or(f32::MIN)
+                    .total_cmp(&a.2.semantic.unwrap_or(f32::MIN))
+            })
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    out.truncate(limit);
+    out
 }
 
 struct Fused {
@@ -902,6 +1189,76 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keywords_count_fully_for_names_and_identifiers_only() {
+        let w = |q: &str| keyword_weight(&[q.to_string()]);
+        for q in [
+            "father.md",
+            "Seren",
+            "INC-18372",
+            "where is Session::restore() called",
+            "invoice_38192",
+            "pricing page",
+        ] {
+            assert_eq!(w(q), 1.0, "{q}");
+        }
+        for q in [
+            "where did I write about someone becoming like their father",
+            "grief as something physical",
+        ] {
+            assert_eq!(w(q), PROSE_KEYWORD_WEIGHT, "{q}");
+        }
+    }
+
+    #[test]
+    fn names_file_matches_name_stem_and_path_suffix_only() {
+        let p = Path::new("/book/people/father.md");
+        for q in ["father.md", "Father", "people/father.md", " `father.md` "] {
+            assert!(names_file(q, p), "{q}");
+        }
+        for q in ["ather.md", "eople/father.md", "my father", "father.txt", ""] {
+            assert!(!names_file(q, p), "{q}");
+        }
+    }
+
+    #[test]
+    fn names_file_normalizes_both_paths_and_queries_and_preserves_boundaries() {
+        for path in [
+            "/book/my people/My Notes.md",
+            r"C:\book\my people\My Notes.md",
+        ] {
+            let path = Path::new(path);
+            for query in [
+                "MY NOTES.MD",
+                "my notes",
+                " \"My Notes.md\" ",
+                "`my notes`",
+                "my people/My Notes.md",
+                r"my people\My Notes.md",
+            ] {
+                assert!(names_file(query, path), "{query}: {path:?}");
+            }
+            for query in [
+                "notes.md",
+                "my notes today",
+                "people/My Notes.md",
+                r"people\My Notes.md",
+                "  ``  ",
+            ] {
+                assert!(!names_file(query, path), "{query}: {path:?}");
+            }
+        }
+        assert!(names_file(
+            r"people\father.md",
+            Path::new("/book/people/father.md")
+        ));
+        assert!(names_file(
+            "people/father.md",
+            Path::new(r"C:\book\people\father.md")
+        ));
+        assert!(!names_file("my father", Path::new(r"C:\book\father.md")));
+    }
 
     #[test]
     fn fusion_keeps_best_score_and_its_query() {

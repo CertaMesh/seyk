@@ -14,8 +14,8 @@ use clap::{Args, Parser, Subcommand};
 use seyk::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 use seyk::{
     CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, IndexReport, MemoryCache,
-    ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchResults, SqliteCache, SyncStats,
-    expand_tilde,
+    ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchMode, SearchResults,
+    SqliteCache, SyncStats, expand_tilde,
 };
 
 #[derive(Parser)]
@@ -92,9 +92,16 @@ enum Command {
         /// Maximum number of results.
         #[arg(long, short = 'n', default_value_t = 10)]
         limit: usize,
-        /// Hide results scoring below this cosine similarity.
+        /// Hide semantic matches below this cosine similarity. Keyword and file
+        /// name matches are kept.
         #[arg(long)]
         min_score: Option<f32>,
+        /// hybrid (meaning, keywords and file names), semantic or lexical.
+        #[arg(long, default_value = "hybrid")]
+        mode: SearchMode,
+        /// Keyword weight against semantic (1.0) in hybrid mode. For tuning.
+        #[arg(long, hide = true)]
+        lexical_weight: Option<f32>,
         /// Embed everything in memory and keep nothing on disk.
         #[arg(long)]
         no_cache: bool,
@@ -214,6 +221,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Search {
             query,
             also,
+            mode,
+            lexical_weight,
             paths,
             limit,
             min_score,
@@ -229,12 +238,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let mut req = also
                 .into_iter()
                 .fold(engine.search(&query), |r, q| r.query(q))
+                .mode(mode)
                 .paths(&paths)
                 .limit(limit)
                 .discovery(filter.discovery())
                 .progress(&report);
             if let Some(s) = min_score {
                 req = req.min_score(s);
+            }
+            if let Some(w) = lexical_weight {
+                req = req.lexical_weight(w);
             }
             let results = req.execute()?;
             progress.finish();
@@ -592,7 +605,30 @@ fn clock(ms: u64) -> String {
 }
 
 /// `via` names the query that matched, shown only when several were searched.
-fn format_hit(hit: &SearchHit, via: Option<&str>, base: &Path, color: bool) -> String {
+/// What found a hybrid hit, e.g. `meaning 0.69+words` or `name`. The hybrid
+/// score only orders hits, so the cosine shows how strong the meaning match is.
+fn signal_tag(hit: &SearchHit) -> Option<String> {
+    let s = &hit.signals;
+    let mut tags: Vec<String> = Vec::new();
+    if let Some(c) = s.semantic {
+        tags.push(format!("meaning {c:.2}"));
+    }
+    if s.lexical.is_some() {
+        tags.push("words".into());
+    }
+    if s.filename {
+        tags.push("name".into());
+    }
+    (!tags.is_empty()).then(|| tags.join("+"))
+}
+
+fn format_hit(
+    hit: &SearchHit,
+    tag: Option<&str>,
+    via: Option<&str>,
+    base: &Path,
+    color: bool,
+) -> String {
     let (bold, dim, reset) = if color {
         ("\x1b[1m", "\x1b[2m", "\x1b[0m")
     } else {
@@ -606,6 +642,9 @@ fn format_hit(hit: &SearchHit, via: Option<&str>, base: &Path, color: bool) -> S
     );
     if let Some(h) = &hit.heading {
         s.push_str(&format!("  {dim}§ {h}{reset}"));
+    }
+    if let Some(t) = tag {
+        s.push_str(&format!("  {dim}[{t}]{reset}"));
     }
     if let Some(q) = via {
         s.push_str(&format!("  {dim}← \"{q}\"{reset}"));
@@ -625,11 +664,15 @@ fn format_results(results: &SearchResults, base: &Path, color: bool) -> String {
         .hits
         .iter()
         .map(|h| {
-            let via = (results.queries.len() > 1)
+            // Only a semantic match has one best phrasing.
+            let via = (results.queries.len() > 1 && h.signals.semantic.is_some())
                 .then(|| results.queries.get(h.query_index))
                 .flatten()
                 .map(String::as_str);
-            format_hit(h, via, base, color)
+            let tag = (results.mode == SearchMode::Hybrid)
+                .then(|| signal_tag(h))
+                .flatten();
+            format_hit(h, tag.as_deref(), via, base, color)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -712,7 +755,7 @@ fn format_cache_stats(stats: &CacheStats) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seyk::{Modality, ResourceId, ResourceMetadata, SearchStats};
+    use seyk::{MatchSignals, Modality, ResourceId, ResourceMetadata, SearchStats};
 
     fn hit(path: &str, score: f32, locator: ResourceLocator, preview: Option<&str>) -> SearchHit {
         SearchHit {
@@ -728,12 +771,17 @@ mod tests {
             heading: None,
             preview: preview.map(str::to_string),
             query_index: 0,
+            signals: MatchSignals {
+                semantic: Some(score),
+                ..Default::default()
+            },
         }
     }
 
     fn results() -> SearchResults {
         SearchResults {
             queries: vec!["father".into()],
+            mode: SearchMode::Semantic,
             hits: vec![
                 hit(
                     "/book/characters/father.md",
@@ -774,6 +822,23 @@ mod tests {
         let out = format_results(&r, Path::new("/book"), false);
         assert!(out.contains("father.md:81-96  ← \"father\"\n"), "{out}");
         assert!(out.contains("kitchen.jpg  ← \"dad\"\n"), "{out}");
+    }
+
+    #[test]
+    fn hybrid_hits_say_what_found_them() {
+        let mut r = results();
+        r.mode = SearchMode::Hybrid;
+        r.hits[0].signals.lexical = Some(4.2);
+        r.hits[1].signals = MatchSignals {
+            filename: true,
+            ..Default::default()
+        };
+        let out = format_results(&r, Path::new("/book"), false);
+        assert!(
+            out.contains("father.md:81-96  [meaning 0.91+words]\n"),
+            "{out}"
+        );
+        assert!(out.contains("kitchen.jpg  [name]\n"), "{out}");
     }
 
     #[test]
