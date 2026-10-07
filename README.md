@@ -264,7 +264,7 @@ daemon is Unix-only; on Windows `seyk mcp` always runs standalone.
 the passages it reads to its provider. Point the server only at folders you are
 happy for that agent to read.
 
-## Library
+## Use Seyk as a search engine
 
 ```rust
 use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder};
@@ -353,8 +353,7 @@ Other backends plug in through the `Embedder` trait:
 pub trait Embedder: Send + Sync {
     fn identity(&self) -> &ModelIdentity;          // persisted with every cached vector
     fn supports(&self, modality: Modality) -> bool;
-    fn embed_query(&self, query: &str) -> Result<Embedding>;
-    fn embed_resources(&self, inputs: &[ResourceInput<'_>]) -> Result<Vec<Embedding>>;
+    fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> seyk_embed::Result<Vec<Embedding>>;
 }
 ```
 
@@ -365,6 +364,36 @@ instead of guessing.
 Cargo features: `onnx` (EmbeddingGemma 2 backend), `image` (image resources) and
 `cli` (the binary) are on by default. A library user who only wants the engine with
 their own embedder can use `default-features = false`.
+
+## Use only the EmbeddingGemma 2 backend
+
+The crates are **not on crates.io yet**. Use Git dependencies:
+
+```toml
+[dependencies]
+seyk-embed = { git = "https://github.com/CertaMesh/seyk" }
+seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk" }
+```
+
+```rust
+use seyk_embed::{Embedder, EmbeddingTask, cosine_similarity};
+use seyk_embeddinggemma::EmbeddingGemma2;
+
+// Uses already-provisioned local files; loading never downloads weights.
+let model = EmbeddingGemma2::builder().dimension(256).build()?;
+let a = model.embed_text("customer cannot log in", EmbeddingTask::SentenceSimilarity)?;
+let b = model.embed_text("user is locked out of their account", EmbeddingTask::SentenceSimilarity)?;
+println!("{}", cosine_similarity(&a, &b)?);
+```
+
+This entry point brings no search engine, SQLite, filesystem discovery, CLI, or
+agent framework. It supports semantic similarity, clustering, recommendations,
+retrieval embeddings, nearest-label classification/routing, and custom vector
+applications. It does not perform search by itself.
+
+See [standalone embedding usage and API migration](docs/embedding.md) for batch
+requests, offline model files, optional images, supported tasks, examples, and
+migration from the old `Embedder` and cache write APIs.
 
 ## How caching works
 
@@ -481,8 +510,8 @@ implementation than torchvision's). It changes individual pixels by at most 0.06
 ## Testing
 
 ```bash
-cargo test                         # no model needed: segmentation, cache, CLI, ranking
-cargo test --release -- --ignored  # also the model-backed parity and retrieval tests
+cargo test --workspace             # no model needed: segmentation, cache, CLI, ranking
+cargo test --workspace --release -- --ignored  # model-backed tests; image parity needs reference files
 ```
 
 Model-backed tests read `SEYK_MODEL` (local model dir) and

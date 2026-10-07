@@ -546,3 +546,47 @@ Evaluate the extraction API with downstream CLI consumers, then implement text
 PDF extraction in Phase 4 behind the same explicit boundary. Resolve media
 metadata and MCP hit references with their first real consumers. Keep search,
 extraction and downstream reasoning separate.
+
+## Embedding split implementation (0.2.0-dev)
+
+The workspace now separates `seyk-embed` (generic embedding inputs, tasks, values
+and errors), `seyk-embeddinggemma` (local runtime/preprocessing), and `seyk-core`
+(search, evidence, cache, provider and extraction). The root `seyk` package is the
+compatibility facade plus thin CLI/MCP composition layer. There is no separate
+`seyk-cli` package: a fifth package would only mirror the diagram while requiring
+an extra facade to preserve `use seyk::SearchEngine` and source installation.
+
+Core has no concrete backend dependency. It submits SearchQuery/SearchDocument
+requests through the generic trait. Exact query/document formatting, ModelIdentity
+serialization, cache profiles, input hashes, schema v4 and vector encoding remain
+unchanged. Other standalone tasks never enter the search cache. Downloading remains
+an explicit operation in the root package; the backend resolves only local files.
+
+The cache write API now borrows explicit source bodies paired with stored segment
+evidence. Readback types have no source-body field and cannot be used as complete
+write input. Preparation retains original source text until keyword indexing;
+only the processed text goes to embedding. Image bodies are explicitly empty.
+No ranking, extraction, keyword tokenization, field weight or schema change is
+part of this refactor. SQLite's registration requirement and MemoryCache's
+pre-registration behavior are both retained.
+
+The default test suite exercises both caches, unchanged vector reuse, typed error
+compatibility, backend-free mocks and a golden profile captured from the pre-split
+binary. On a synthetic two-note cache, the new binary reused both embeddings and
+returned identical hits, profile rows, input hashes and vector bytes. Local q8
+model tests passed token/vector parity at all four widths, batch ordering,
+retrieval and generated-image search. CI covers Linux, macOS and Windows; the PR
+records final-head results and dependency-tree evidence. No private corpus was
+accessed or evaluated.
+
+All packages share `workspace.package.version = "0.2.0-dev"`; the binary reports
+that version and its daemon endpoint differs from 0.1.0. Release archive and
+binary names remain unchanged. The new crates are not published to crates.io.
+See [embedding usage and migration](embedding.md) for Git dependencies, offline
+files, supported prompts/modalities, feature flags, examples and API changes.
+
+Remaining limitations: image inference is sequential, session locks serialize
+calls, the token default remains 2048, and audio/video are unsupported. Local
+model identity still fingerprints graph bytes plus weight-file sizes; staging
+still reuses equal-size targets. Changing those existing rules would require a
+separate cache-identity migration.

@@ -6,9 +6,11 @@ import subprocess
 FORBIDDEN = {"clap", "rusqlite", "walkdir", "globset", "notify", "rmcp", "tokio", "schemars", "url"}
 
 def check(package, extra, forbidden):
-    command = ["cargo", "tree", "--locked", "-p", package, *extra]
+    command = ["cargo", "tree", "--color", "never", "--locked", "-p", package, *extra]
     tree = subprocess.check_output(command, text=True, encoding="utf-8")
     names = set(re.findall(r"\b([a-z][a-z0-9_-]*) v[0-9]", tree))
+    if package not in names:
+        raise SystemExit(f"cannot parse dependency tree for {package}")
     unexpected = names & forbidden
     if unexpected:
         raise SystemExit(f"{package}: forbidden dependencies: {sorted(unexpected)}\n{tree}")

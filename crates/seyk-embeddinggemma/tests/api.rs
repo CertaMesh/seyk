@@ -126,3 +126,17 @@ fn batch_tasks_order_stability_and_unsupported_inputs() {
         ));
     }
 }
+
+#[cfg(feature = "image")]
+#[test]
+#[ignore = "needs local EmbeddingGemma 2 text and vision weights"]
+fn image_tasks_are_rejected_before_decoding() {
+    let model = EmbeddingGemma2::builder().vision(true).build().unwrap();
+    assert!(matches!(
+        model.embed(
+            ResourceInput::Image { bytes: &[] },
+            EmbeddingTask::Clustering
+        ),
+        Err(Error::UnsupportedTask { .. })
+    ));
+}

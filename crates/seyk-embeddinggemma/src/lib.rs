@@ -10,6 +10,23 @@
 //! log-mel feature extractor, and video needs frame decoding; both are
 //! reported as unsupported rather than approximated.
 
+//! # Standalone text embedding
+//!
+//! ```no_run
+//! use seyk_embed::{Embedder, EmbeddingRequest, EmbeddingTask, ResourceInput};
+//! use seyk_embeddinggemma::EmbeddingGemma2;
+//! # fn main() -> seyk_embed::Result<()> {
+//! let model = EmbeddingGemma2::builder().dimension(256).vision(false).build()?;
+//! let query = model.embed_text("account access", EmbeddingTask::SearchQuery)?;
+//! let batch = model.embed_batch(&[EmbeddingRequest {
+//!     input: ResourceInput::Text { title: Some("Support"), text: "Reset your password." },
+//!     task: EmbeddingTask::SearchDocument,
+//! }])?;
+//! assert_eq!(query.dim(), batch[0].dim());
+//! # Ok(())
+//! # }
+//! ```
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
