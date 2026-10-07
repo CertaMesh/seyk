@@ -58,3 +58,37 @@ fn missing_model_is_a_helpful_failure_and_invalid_dimensions_are_rejected() {
         .failure()
         .stderr(predicate::str::contains("unsupported dimension 300"));
 }
+
+/// The MCP server answers the handshake and lists its tool before any model is
+/// loaded, so clients start fast and this runs without weights.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_server_lists_search_tool_without_loading_the_model() {
+    let temp = TempDir::new().unwrap();
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+    ]
+    .join("\n")
+        + "\n";
+    let output = binary()
+        .args(["mcp", temp.path().to_str().unwrap()])
+        .env("GEMMA_SEARCH_MODEL", temp.path().join("no-model"))
+        .write_stdin(requests)
+        .timeout(std::time::Duration::from_secs(20))
+        .output()
+        .unwrap();
+    let responses: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "gemma-search");
+    let tools = &responses[1]["result"]["tools"];
+    assert_eq!(tools[0]["name"], "search");
+    assert!(tools[0]["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::from("queries")));
+}

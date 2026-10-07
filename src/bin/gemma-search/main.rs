@@ -1,5 +1,8 @@
 //! `gemma-search`: a thin command-line front end for the `gemma_search` crate.
 
+#[cfg(feature = "mcp")]
+mod mcp;
+
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -117,6 +120,14 @@ enum Command {
         action: CacheAction,
         #[arg(long, env = "GEMMA_SEARCH_CACHE", global = true)]
         cache_path: Option<PathBuf>,
+    },
+    /// Serve semantic search to agents over MCP (stdio). The model stays loaded.
+    #[cfg(feature = "mcp")]
+    Mcp {
+        /// Folders the server may search. Defaults to the current directory.
+        roots: Vec<PathBuf>,
+        #[command(flatten)]
+        model: ModelArgs,
     },
     /// Download or inspect the model files.
     Model {
@@ -239,6 +250,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     println!("Cleared {}", cache.path().display());
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(feature = "mcp")]
+        Command::Mcp { roots, model } => {
+            let roots = default_paths(roots)?;
+            mcp::serve(roots, Box::new(move || engine(&model, false)))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Model { action, model } => {
