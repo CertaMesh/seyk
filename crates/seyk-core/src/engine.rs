@@ -1471,3 +1471,80 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pre_split_golden {
+    use super::*;
+
+    struct IdentityOnly(crate::ModelIdentity);
+    impl Embedder for IdentityOnly {
+        fn identity(&self) -> &crate::ModelIdentity {
+            &self.0
+        }
+        fn supports(&self, _: crate::Modality) -> bool {
+            true
+        }
+        fn embed_batch(
+            &self,
+            _: &[EmbeddingRequest<'_>],
+        ) -> seyk_embed::Result<Vec<crate::Embedding>> {
+            panic!("preparation must not run inference")
+        }
+    }
+
+    #[test]
+    fn production_profile_and_prepared_input_hashes_match_pre_split() {
+        // Captured by loading Gemma and calling this engine's build/prepare
+        // functions in base 00c1038; see the fixture provenance README.
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/pre_split_preparation.json"))
+                .unwrap();
+        let identity = serde_json::from_value(golden["profile"]["model"].clone()).unwrap();
+        let engine = SearchEngine::builder()
+            .embedder(IdentityOnly(identity))
+            .build()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(engine.profile()).unwrap(),
+            golden["profile"]
+        );
+        assert_eq!(engine.profile_id(), golden["profile_id"].as_str().unwrap());
+        for (name, title, kind, bytes) in [
+            (
+                "titled",
+                Some("Guide"),
+                ResourceKind::Text(TextFormat::Markdown),
+                b"# Setup\n\nRead the [manual](https://example.com/manual) before installing.\n"
+                    .as_slice(),
+            ),
+            (
+                "untitled",
+                None,
+                ResourceKind::Text(TextFormat::Plain),
+                b"A short note with no document title.\n".as_slice(),
+            ),
+            (
+                "image",
+                Some("diagram"),
+                ResourceKind::Image,
+                b"\x89PNG\r\n\x1a\nsynthetic golden bytes".as_slice(),
+            ),
+        ] {
+            let resource = ProvidedResource {
+                id: format!("test://golden/{name}").parse().unwrap(),
+                kind,
+                size_bytes: bytes.len() as u64,
+                modified_ns: None,
+                version: ResourceVersion::unknown(),
+                title: title.map(String::from),
+            };
+            let jobs = engine.prepare(&resource, bytes.to_vec()).unwrap();
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(
+                jobs[0].segment.input_hash,
+                golden["input_hashes"][name].as_str().unwrap(),
+                "{name}"
+            );
+        }
+    }
+}
