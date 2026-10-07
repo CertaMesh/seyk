@@ -31,9 +31,11 @@ jobs:
       - run: cargo test --workspace --locked --no-fail-fast
       - name: Check standalone dependency boundaries
         run: python scripts/check_embedding_dependencies.py
-      - name: Check minimal library and CLI features
-        run: |
-          cargo check -p seyk --no-default-features --lib --locked
-          cargo check -p seyk --no-default-features --features cli --bin seyk --locked
-          cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
-          cargo test -p seyk-core --no-default-features --locked
+      - name: Check minimal facade library
+        run: cargo check -p seyk --no-default-features --lib --locked
+      - name: Check text-only CLI
+        run: cargo check -p seyk --no-default-features --features cli --bin seyk --locked
+      - name: Lint standalone text backend
+        run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
+      - name: Test standalone core
+        run: cargo test -p seyk-core --no-default-features --locked
