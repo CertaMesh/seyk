@@ -1,6 +1,17 @@
+[workspace]
+members = [".", "crates/seyk-embed", "crates/seyk-embeddinggemma", "crates/seyk-core"]
+default-members = ["."]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.0-dev"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+
 [package]
 name = "seyk"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.89"
 description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"

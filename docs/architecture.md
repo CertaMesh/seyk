@@ -1,5 +1,26 @@
 # Architecture and roadmap notes
 
+## Embedding crate split: pre-change audit (main @00c1038)
+### Current embedding architecture
+- One package, `seyk`, owns the library and binary. `src/embedder/mod.rs` defines a synchronous, object-safe `Embedder: Send + Sync`, `ModelIdentity`, `ResourceInput`, and `VideoFrame`; `src/embedding.rs` supplies `Dimension`, normalized vectors, dot products and cache byte conversion.
+- `src/embedder/gemma.rs` implements text AND images using tokenizers + mutex-protected ONNX sessions. Text batches sort by token length, run padded sub-batches, then restore input order. Images currently run individually through vision + text models; audio/video return UnsupportedModality.
+- Loading is already offline: HF cache or local directory; explicit `download` uses hf-hub. Defaults: q8, 256 dimensions, 2048-token limit, batch 16, vision when image feature enabled. Local model fingerprinting and ONNX external-data hard-link/copy handling exist.
+- ONNX returns pooled 768-wide sentence embeddings. Existing code truncates to 128/256/512/768 and then L2-normalizes. Zero vectors remain zero; do not falsely label those normalized. There is no current general task API.
+### Existing coupling
+- The trait speaks only query/resources, uses search's Error/Result, and imports Modality from a module containing ResourceId/url. Even disabling CLI leaves SQLite, walkers and search in the package.
+- Gemma's missing-weight error prescribes the Seyk CLI. hf-hub brings ureq 2 -> url: confirmed by `rustup run 1.99.0 cargo tree --locked --offline -e normal -i url`. Moving gemma.rs unchanged would fail the binding dependency constraint.
+- Engine already stores `Arc<dyn Embedder>`; no concrete backend import is needed. Cache profile JSON includes ModelIdentity; input hashes use length-prefixed modality/title/model-text parts, not a newly reconstructed prompt.
+- CachedSegment currently owns optional write-only lexical_text. Both caches map absent text to empty; writing a read result back can erase body keywords. No production failure is asserted.
+### What can be extracted cleanly
+- Traits/input types/Modality/vector math/errors and model identity move to a lightweight crate. Runtime, prompt formatting, tokenizer, image preprocessing, model location/fingerprint and inference move to the backend.
+- Cache vector byte serialization remains in core. Segmentation, title selection, Markdown link-target stripping, providers, extraction, ranking and index/cache remain search concerns.
+### Proposed crate boundaries
+- Four packages: `crates/seyk-embed`, `crates/seyk-embeddinggemma`, `crates/seyk-core`, and root `seyk`. Root is the compatibility facade PLUS existing thin CLI/MCP/daemon composition package (the seyk-cli role).
+- Graph: `seyk -> seyk-core -> seyk-embed`; `seyk -> seyk-embeddinggemma -> seyk-embed`. Core has no backend dependency, including its mock-based tests. No fifth facade/CLI package solely to achieve a directory diagram.
+### Migration impact
+- Keep `use seyk::SearchEngine`, existing public search module paths, CLI commands/binary name, and root release/install behavior. Root re-exports core and embedding types; optional `seyk::embedder::gemma` re-exports backend types with GemmaEmbedder alias.
+- Custom Embedder implementations migrate to task-aware batches and embedding-specific Result; cache implementors/struct literals migrate once to ResourceWrite/SegmentWrite. Document error matching changes, Dimension generalization and download ownership.
+
 This file records the architecture as audited before each development phase, so
 later phases can see what was deliberately left alone and why.
 

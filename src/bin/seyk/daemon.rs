@@ -396,6 +396,18 @@ mod tests {
             endpoint_id(&args, 2),
             endpoint_id(&["--dimension".into(), "128".into()], 2)
         );
+        let mut previous_version = blake3::Hasher::new();
+        previous_version.update(b"0.1.0");
+        previous_version.update(b"json-schema");
+        previous_version.update(&2u32.to_le_bytes());
+        for a in &args {
+            previous_version.update(&(a.len() as u64).to_le_bytes());
+            previous_version.update(a.as_bytes());
+        }
+        assert_ne!(
+            endpoint_id(&args, 2),
+            &previous_version.finalize().to_hex()[..12]
+        );
         let mut legacy = blake3::Hasher::new();
         legacy.update(env!("CARGO_PKG_VERSION").as_bytes());
         for a in &args {

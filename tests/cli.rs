@@ -10,6 +10,15 @@ fn binary() -> Command {
 }
 
 #[test]
+fn version_identifies_the_development_release() {
+    binary()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout("seyk 0.2.0-dev\n");
+}
+
+#[test]
 fn help_lists_all_top_level_commands() {
     binary().arg("--help").assert().success().stdout(
         predicate::str::contains("search")

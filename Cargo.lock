@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "seyk"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2525,6 +2525,18 @@ dependencies = [
  "url",
  "walkdir",
 ]
+
+[[package]]
+name = "seyk-core"
+version = "0.2.0-dev"
+
+[[package]]
+name = "seyk-embed"
+version = "0.2.0-dev"
+
+[[package]]
+name = "seyk-embeddinggemma"
+version = "0.2.0-dev"
 
 [[package]]
 name = "shlex"

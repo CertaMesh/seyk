@@ -79,6 +79,9 @@ library is downloaded by the `ort` crate **at build time**. For a fully offline
 build, set `ORT_SKIP_DOWNLOAD=1` and point `ORT_LIB_LOCATION` at a local ONNX
 Runtime build.
 
+Older Seyk binaries reset caches written by newer versions. When running old and
+new binaries side by side, use a separate `--cache-path` for each.
+
 ## Model setup
 
 Download the weights once (about 0.5 GB for the default 8-bit text and vision models):
