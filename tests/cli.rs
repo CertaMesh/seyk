@@ -1,3 +1,5 @@
+mod common;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
@@ -12,6 +14,7 @@ fn help_lists_all_top_level_commands() {
     binary().arg("--help").assert().success().stdout(
         predicate::str::contains("search")
             .and(predicate::str::contains("index"))
+            .and(predicate::str::contains("extract"))
             .and(predicate::str::contains("cache"))
             .and(predicate::str::contains("model")),
     );
@@ -153,4 +156,89 @@ fn mcp_relays_through_a_daemon_it_starts() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Stopped."));
+}
+
+#[test]
+fn extract_round_trip_without_a_model() {
+    use seyk::{Dimension, ResourceLocator, SearchEngine};
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("café note.md");
+    let text = "# Alpha\r\n\r\nExact **café** [文書](https://example.invalid) 🙂\r\n";
+    std::fs::write(&path, text).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "cli-extract"))
+        .build()
+        .unwrap();
+    let results = engine
+        .search("alpha")
+        .paths([&path])
+        .previews(None)
+        .execute()
+        .unwrap();
+    let mut value = serde_json::to_value(&results).unwrap();
+    value["schema_version"] = 2.into();
+    assert!(value["hits"][0].get("preview").unwrap().is_null());
+    let input = serde_json::to_string(&value).unwrap();
+    let ResourceLocator::Text {
+        byte_start,
+        byte_end,
+        ..
+    } = results.hits[0].locator
+    else {
+        panic!("text locator")
+    };
+    let expected = &text.as_bytes()[byte_start as usize..byte_end as usize];
+    let run = |args: &[&str], data: &str| {
+        binary()
+            .args(args)
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .env("HF_HUB_OFFLINE", "1")
+            .write_stdin(data)
+            .output()
+            .unwrap()
+    };
+    let raw = run(&["extract", "--from-json", "-"], &input);
+    assert!(
+        raw.status.success(),
+        "{}",
+        String::from_utf8_lossy(&raw.stderr)
+    );
+    assert_eq!(raw.stdout, expected);
+    let json = run(&["extract", "--from-json", "-", "--json"], &input);
+    assert!(json.status.success());
+    let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(extracted["schema_version"], 2);
+    assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
+    assert_eq!(extracted["source"], value["hits"][0]["resource"]);
+    assert_eq!(extracted["locator"], value["hits"][0]["locator"]);
+    assert_eq!(extracted["metadata"], value["hits"][0]["metadata"]);
+    let input_path = temp.path().join("hits.json");
+    std::fs::write(&input_path, &input).unwrap();
+    binary()
+        .args(["extract", "--from-json"])
+        .arg(&input_path)
+        .assert()
+        .success()
+        .stdout(expected);
+    let missing = run(&["extract", "--from-json", "-", "--hit", "999"], &input);
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    std::fs::write(&path, text.replace("Exact", "Other")).unwrap();
+    let stale = run(&["extract", "--from-json", "-", "--json"], &input);
+    assert!(!stale.status.success());
+    assert!(stale.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("resource changed"));
+    for data in [
+        "not json".to_string(),
+        "{}".into(),
+        input.replace("\"schema_version\":2", "\"schema_version\":3"),
+    ] {
+        let bad = run(&["extract", "--from-json", "-"], &data);
+        assert!(!bad.status.success());
+        assert!(bad.stdout.is_empty());
+    }
+    value["hits"] = serde_json::json!([]);
+    let empty = run(&["extract", "--from-json", "-"], &value.to_string());
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("no hit at index 0"));
 }

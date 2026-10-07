@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, MemoryCache};
 use crate::discovery::{DiscoveryOptions, ResourceKind};
 use crate::embedder::{Embedder, ResourceInput};
+use crate::extractor::{
+    ExtractedContent, Extractor, ResourceBytes, TextExtractor, extract_resource, text_range,
+    unsupported,
+};
 use crate::index::{BruteForceIndex, Scored, VectorIndex};
 use crate::lexical::LexicalQuery;
 use crate::segment::{TextFormat, TextSegmenter};
@@ -146,6 +150,7 @@ pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
 
 pub struct SearchEngineBuilder {
     provider: Arc<dyn ResourceProvider>,
+    extractors: Vec<Arc<dyn Extractor>>,
     embedder: Option<Arc<dyn Embedder>>,
     cache: Option<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
@@ -153,6 +158,13 @@ pub struct SearchEngineBuilder {
 }
 
 impl SearchEngineBuilder {
+    /// Register an extractor before the built-in text fallback. Custom
+    /// extractors are tried in registration order; errors never fall through.
+    pub fn extractor(mut self, extractor: impl Extractor + 'static) -> Self {
+        self.extractors.push(Arc::new(extractor));
+        self
+    }
+
     /// Resource access; defaults to the local filesystem provider.
     pub fn provider(mut self, provider: impl ResourceProvider + 'static) -> Self {
         self.provider = Arc::new(provider);
@@ -191,7 +203,8 @@ impl SearchEngineBuilder {
         self
     }
 
-    pub fn build(self) -> Result<SearchEngine> {
+    pub fn build(mut self) -> Result<SearchEngine> {
+        self.extractors.push(Arc::new(TextExtractor));
         let embedder = self
             .embedder
             .ok_or_else(|| Error::Config("SearchEngine needs an embedder".into()))?;
@@ -207,6 +220,7 @@ impl SearchEngineBuilder {
         cache.register_profile(&profile_id, &profile)?;
         Ok(SearchEngine {
             provider: self.provider,
+            extractors: self.extractors,
             embedder,
             cache: Mutex::new(cache),
             segmenter: self.segmenter,
@@ -220,6 +234,7 @@ impl SearchEngineBuilder {
 /// Search over provider resources; local files are the default.
 pub struct SearchEngine {
     provider: Arc<dyn ResourceProvider>,
+    extractors: Vec<Arc<dyn Extractor>>,
     embedder: Arc<dyn Embedder>,
     cache: Mutex<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
@@ -232,11 +247,29 @@ impl SearchEngine {
     pub fn builder() -> SearchEngineBuilder {
         SearchEngineBuilder {
             provider: Arc::new(FsProvider),
+            extractors: Vec::new(),
             embedder: None,
             cache: None,
             segmenter: TextSegmenter::default(),
             batch_size: 16,
         }
+    }
+
+    /// Extract readable evidence from a hit, verifying its full-resource hash
+    /// before any extractor receives bytes. No indexing or model calls occur.
+    pub fn extract(&self, hit: &SearchHit) -> Result<ExtractedContent> {
+        let extractor = self
+            .extractors
+            .iter()
+            .find(|e| e.supports(&hit.resource, &hit.locator, &hit.metadata))
+            .ok_or_else(|| unsupported(&hit.resource, &hit.locator, &hit.metadata))?;
+        extract_resource(
+            self.provider.as_ref(),
+            extractor.as_ref(),
+            &hit.resource,
+            &hit.locator,
+            &hit.metadata,
+        )
     }
 
     pub fn profile(&self) -> &CacheProfile {
@@ -1222,7 +1255,7 @@ impl<'e> IndexRequest<'e> {
 #[derive(Default)]
 struct PreviewReader {
     /// Each file read once per search, with the digest of exactly those bytes.
-    files: HashMap<ResourceId, Option<(Vec<u8>, String)>>,
+    files: HashMap<ResourceId, Option<ResourceBytes>>,
 }
 
 impl PreviewReader {
@@ -1234,29 +1267,19 @@ impl PreviewReader {
         meta: &ResourceMetadata,
         max_chars: usize,
     ) -> Option<String> {
-        let ResourceLocator::Text {
-            byte_start,
-            byte_end,
-            ..
-        } = locator
-        else {
-            return None;
-        };
-        let (bytes, digest) = self
-            .files
-            .entry(path.clone())
-            .or_insert_with(|| {
-                let bytes = provider.read(path).ok()?;
-                let digest = blake3::hash(&bytes).to_hex().to_string();
-                Some((bytes, digest))
-            })
-            .as_ref()?;
-        // If the file changed after it was embedded, the byte range may be wrong.
-        if *digest != meta.content_hash {
+        if !matches!(locator, ResourceLocator::Text { .. }) {
             return None;
         }
-        let slice = bytes.get(*byte_start as usize..*byte_end as usize)?;
-        Some(make_preview(&String::from_utf8_lossy(slice), max_chars))
+        let read = self
+            .files
+            .entry(path.clone())
+            .or_insert_with(|| ResourceBytes::read(provider, path).ok())
+            .as_ref()?;
+        let bytes = read.verify(path, meta).ok()?;
+        Some(make_preview(
+            text_range(bytes, path, locator).ok()?,
+            max_chars,
+        ))
     }
 }
 

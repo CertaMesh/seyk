@@ -152,10 +152,40 @@ seyk cache clear
 | `--include` / `--exclude` | Globs; a pattern without `/` matches the file name |
 | `--hidden` | Also search dotfiles and dot-directories |
 | `--no-cache` | Embed in memory only |
+| `--no-preview` | Skip preview reads; JSON hits retain `"preview": null` |
 | `--json` | JSON output |
 | `--text-only` | Skip loading the vision encoder; images are skipped |
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
+
+### Extract a search hit
+
+Search locates evidence; extraction reads a chosen hit and verifies its full
+resource hash before returning the exact UTF-8 byte range. It preserves Markdown,
+code, whitespace and line endings. If the source changed, extraction fails with
+an error instead of returning a different passage.
+
+```sh
+seyk search "planting basil" ./notes --json --no-preview > hits.json
+seyk extract --from-json hits.json --hit 0 --json
+
+# Or pipe search output directly; the default hit index is zero.
+seyk search "planting basil" ./notes --json --no-preview -n 1 |
+  seyk extract --from-json - --json
+```
+
+Without `--json`, extract writes only the exact text, with no added newline.
+It needs no model, cache or network. Input must be a complete search JSON envelope
+at `schema_version: 2`, not a bare hit. The new extraction document also uses
+version 2 and contains `text`, `source`, `locator` and `metadata`;
+`metadata.content_hash` is the hash of the **whole source**, not just the passage.
+Existing search documents keep their v2 shape: `--no-preview` sets `preview` to
+null. This flag skips preview reads; indexing still reads source content.
+
+Only text ranges are supported. Images, whole-resource and other locators return
+an unsupported-extraction error. MCP extraction is deferred until MCP hits can
+carry exact locators and hashes with session-scoped read checks; MCP search and
+its root confinement are unchanged.
 
 ### Scores and tags
 
@@ -273,6 +303,27 @@ Each `SearchHit` carries a resource URI, a modality-independent
 `WholeResource`),
 the score, the resource metadata (modality, size, mtime, content hash), the
 Markdown heading path and an optional short preview.
+
+Explicit extraction in Rust:
+
+```rust
+let results = engine.search("planting basil")
+    .paths(["./notes"])
+    .previews(None)
+    .execute()?;
+if let Some(hit) = results.hits.first() {
+    let content = engine.extract(hit)?;
+    print!("{}", content.text);
+}
+```
+
+`SearchEngine::builder().extractor(custom)` registers a synchronous
+`Extractor: Send + Sync` before the default `TextExtractor`. Custom extractors
+receive full, hash-verified bytes; the first supporting extractor wins and its
+errors propagate. For model-free library extraction, use
+`extract_resource(&provider, &TextExtractor, &hit.resource, &hit.locator,
+&hit.metadata)`. Direct low-level `Extractor::extract` calls require the caller
+to verify bytes first. Neither entry point adds an authorization layer.
 
 Resource identity migration (Phase 2): replace `hit.resource.path()` with
 `hit.resource.to_file_path()`, which returns `Option<PathBuf>`. Use the URI's
