@@ -127,6 +127,7 @@ pub trait EmbeddingCache: Send {
     fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>>;
 
     /// Segments of `paths` matching `query` by keyword, best first, at most `limit`.
+    /// Equal scores are ordered by path bytes, then segment ordinal.
     fn lexical_search(
         &self,
         profile: &str,
@@ -301,7 +302,13 @@ impl EmbeddingCache for MemoryCache {
         let docs = bucket
             .iter()
             .flat_map(|(path, docs)| docs.iter().enumerate().map(move |(i, d)| ((path, i), d)));
-        Ok(crate::lexical::bm25(docs, query)
+        let mut scored = crate::lexical::bm25(docs, query);
+        scored.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then_with(|| path_key(a.0.0).cmp(&path_key(b.0.0)))
+                .then_with(|| a.0.1.cmp(&b.0.1))
+        });
+        Ok(scored
             .into_iter()
             .filter(|((path, _), _)| paths.contains(*path))
             .take(limit)
@@ -524,7 +531,7 @@ impl SqliteCache {
 }
 
 #[cfg(unix)]
-fn path_key(p: &Path) -> Vec<u8> {
+pub(crate) fn path_key(p: &Path) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
     p.as_os_str().as_bytes().to_vec()
 }
@@ -536,7 +543,7 @@ fn key_path(b: Vec<u8>) -> PathBuf {
 }
 
 #[cfg(not(unix))]
-fn path_key(p: &Path) -> Vec<u8> {
+pub(crate) fn path_key(p: &Path) -> Vec<u8> {
     p.to_string_lossy().into_owned().into_bytes()
 }
 
@@ -806,13 +813,13 @@ impl EmbeddingCache for SqliteCache {
             return Ok(Vec::new());
         };
         let weights = FIELDS.map(|(_, w)| w.to_string()).join(", ");
-        // bm25() is lower-is-better; the requested paths are filtered here
-        // rather than in SQL so the rank order streams without a temp table.
+        // bm25() is lower-is-better; ties use the stored path bytes and ordinal
+        // before filtering requested paths and truncating the candidate list.
         let sql = format!(
             "SELECT s.path, s.ordinal, -bm25(segments_fts, {weights})
              FROM segments_fts JOIN segments s ON s.rowid = segments_fts.rowid
              WHERE segments_fts MATCH ?1 AND s.profile = ?2
-             ORDER BY bm25(segments_fts, {weights})"
+             ORDER BY bm25(segments_fts, {weights}), s.path, s.ordinal"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut rows = stmt.query(params![expr, profile])?;

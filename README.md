@@ -180,7 +180,8 @@ meaning.
 `--mode semantic` gives the old behaviour: the score is the cosine itself. Use
 it to rank within one search; it is not a calibrated probability, and unrelated
 text rarely scores near zero, so pick a `--min-score` by looking at your own
-results. `--mode lexical` never loads or runs the model's query side.
+results. `--mode lexical` never embeds the query. The CLI still loads the model
+and uses it to index new or changed files before searching.
 
 ## Agents (MCP)
 

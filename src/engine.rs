@@ -641,7 +641,8 @@ impl<'e> SearchRequest<'e> {
 
     /// Override how much keyword rank counts against semantic rank in hybrid
     /// mode (semantic is 1). By default it depends on the query, see
-    /// [`keyword_weight`].
+    /// [`keyword_weight`]. Must be finite and non-negative; zero disables the
+    /// keyword signal in hybrid mode. Valid overrides are ignored in other modes.
     pub fn lexical_weight(mut self, w: f32) -> Self {
         self.lexical_weight = Some(w);
         self
@@ -696,6 +697,14 @@ impl<'e> SearchRequest<'e> {
     pub fn execute(self) -> Result<SearchResults> {
         let started = Instant::now();
         let engine = self.engine;
+        if self
+            .lexical_weight
+            .is_some_and(|w| !w.is_finite() || w < 0.0)
+        {
+            return Err(Error::Config(
+                "lexical weight must be finite and non-negative".into(),
+            ));
+        }
         if self.paths.is_empty() {
             return Err(Error::Config("no paths to search".into()));
         }
@@ -737,7 +746,9 @@ impl<'e> SearchRequest<'e> {
                 }
                 query_vectors.push(v);
             }
-            let stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
+            let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
+            // Vector IDs break cosine ties, including at the top-k cutoff.
+            stored.sort_by_cached_key(|v| (crate::cache::path_key(&v.path), v.ordinal));
             let mut index = BruteForceIndex::with_capacity(dim, stored.len());
             let mut keys = Vec::with_capacity(stored.len());
             for v in stored {
@@ -784,9 +795,12 @@ impl<'e> SearchRequest<'e> {
             }
         }
 
-        let weight = self
-            .lexical_weight
-            .unwrap_or_else(|| keyword_weight(&self.queries));
+        let weight = match self.mode {
+            SearchMode::Hybrid => self
+                .lexical_weight
+                .unwrap_or_else(|| keyword_weight(&self.queries)),
+            _ => keyword_weight(&self.queries),
+        };
         let ranked = rank(self.mode, &semantic, &lexical, weight, &named, self.limit);
 
         let mut previews = PreviewReader::default();
@@ -862,18 +876,24 @@ impl SegmentTable {
 /// Whether `query` names this file: its name (`father.md`), its stem (`father`)
 /// or a trailing part of its path (`notes/father.md`), ignoring case.
 fn names_file(query: &str, path: &Path) -> bool {
-    let q = query.trim().trim_matches(['"', '\'', '`']).to_lowercase();
-    if q.is_empty() || q.contains(char::is_whitespace) {
+    let q = query
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim()
+        .replace('\\', "/")
+        .to_lowercase();
+    if q.is_empty() {
         return false;
     }
+    let full = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    let path = Path::new(&full);
     let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase());
     let stem = path.file_stem().map(|n| n.to_string_lossy().to_lowercase());
     if name.as_deref() == Some(q.as_str()) || stem.as_deref() == Some(q.as_str()) {
         return true;
     }
     q.contains('/') && {
-        let full = path.to_string_lossy().to_lowercase();
-        full.ends_with(&q) && full[..full.len() - q.len()].ends_with('/')
+        full == q || (full.ends_with(&q) && full[..full.len() - q.len()].ends_with('/'))
     }
 }
 
@@ -939,10 +959,12 @@ fn rank(
         e.1.semantic = Some(*cos);
         e.2 = *q;
     }
-    for (rank, (k, bm25)) in lexical.iter().enumerate() {
-        let e = fused.entry(k.clone()).or_default();
-        e.0 += rrf(rank, lexical_weight);
-        e.1.lexical = Some(*bm25);
+    if lexical_weight > 0.0 {
+        for (rank, (k, bm25)) in lexical.iter().enumerate() {
+            let e = fused.entry(k.clone()).or_default();
+            e.0 += rrf(rank, lexical_weight);
+            e.1.lexical = Some(*bm25);
+        }
     }
     for (rank, k) in named.iter().enumerate() {
         let e = fused.entry(k.clone()).or_default();
@@ -956,9 +978,12 @@ fn rank(
         (!named.is_empty(), FILENAME_WEIGHT),
     ]
     .iter()
-    .filter(|(found, _)| *found)
+    .filter(|(found, w)| *found && *w > 0.0)
     .map(|(_, w)| rrf(0, *w))
     .sum::<f32>();
+    if best == 0.0 {
+        return Vec::new();
+    }
     let mut out: Vec<_> = fused
         .into_iter()
         .map(|(k, (score, signals, q))| (k, score / best, signals, q))
@@ -1195,6 +1220,44 @@ mod tests {
         for q in ["ather.md", "eople/father.md", "my father", "father.txt", ""] {
             assert!(!names_file(q, p), "{q}");
         }
+    }
+
+    #[test]
+    fn names_file_normalizes_both_paths_and_queries_and_preserves_boundaries() {
+        for path in [
+            "/book/my people/My Notes.md",
+            r"C:\book\my people\My Notes.md",
+        ] {
+            let path = Path::new(path);
+            for query in [
+                "MY NOTES.MD",
+                "my notes",
+                " \"My Notes.md\" ",
+                "`my notes`",
+                "my people/My Notes.md",
+                r"my people\My Notes.md",
+            ] {
+                assert!(names_file(query, path), "{query}: {path:?}");
+            }
+            for query in [
+                "notes.md",
+                "my notes today",
+                "people/My Notes.md",
+                r"people\My Notes.md",
+                "  ``  ",
+            ] {
+                assert!(!names_file(query, path), "{query}: {path:?}");
+            }
+        }
+        assert!(names_file(
+            r"people\father.md",
+            Path::new("/book/people/father.md")
+        ));
+        assert!(names_file(
+            "people/father.md",
+            Path::new(r"C:\book\people\father.md")
+        ));
+        assert!(!names_file("my father", Path::new(r"C:\book\father.md")));
     }
 
     #[test]
