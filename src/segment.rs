@@ -436,7 +436,7 @@ mod tests {
         for s in seg(src, TextFormat::Markdown) {
             assert_eq!(&src[s.byte_range.clone()], s.text);
             let lines: Vec<&str> = src.lines().collect();
-            assert!(lines[(s.line_start - 1) as usize].len() > 0);
+            assert!(!lines[(s.line_start - 1) as usize].is_empty());
             assert!(s.text.ends_with(lines[(s.line_end - 1) as usize].trim()));
         }
     }
