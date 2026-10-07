@@ -124,8 +124,10 @@ pub trait EmbeddingCache: Send {
 #[derive(Debug, Default)]
 pub struct MemoryCache {
     profiles: HashMap<String, CacheProfile>,
-    resources: HashMap<(String, PathBuf), CachedResource>,
-    vectors: HashMap<(String, String), Vec<f32>>,
+    // Bucketed by profile id, like the trait. Kept apart from `profiles`
+    // because, unlike SQLite, writes may precede registration.
+    resources: HashMap<String, HashMap<PathBuf, CachedResource>>,
+    vectors: HashMap<String, HashMap<String, Vec<f32>>>,
 }
 
 impl MemoryCache {
@@ -143,16 +145,18 @@ impl EmbeddingCache for MemoryCache {
     fn resource_index(&self, profile: &str) -> Result<HashMap<PathBuf, ResourceMetadata>> {
         Ok(self
             .resources
-            .iter()
-            .filter(|((p, _), _)| p == profile)
-            .map(|((_, path), r)| (path.clone(), r.metadata.clone()))
+            .get(profile)
+            .into_iter()
+            .flatten()
+            .map(|(path, r)| (path.clone(), r.metadata.clone()))
             .collect())
     }
 
     fn resource(&self, profile: &str, path: &Path) -> Result<Option<CachedResource>> {
         Ok(self
             .resources
-            .get(&(profile.to_string(), path.to_path_buf()))
+            .get(profile)
+            .and_then(|b| b.get(path))
             .cloned())
     }
 
@@ -163,7 +167,9 @@ impl EmbeddingCache for MemoryCache {
         resource: &CachedResource,
     ) -> Result<()> {
         self.resources
-            .insert((profile.to_string(), path.to_path_buf()), resource.clone());
+            .entry(profile.to_string())
+            .or_default()
+            .insert(path.to_path_buf(), resource.clone());
         Ok(())
     }
 
@@ -175,7 +181,8 @@ impl EmbeddingCache for MemoryCache {
     ) -> Result<()> {
         if let Some(r) = self
             .resources
-            .get_mut(&(profile.to_string(), path.to_path_buf()))
+            .get_mut(profile)
+            .and_then(|b| b.get_mut(path))
         {
             r.metadata.modified_ns = modified_ns;
         }
@@ -183,42 +190,46 @@ impl EmbeddingCache for MemoryCache {
     }
 
     fn remove_resources(&mut self, profile: &str, paths: &[PathBuf]) -> Result<()> {
-        for p in paths {
-            self.resources.remove(&(profile.to_string(), p.clone()));
+        if let Some(bucket) = self.resources.get_mut(profile) {
+            for p in paths {
+                bucket.remove(p);
+            }
         }
         Ok(())
     }
 
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>> {
+        let Some(vectors) = self.vectors.get(profile) else {
+            return Ok(HashSet::new());
+        };
         Ok(hashes
             .iter()
-            .filter(|h| {
-                self.vectors
-                    .contains_key(&(profile.to_string(), (*h).clone()))
-            })
+            .filter(|h| vectors.contains_key(*h))
             .cloned()
             .collect())
     }
 
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()> {
+        let vectors = self.vectors.entry(profile.to_string()).or_default();
         for (h, v) in items {
-            self.vectors
-                .insert((profile.to_string(), h.clone()), v.clone());
+            vectors.insert(h.clone(), v.clone());
         }
         Ok(())
     }
 
     fn vectors_for(&self, profile: &str, paths: &HashSet<PathBuf>) -> Result<Vec<StoredVector>> {
+        let (Some(resources), Some(vectors)) =
+            (self.resources.get(profile), self.vectors.get(profile))
+        else {
+            return Ok(Vec::new());
+        };
         let mut out = Vec::new();
-        for ((p, path), r) in &self.resources {
-            if p != profile || !paths.contains(path) {
+        for (path, r) in resources {
+            if !paths.contains(path) {
                 continue;
             }
             for s in &r.segments {
-                if let Some(v) = self
-                    .vectors
-                    .get(&(profile.to_string(), s.input_hash.clone()))
-                {
+                if let Some(v) = vectors.get(&s.input_hash) {
                     out.push(StoredVector {
                         path: path.clone(),
                         segment: s.clone(),
@@ -231,23 +242,19 @@ impl EmbeddingCache for MemoryCache {
     }
 
     fn prune_orphans(&mut self, profile: &str) -> Result<u64> {
-        let live: HashSet<&String> = self
+        let Some(vectors) = self.vectors.get_mut(profile) else {
+            return Ok(0);
+        };
+        let live: HashSet<&str> = self
             .resources
-            .iter()
-            .filter(|((p, _), _)| p == profile)
-            .flat_map(|(_, r)| r.segments.iter().map(|s| &s.input_hash))
+            .get(profile)
+            .into_iter()
+            .flat_map(|b| b.values())
+            .flat_map(|r| r.segments.iter().map(|s| s.input_hash.as_str()))
             .collect();
-        let before = self.vectors.len();
-        let dead: Vec<_> = self
-            .vectors
-            .keys()
-            .filter(|(p, h)| p == profile && !live.contains(h))
-            .cloned()
-            .collect();
-        for k in dead {
-            self.vectors.remove(&k);
-        }
-        Ok((before - self.vectors.len()) as u64)
+        let before = vectors.len();
+        vectors.retain(|h, _| live.contains(h.as_str()));
+        Ok((before - vectors.len()) as u64)
     }
 
     fn stats(&self) -> Result<CacheStats> {
@@ -255,17 +262,17 @@ impl EmbeddingCache for MemoryCache {
             .profiles
             .iter()
             .map(|(id, p)| {
-                let res: Vec<_> = self
-                    .resources
-                    .iter()
-                    .filter(|((pid, _), _)| pid == id)
-                    .collect();
+                let resources = self.resources.get(id);
                 ProfileStats {
                     profile_id: id.clone(),
                     profile: Some(p.clone()),
-                    resources: res.len() as u64,
-                    segments: res.iter().map(|(_, r)| r.segments.len() as u64).sum(),
-                    embeddings: self.vectors.keys().filter(|(pid, _)| pid == id).count() as u64,
+                    resources: resources.map_or(0, |b| b.len() as u64),
+                    segments: resources
+                        .into_iter()
+                        .flat_map(|b| b.values())
+                        .map(|r| r.segments.len() as u64)
+                        .sum(),
+                    embeddings: self.vectors.get(id).map_or(0, |b| b.len() as u64),
                 }
             })
             .collect();

@@ -1,12 +1,17 @@
 mod common;
 
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::FakeEmbedder;
+use gemma_search::cache::{CacheProfile, CachedResource, CachedSegment};
 use gemma_search::segment::{TextSegmenter, TextSegmenterConfig};
-use gemma_search::{Dimension, MemoryCache, ResourceLocator, SearchEngine, SqliteCache};
+use gemma_search::{
+    Dimension, EmbeddingCache, MemoryCache, Modality, ModelIdentity, ResourceLocator,
+    ResourceMetadata, SearchEngine, SqliteCache,
+};
 use tempfile::TempDir;
 
 fn shared_engine(
@@ -187,4 +192,167 @@ fn memory_cache_is_ephemeral_and_sqlite_is_private() {
             & 0o777,
         0o600
     );
+}
+
+fn profile(revision: &str) -> CacheProfile {
+    CacheProfile {
+        model: ModelIdentity {
+            model_id: "test/model".into(),
+            revision: revision.into(),
+            variant: "fake".into(),
+            dimension: Dimension::D128,
+            normalization: "l2".into(),
+            query_prompt: String::new(),
+            document_prompt: String::new(),
+            max_tokens: 64,
+        },
+        segmenter_version: "1".into(),
+    }
+}
+
+fn resource(hashes: &[&str]) -> CachedResource {
+    CachedResource {
+        metadata: ResourceMetadata {
+            modality: Modality::Text,
+            size_bytes: 1,
+            modified_ns: Some(1),
+            content_hash: hashes.join("+"),
+        },
+        segments: hashes
+            .iter()
+            .map(|h| CachedSegment {
+                locator: ResourceLocator::WholeResource,
+                heading: None,
+                input_hash: (*h).to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn paths(items: &[&Path]) -> HashSet<PathBuf> {
+    items.iter().map(|p| p.to_path_buf()).collect()
+}
+
+fn hashes(items: &[&str]) -> Vec<String> {
+    items.iter().map(|h| (*h).to_string()).collect()
+}
+
+#[test]
+fn memory_cache_keeps_profiles_apart_for_the_same_path_and_input() {
+    let mut cache = MemoryCache::new();
+    let path = Path::new("/notes.txt");
+    for (id, value) in [("a", 1.0), ("b", 2.0)] {
+        cache.register_profile(id, &profile(id)).unwrap();
+        cache
+            .put_embeddings(id, &[("h".into(), vec![value])])
+            .unwrap();
+        cache.put_resource(id, path, &resource(&["h"])).unwrap();
+    }
+
+    for (id, value) in [("a", 1.0), ("b", 2.0)] {
+        let found = cache.vectors_for(id, &paths(&[path])).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].vector, vec![value]);
+    }
+
+    cache.touch_resource("a", path, Some(7)).unwrap();
+    cache.remove_resources("b", &[path.to_path_buf()]).unwrap();
+    assert_eq!(cache.prune_orphans("b").unwrap(), 1);
+    assert_eq!(
+        cache
+            .resource("a", path)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .modified_ns,
+        Some(7)
+    );
+    assert_eq!(cache.known_inputs("a", &hashes(&["h"])).unwrap().len(), 1);
+    assert!(cache.known_inputs("b", &hashes(&["h"])).unwrap().is_empty());
+
+    let mut stats = cache.stats().unwrap().profiles;
+    stats.sort_by(|x, y| x.profile_id.cmp(&y.profile_id));
+    let counts: Vec<_> = stats
+        .iter()
+        .map(|s| (s.profile_id.as_str(), s.resources, s.segments, s.embeddings))
+        .collect();
+    assert_eq!(counts, [("a", 1, 1, 1), ("b", 0, 0, 0)]);
+}
+
+#[test]
+fn memory_cache_accepts_writes_before_registration() {
+    let mut cache = MemoryCache::new();
+    let path = Path::new("/notes.txt");
+    // Batching writes vectors before their resource, so a vector without a
+    // segment is known but not yet searchable.
+    cache
+        .put_embeddings("p", &[("h".into(), vec![1.0])])
+        .unwrap();
+    assert_eq!(
+        cache.known_inputs("p", &hashes(&["h", "x"])).unwrap().len(),
+        1
+    );
+    assert!(cache.vectors_for("p", &paths(&[path])).unwrap().is_empty());
+    assert!(cache.stats().unwrap().profiles.is_empty());
+
+    cache.put_resource("p", path, &resource(&["h"])).unwrap();
+    cache.register_profile("p", &profile("r1")).unwrap();
+    assert_eq!(cache.vectors_for("p", &paths(&[path])).unwrap().len(), 1);
+    let stats = cache.stats().unwrap().profiles;
+    assert_eq!(
+        (stats[0].resources, stats[0].segments, stats[0].embeddings),
+        (1, 1, 1)
+    );
+
+    cache.clear().unwrap();
+    assert!(cache.resource_index("p").unwrap().is_empty());
+    assert!(cache.known_inputs("p", &hashes(&["h"])).unwrap().is_empty());
+}
+
+#[test]
+fn memory_cache_prunes_only_unreferenced_vectors() {
+    let mut cache = MemoryCache::new();
+    let (first, second) = (Path::new("/first.txt"), Path::new("/second.txt"));
+    cache
+        .put_embeddings(
+            "p",
+            &[
+                ("shared".into(), vec![1.0]),
+                ("own".into(), vec![2.0]),
+                ("orphan".into(), vec![3.0]),
+            ],
+        )
+        .unwrap();
+    cache
+        .put_embeddings("other", &[("orphan".into(), vec![3.0])])
+        .unwrap();
+    cache
+        .put_resource("p", first, &resource(&["shared", "own"]))
+        .unwrap();
+    cache
+        .put_resource("p", second, &resource(&["shared"]))
+        .unwrap();
+
+    let only_second = cache.vectors_for("p", &paths(&[second])).unwrap();
+    assert_eq!(only_second.len(), 1);
+    assert_eq!(only_second[0].path, second);
+
+    assert_eq!(cache.prune_orphans("p").unwrap(), 1);
+    // A vector still used by another resource survives its sibling's removal.
+    cache.remove_resources("p", &[first.to_path_buf()]).unwrap();
+    assert_eq!(cache.prune_orphans("p").unwrap(), 1);
+    assert_eq!(
+        cache
+            .known_inputs("p", &hashes(&["shared", "own"]))
+            .unwrap(),
+        HashSet::from(["shared".to_string()])
+    );
+    assert_eq!(
+        cache
+            .known_inputs("other", &hashes(&["orphan"]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(cache.prune_orphans("absent").unwrap(), 0);
 }
