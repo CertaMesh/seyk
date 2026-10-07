@@ -79,6 +79,9 @@ enum Command {
     Search {
         /// What you are looking for, in your own words.
         query: String,
+        /// Another phrasing of the same need (repeatable). Each result keeps its best score.
+        #[arg(long = "also", short = 'q', value_name = "QUERY")]
+        also: Vec<String>,
         /// Files or directories to search. Defaults to the current directory.
         paths: Vec<PathBuf>,
         /// Maximum number of results.
@@ -157,6 +160,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Search {
             query,
+            also,
             paths,
             limit,
             min_score,
@@ -169,8 +173,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let paths = default_paths(paths)?;
             let progress = Progress::new(!json);
             let report = |e: ProgressEvent| progress.event(e);
-            let mut req = engine
-                .search(&query)
+            let mut req = also
+                .into_iter()
+                .fold(engine.search(&query), |r, q| r.query(q))
                 .paths(&paths)
                 .limit(limit)
                 .discovery(filter.discovery())
@@ -391,7 +396,8 @@ fn clock(ms: u64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
 
-fn format_hit(hit: &SearchHit, base: &Path, color: bool) -> String {
+/// `via` names the query that matched, shown only when several were searched.
+fn format_hit(hit: &SearchHit, via: Option<&str>, base: &Path, color: bool) -> String {
     let (bold, dim, reset) = if color {
         ("\x1b[1m", "\x1b[2m", "\x1b[0m")
     } else {
@@ -405,6 +411,9 @@ fn format_hit(hit: &SearchHit, base: &Path, color: bool) -> String {
     );
     if let Some(h) = &hit.heading {
         s.push_str(&format!("  {dim}§ {h}{reset}"));
+    }
+    if let Some(q) = via {
+        s.push_str(&format!("  {dim}← \"{q}\"{reset}"));
     }
     s.push('\n');
     if let Some(p) = &hit.preview {
@@ -420,7 +429,13 @@ fn format_results(results: &SearchResults, base: &Path, color: bool) -> String {
     results
         .hits
         .iter()
-        .map(|h| format_hit(h, base, color))
+        .map(|h| {
+            let via = (results.queries.len() > 1)
+                .then(|| results.queries.get(h.query_index))
+                .flatten()
+                .map(String::as_str);
+            format_hit(h, via, base, color)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -517,12 +532,13 @@ mod tests {
             },
             heading: None,
             preview: preview.map(str::to_string),
+            query_index: 0,
         }
     }
 
     fn results() -> SearchResults {
         SearchResults {
-            query: "father".into(),
+            queries: vec!["father".into()],
             hits: vec![
                 hit(
                     "/book/characters/father.md",
@@ -553,6 +569,16 @@ mod tests {
             out,
             "0.914  characters/father.md:81-96\n       He notices himself repeating the same gestures...\n\n0.500  photos/kitchen.jpg\n"
         );
+    }
+
+    #[test]
+    fn names_matching_query_when_several() {
+        let mut r = results();
+        r.queries.push("dad".into());
+        r.hits[1].query_index = 1;
+        let out = format_results(&r, Path::new("/book"), false);
+        assert!(out.contains("father.md:81-96  ← \"father\"\n"), "{out}");
+        assert!(out.contains("kitchen.jpg  ← \"dad\"\n"), "{out}");
     }
 
     #[test]

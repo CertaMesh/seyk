@@ -1,3 +1,5 @@
+#![allow(dead_code)] // each test binary uses a different subset
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

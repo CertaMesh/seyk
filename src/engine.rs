@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::cache::{CacheProfile, CachedResource, CachedSegment, EmbeddingCache, MemoryCache};
 use crate::discovery::{DiscoveredResource, DiscoveryOptions, ResourceKind, discover};
 use crate::embedder::{Embedder, ResourceInput};
-use crate::index::{BruteForceIndex, VectorIndex};
+use crate::index::{BruteForceIndex, Scored, VectorIndex};
 use crate::segment::{TextFormat, TextSegmenter};
 use crate::{Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
 
@@ -29,6 +29,8 @@ pub struct SearchHit {
     pub heading: Option<String>,
     /// A short excerpt of the matched segment (text resources only).
     pub preview: Option<String>,
+    /// Index into [`SearchResults::queries`] of the query that scored best here.
+    pub query_index: usize,
 }
 
 /// A resource that was found but could not be searched.
@@ -61,7 +63,8 @@ pub struct SearchStats {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResults {
-    pub query: String,
+    /// Every phrasing that was searched, in the order given.
+    pub queries: Vec<String>,
     pub hits: Vec<SearchHit>,
     pub stats: SearchStats,
 }
@@ -182,11 +185,12 @@ impl SearchEngine {
         self.embedder.as_ref()
     }
 
-    /// Start a search request.
+    /// Start a search request. Add more phrasings of the same need with
+    /// [`SearchRequest::query`].
     pub fn search<'e>(&'e self, query: impl Into<String>) -> SearchRequest<'e> {
         SearchRequest {
             engine: self,
-            query: query.into(),
+            queries: vec![query.into()],
             paths: Vec::new(),
             limit: 10,
             min_score: None,
@@ -539,7 +543,7 @@ fn segment_title(stem: Option<&str>, heading: Option<&str>) -> Option<String> {
 
 pub struct SearchRequest<'e> {
     engine: &'e SearchEngine,
-    query: String,
+    queries: Vec<String>,
     paths: Vec<PathBuf>,
     limit: usize,
     min_score: Option<f32>,
@@ -549,6 +553,13 @@ pub struct SearchRequest<'e> {
 }
 
 impl<'e> SearchRequest<'e> {
+    /// Search for another phrasing too. Each segment is ranked by its best score
+    /// over all queries, so rephrasing widens recall without diluting scores.
+    pub fn query(mut self, query: impl Into<String>) -> Self {
+        self.queries.push(query.into());
+        self
+    }
+
     pub fn paths<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,
@@ -609,13 +620,17 @@ impl<'e> SearchRequest<'e> {
         }
         let sync = engine.sync(&resources, self.progress)?;
 
-        let query = engine.embedder.embed_query(&self.query)?;
         let dim = engine.embedder.dimension().get();
-        if query.dim() != dim {
-            return Err(Error::DimensionMismatch {
-                expected: dim,
-                actual: query.dim(),
-            });
+        let mut query_vectors = Vec::with_capacity(self.queries.len());
+        for q in &self.queries {
+            let v = engine.embedder.embed_query(q)?;
+            if v.dim() != dim {
+                return Err(Error::DimensionMismatch {
+                    expected: dim,
+                    actual: v.dim(),
+                });
+            }
+            query_vectors.push(v);
         }
 
         let pid = engine.profile_id.as_str();
@@ -632,17 +647,19 @@ impl<'e> SearchRequest<'e> {
                 entries.push(v);
             }
         }
-        let scored = index.search(
-            query.as_slice(),
+        let min_score = self.min_score.unwrap_or(f32::MIN);
+        let scored = fuse_max(
+            query_vectors
+                .iter()
+                .map(|q| index.search(q.as_slice(), self.limit, min_score)),
             self.limit,
-            self.min_score.unwrap_or(f32::MIN),
         );
 
         let mut previews = PreviewReader::default();
         let hits = scored
             .into_iter()
             .filter_map(|s| {
-                let e = &entries[s.id];
+                let e = &entries[s.scored.id];
                 let metadata = metadata.get(&e.path)?.clone();
                 let preview = self
                     .preview_chars
@@ -650,16 +667,17 @@ impl<'e> SearchRequest<'e> {
                 Some(SearchHit {
                     resource: ResourceId::from_path(&e.path),
                     locator: e.segment.locator.clone(),
-                    score: s.score,
+                    score: s.scored.score,
                     metadata,
                     heading: e.segment.heading.clone(),
                     preview,
+                    query_index: s.query_index,
                 })
             })
             .collect();
 
         Ok(SearchResults {
-            query: self.query,
+            queries: self.queries,
             hits,
             stats: SearchStats {
                 sync,
@@ -668,6 +686,38 @@ impl<'e> SearchRequest<'e> {
             },
         })
     }
+}
+
+struct Fused {
+    scored: Scored,
+    query_index: usize,
+}
+
+/// Merge per-query top-k lists, keeping each segment's best score.
+///
+/// Exact for the fused top-k: a segment whose best score comes from query q is
+/// beaten on q by fewer than `limit` segments, so it is already in q's top-k.
+fn fuse_max(per_query: impl Iterator<Item = Vec<Scored>>, limit: usize) -> Vec<Fused> {
+    let mut best: HashMap<usize, Fused> = HashMap::new();
+    for (query_index, hits) in per_query.enumerate() {
+        for scored in hits {
+            match best.get(&scored.id) {
+                Some(b) if b.scored.score >= scored.score => {}
+                _ => {
+                    best.insert(scored.id, Fused { scored, query_index });
+                }
+            }
+        }
+    }
+    let mut fused: Vec<Fused> = best.into_values().collect();
+    fused.sort_by(|a, b| {
+        b.scored
+            .score
+            .total_cmp(&a.scored.score)
+            .then(a.scored.id.cmp(&b.scored.id))
+    });
+    fused.truncate(limit);
+    fused
 }
 
 pub struct IndexRequest<'e> {
@@ -815,6 +865,20 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fusion_keeps_best_score_and_its_query() {
+        let s = |id, score| Scored { id, score };
+        let fused = fuse_max(
+            [vec![s(1, 0.9), s(2, 0.5)], vec![s(2, 0.8), s(3, 0.7)]].into_iter(),
+            2,
+        );
+        let got: Vec<_> = fused
+            .iter()
+            .map(|f| (f.scored.id, f.scored.score, f.query_index))
+            .collect();
+        assert_eq!(got, [(1, 0.9, 0), (2, 0.8, 1)]);
+    }
 
     #[test]
     fn titles() {
