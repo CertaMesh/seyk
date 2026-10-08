@@ -22,3 +22,7 @@ check("seyk-embeddinggemma", ["-e", "normal", "--features", "image"], FORBIDDEN)
 check("seyk-core", ["-e", "normal"], {"seyk-embeddinggemma", "ort", "tokenizers", "hf-hub"})
 
 check("seyk-core", ["-e", "normal", "--features", "pdf"], {"seyk-embeddinggemma", "ort", "tokenizers", "hf-hub"})
+
+check("seyk", ["-e", "features"], {"symphonia", "symphonia-core"})
+check("seyk-embeddinggemma", ["-e", "normal", "--features", "audio"], FORBIDDEN)
+check("seyk-core", ["-e", "normal", "--features", "audio"], {"seyk-embeddinggemma", "ort", "tokenizers", "hf-hub"})

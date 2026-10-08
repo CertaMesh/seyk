@@ -48,3 +48,6 @@ pub use provider::{
 };
 
 pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};
+
+#[cfg(feature = "audio")]
+pub mod audio;

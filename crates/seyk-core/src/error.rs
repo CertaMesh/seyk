@@ -6,6 +6,11 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("unsupported audio for {resource}: {reason}")]
+    UnsupportedAudio {
+        resource: crate::ResourceId,
+        reason: &'static str,
+    },
     #[error("PDF rendering failed for {resource}: {reason}")]
     PdfRender {
         resource: crate::ResourceId,
@@ -57,7 +62,7 @@ pub enum Error {
         actual: String,
     },
 
-    #[error("extraction is unsupported for {modality} resource {resource} at {locator:?}")]
+    #[error("extraction is unsupported for {modality} resource {resource} at {locator:?}{note}", note = if *modality == crate::Modality::Audio { "; STT not available until 5b" } else { "" })]
     UnsupportedExtraction {
         resource: crate::ResourceId,
         modality: crate::Modality,

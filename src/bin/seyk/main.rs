@@ -234,7 +234,11 @@ enum DaemonAction {
 #[derive(Subcommand)]
 enum ModelAction {
     /// Download the model weights from Hugging Face into the local HF cache.
-    Download,
+    Download {
+        /// Provision only the pinned q8 audio encoder (requires feature `audio`).
+        #[arg(long)]
+        audio: bool,
+    },
     /// Show where the model files are and whether they are present.
     Info,
 }
@@ -448,8 +452,19 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Model { action, model } => {
             let config = gemma_config(&model)?;
             match action {
-                ModelAction::Download => {
-                    let dir = gemma::download(&config)?;
+                ModelAction::Download { audio } => {
+                    let dir = if audio {
+                        #[cfg(feature = "audio")]
+                        {
+                            gemma::download_audio()?
+                        }
+                        #[cfg(not(feature = "audio"))]
+                        {
+                            anyhow::bail!("audio support is not compiled in (feature `audio`)")
+                        }
+                    } else {
+                        gemma::download(&config)?
+                    };
                     println!("Model files are in {}", dir.display());
                 }
                 ModelAction::Info => match gemma::locate(&config) {

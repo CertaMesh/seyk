@@ -1,8 +1,8 @@
 # Multimodal support: status and what is missing
 
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
-space. This crate implements text, images and PDF retrieval. This note records
-current support and what audio, video and scanned-page text extraction still need, based on the model's processor configuration
+space. This crate implements text, images, PDF retrieval and opt-in audio retrieval. This note records
+current support and what audio transcription, video and scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 `Gemma4AudioFeatureExtractor`).
@@ -15,11 +15,10 @@ implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 - **Capability check.** `Embedder::supports(Modality)` gates every resource. The
   engine reports unsupported files as skipped, with a reason, instead of guessing.
 - **Model plumbing.** The ONNX text model already takes `image_features`,
-  `video_features` and `audio_features` inputs (`[n_tokens, 512]`). Today the last
-  two are always empty.
+  `video_features` and `audio_features` inputs (`[n_tokens, 512]`). Video features remain empty. The optional audio encoder supplies audio features.
 - **Cache.** Vectors are keyed by a hash of the exact model input, so time windows
-  only need their window parameters included in that hash. Window length and hop
-  must also go into the segmenter version, so changing them invalidates old vectors.
+  include the audio preparation and weights policy in their input hash and resource
+  descriptor. Audio changes do not invalidate text vectors or the global profile.
 
 ## Images (done)
 
@@ -48,35 +47,33 @@ Possible improvements:
 - **Lazy vision loading.** The encoder loads at start-up even for text-only
   folders. That costs about 0.1 s, plus the memory for its weights (the q8 weight file is 195 MB).
 
-## Audio (not implemented)
+## Audio retrieval (done, opt-in)
 
-What is needed:
+The `audio` feature adds Symphonia 0.5.5 and a Rust port of the pinned Gemma 4
+feature extractor. It does not change default release features. The core streams
+WAV/FLAC/MP3 and AAC-LC/ALAC M4A, applies presentation edits/gapless metadata,
+means channels and resamples with a deterministic 64-tap Blackman-windowed sinc
+filter (0.94 Nyquist guard). Windows are 10 seconds with an 8-second stride,
+including the final short tail. `Time` evidence describes the post-trim timeline.
 
-1. **Decoding and resampling** to 16 kHz mono `f32`. A pure-Rust option is
-   `symphonia` for decoding plus `rubato` for resampling; otherwise use an `ffmpeg`
-   dependency.
-2. **Port `Gemma4AudioFeatureExtractor`.** It produces log-mel features with
-   128 mel bins, 0–8000 Hz, FFT size 512, frame length 320 (20 ms), hop 160
-   (10 ms), mel floor 0.001, no pre-emphasis, no dither, and semicausal padding of
-   `frame_length / 2` on the left. Verify the window function and log/scaling
-   details against the Python reference before trusting it, using the same parity
-   method as images (dump features and final vectors, compare).
-3. **Run `onnx/audio_encoder*.onnx`.** It takes `input_features [b, T, 128]` and
-   `input_features_mask [b, T]` and returns `audio_features [n, 512]`.
-4. **Token layout.** `<|audio>` + N × `<|audio|>` + `<audio|>`. N comes from the
-   mel frame count after two stride-2 convolutions (kernel 3, padding 1), which is
-   about 25 tokens per second, capped at `audio_seq_length` (280 in this
-   checkpoint's processor config).
-5. **Windowing.** One embedding per overlapping window, for example 120 s windows
-   with a 90 s hop (00:00–02:00, 01:30–03:30, …). Each becomes a
-   `ResourceLocator::Time`. Note that a 280-token cap is about 11 s of audio. If
-   that cap is real for this checkpoint, windows must be about 10 s, and window
-   length should be benchmarked on spoken-word retrieval before choosing a
-   default. The model card's "~327 seconds" maximum assumes the full 8K context.
-6. **Precision.** The ONNX export notes that 4-bit quantisation hurts audio most.
-   Use q8 or fp32.
+Features use magnitude, not power: periodic Hann, 160-sample left padding,
+321-sample frame indexing, 512-point FFT, 128 HTK mel bins and `ln(mel + 0.001)`.
+The q8 encoder's 512-dimensional features replace audio placeholders between
+`<|audio>` and `<audio|>` without a task prefix. Valid mask positions sampled at
+stride four determine token count. A full window produces 999 frames/250 tokens.
 
-No transcription is needed or wanted: the encoder embeds the audio directly.
+`seyk model download --audio` explicitly provisions only the two pinned q8
+encoder files (324.54 MiB); search never downloads. Missing weights fail each
+audio file independently. Audio weights/policy live in `audio-input-v1` and the
+preparation descriptor, leaving the text cache profile unchanged. No PCM, mel
+features, audio tokens or transcript are written to the cache.
+
+The encoded limit remains 32 MiB; the derived decoded-duration limit is
+1,048.576 seconds. HE-AAC/SBR, multiple tracks and complex edit lists are typed
+unsupported inputs. No STT, previews, VAD or diarization ship in 5a. Explicit
+extraction returns the existing `UnsupportedExtraction` with a Phase 5b message.
+See the [implementation report](architecture.md#phase-5a-audio-retrieval) for
+reproducible synthetic evaluations and limitations.
 
 ## Video (not implemented)
 

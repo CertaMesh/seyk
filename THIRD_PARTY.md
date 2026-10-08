@@ -4,8 +4,7 @@ Seyk is Apache-2.0. Dependency licence choices are checked by `cargo deny check
 licenses` against `deny.toml` and the locked graph. GPL, AGPL, LGPL and SSPL
 choices are not allowed. A permissive alternative in a dual-licence expression
 may be selected. MPL requires explicit review, including existing
-dependencies. The approved exception is only `option-ext 0.2.0` (MPL-2.0), an existing transitive dependency of `dirs`; no other MPL
-package or version is permitted. Its unmodified source is available at
+dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing transitive dependency of `dirs`; additional scoped exceptions for opt-in audio are listed below. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
 
 PDF text extraction uses pdf-extract 0.12.1 (MIT) and lopdf 0.42.0 (MIT), plus
@@ -84,3 +83,19 @@ executables with `pdf-render`.
 Hayro also embeds a CC0-1.0 compact CMYK colour profile and a generated LAB
 profile. Their provenance and CGATS notice accompany the pinned
 hayro-interpret archive (`assets/README.md`, `assets/CGATS_LICENSE.txt`).
+
+## Optional audio decoding (Phase 5a)
+
+Unmodified Symphonia crates, approved for the optional `audio` feature. Each is MPL-2.0, with the license text included at `LICENSE` in its crates.io source archive. These are package+version exceptions only; new versions require new approval.
+
+- [symphonia 0.5.5](https://crates.io/crates/symphonia/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia/0.5.5/download).
+- [symphonia-bundle-flac 0.5.5](https://crates.io/crates/symphonia-bundle-flac/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-bundle-flac/0.5.5/download).
+- [symphonia-bundle-mp3 0.5.5](https://crates.io/crates/symphonia-bundle-mp3/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-bundle-mp3/0.5.5/download).
+- [symphonia-codec-aac 0.5.5](https://crates.io/crates/symphonia-codec-aac/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-codec-aac/0.5.5/download).
+- [symphonia-codec-alac 0.5.5](https://crates.io/crates/symphonia-codec-alac/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-codec-alac/0.5.5/download).
+- [symphonia-codec-pcm 0.5.5](https://crates.io/crates/symphonia-codec-pcm/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-codec-pcm/0.5.5/download).
+- [symphonia-core 0.5.5](https://crates.io/crates/symphonia-core/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-core/0.5.5/download).
+- [symphonia-format-isomp4 0.5.5](https://crates.io/crates/symphonia-format-isomp4/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-format-isomp4/0.5.5/download).
+- [symphonia-format-riff 0.5.5](https://crates.io/crates/symphonia-format-riff/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-format-riff/0.5.5/download).
+- [symphonia-metadata 0.5.5](https://crates.io/crates/symphonia-metadata/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-metadata/0.5.5/download).
+- [symphonia-utils-xiph 0.5.5](https://crates.io/crates/symphonia-utils-xiph/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-utils-xiph/0.5.5/download).

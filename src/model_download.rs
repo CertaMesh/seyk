@@ -27,6 +27,32 @@ pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
     })
 }
 
+/// Explicitly provision only the two pinned q8 audio files; never called by inference.
+#[cfg(feature = "audio")]
+pub fn download_audio() -> Result<PathBuf> {
+    let api = hf_hub::api::sync::ApiBuilder::from_env()
+        .with_progress(true)
+        .build()
+        .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
+    let files: Vec<String> = seyk_embeddinggemma::audio::FILES
+        .iter()
+        .map(|f| f.to_string())
+        .collect();
+    download_files(
+        seyk_embeddinggemma::ONNX_REVISION,
+        &files,
+        |revision, file| {
+            api.repo(hf_hub::Repo::with_revision(
+                seyk_embeddinggemma::ONNX_REPO.into(),
+                hf_hub::RepoType::Model,
+                revision.into(),
+            ))
+            .get(file)
+            .map_err(|e| Error::Embedding(format!("downloading {file}: {e}")))
+        },
+    )
+}
+
 fn download_files(
     revision: &str,
     files: &[String],

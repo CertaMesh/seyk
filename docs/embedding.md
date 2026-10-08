@@ -110,7 +110,15 @@ Rustdoc on `EmbeddingGemma2::text_input` lists the official alias names.
 never generate prose. There is no arbitrary Custom prompt variant.
 
 `ResourceInput` borrows text, encoded image bytes, PCM audio or decoded video
-frames. Audio/video return `UnsupportedModality`; no implementation is implied.
+frames. With `seyk-embeddinggemma/audio`, audio accepts 161–160000 finite
+mono samples at 16 kHz and lazily loads the pinned q8 audio encoder. Missing
+optional files produce `ModelNotFound` for the audio request without preventing
+text embedding. Video returns `UnsupportedModality`. `GemmaConfig::audio` and
+`.audio(bool)` control audio acceptance; `GemmaConfig::files()` remains the
+ordinary model file list. The CLI provisions `audio::FILES` separately.
+`Embedder::input_identity(modality)` defaults to an empty string and adds
+modality-specific weights/preprocessing to input hashes without changing the
+shared `ModelIdentity` or text cache profile.
 For images, opt into preprocessing and provision the vision weights:
 
 ```toml
