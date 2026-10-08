@@ -12,6 +12,11 @@ pub enum Kind {
     Panic,
     BrokenSecond,
     Encrypted,
+    MissingContents,
+    MissingArrayContents,
+    TruncatedContents,
+    BadFlate,
+    EmptyPage,
 }
 
 fn stream(body: &[u8], extra: &str) -> Vec<u8> {
@@ -45,7 +50,17 @@ pub fn pdf(texts: &[&str], kind: Kind) -> Vec<u8> {
         "/FunctionType 4 /Domain [0 1] /Range [0 1]",
     ));
     for (i, text) in texts.iter().enumerate() {
-        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /ColorSpace << /CS1 [/Separation /Spot /DeviceGray 4 0 R] >> >> /Contents {} 0 R >>", 6+i*2).into_bytes());
+        let contents = if i == texts.len() - 1 {
+            match kind {
+                Kind::MissingContents => "/Contents 999 0 R".into(),
+                Kind::MissingArrayContents => format!("/Contents [{} 0 R 999 0 R]", 6 + i * 2),
+                Kind::EmptyPage => String::new(),
+                _ => format!("/Contents {} 0 R", 6 + i * 2),
+            }
+        } else {
+            format!("/Contents {} 0 R", 6 + i * 2)
+        };
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /ColorSpace << /CS1 [/Separation /Spot /DeviceGray 4 0 R] >> >> {} >>", contents).into_bytes());
         let prefix = if matches!(kind, Kind::Tint | Kind::InvalidUtf8) {
             "/CS1 cs 0.5 scn "
         } else {
@@ -55,18 +70,28 @@ pub fn pdf(texts: &[&str], kind: Kind) -> Vec<u8> {
             .replace('\\', "\\\\")
             .replace('(', "\\(")
             .replace(')', "\\)");
-        let content =
+        let mut content =
             if matches!(kind, Kind::Panic) || (matches!(kind, Kind::BrokenSecond) && i == 1) {
                 format!("BT /F1 12 Tf 72 720 Td /{MARKER} Tj ET")
             } else {
                 format!("{prefix}BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET")
             };
+        if matches!(kind, Kind::TruncatedContents) && i == texts.len() - 1 {
+            content.push_str(" (unterminated");
+        }
         // WinAnsi fixture supports Latin-1; ToUnicode-specific tests use a separate fixture.
         let bytes: Vec<u8> = content
             .chars()
             .map(|c| u8::try_from(c as u32).expect("Latin-1 fixture"))
             .collect();
-        objects.push(stream(&bytes, ""));
+        objects.push(stream(
+            &bytes,
+            if matches!(kind, Kind::BadFlate) && i == texts.len() - 1 {
+                "/Filter /FlateDecode"
+            } else {
+                ""
+            },
+        ));
     }
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();

@@ -656,7 +656,7 @@ ARM release executable is 40,919,520 bytes with PDF versus 39,427,232 without
 (+1,492,288 bytes, 3.8%). Linked libraries remain system libraries/frameworks;
 PDF adds no dynamic runtime. Unicode,
 ligature, malformed-page, stale-source, provider, limit and cache tests complement
-that evaluation. Existing model parity and profile goldens remain separate gates. A direct debug
+that evaluation. Existing model parity and profile goldens remain separate gates. Before the strict-validation review fix, a direct debug
 limit-test run (no compiler/model) used 55.8 MiB maximum RSS and 38.74 s for
 1 MiB/page rejection, 32 MiB/document rejection and 512 accepted pages. The
 full synthetic PDF/text evaluation process used 811.9 MiB maximum RSS, including
@@ -671,3 +671,33 @@ scanned-page retrieval and on-demand OCR. Subprocess parser isolation is a
 separate follow-up. Sparse embedded text, unusual font encodings, rotation and
 multi-column reading order remain retrieval/evidence limitations; the current
 adapter never claims semantic layout reconstruction.
+
+### Phase 4a review fixes
+
+Before accepting any page output, the adapter now resolves every page's Contents
+(single stream or array), validates decompression and calls lopdf 0.42's public
+Content::decode_strict API, which rejects unconsumed bytes. Missing objects,
+non-stream values, invalid compression and unterminated syntax reject the whole
+resource, even when preview/extract selects an earlier valid page. Missing
+Contents, null and empty arrays still represent empty pages. Validated streams
+are normalized in the transient document so pdf-extract cannot use its raw-byte
+fallback. Nothing is written back to the source.
+
+lopdf's Flate/LZW helpers can log errors and return partial decoded output.
+Content-stream support is therefore limited to unfiltered bytes or complete,
+checksum-verified FlateDecode streams without DecodeParms; other filters and
+parameters fail explicitly. flate2 was already in the locked graph; core now
+uses its checked decoder directly. No upstream fork or package update is needed.
+The PDF-only preparation descriptor advances to strict-v2 so cached PDFs are
+revalidated; existing text/image profiles and hashes remain unchanged.
+
+Page diagnostics now have their own SyncStats field and are emitted only after
+a successful resource commit. CLI summaries distinguish those pages from skipped
+resources. PDF skip reasons no longer repeat the resource identity. Preparation
+has one dispatcher, so diagnostics cannot be lost in a second PDF path.
+
+After strict validation, the same cap regression passes in 37.51 s with
+94.7 MiB maximum RSS (99,270,656 bytes), including the transient validated
+streams. The repeated synthetic evaluation still gives 100% Recall@5, MRR@10
+1.0 and 20/20 exact extractions; load 2196 ms, cold index 795 ms, warm p50/p95
+290/386 ms on the same debug Mac ARM setup.

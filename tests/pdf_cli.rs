@@ -25,7 +25,16 @@ fn real_binary_extract_contains_panics_and_preserves_public_text() {
         .embedder(common::FakeEmbedder::new(Dimension::D128, "pdf"))
         .build()
         .unwrap();
-    for kind in [Kind::Plain, Kind::Tint, Kind::InvalidUtf8, Kind::Panic] {
+    for kind in [
+        Kind::Plain,
+        Kind::Tint,
+        Kind::InvalidUtf8,
+        Kind::Panic,
+        Kind::MissingContents,
+        Kind::MissingArrayContents,
+        Kind::TruncatedContents,
+        Kind::BadFlate,
+    ] {
         std::fs::write(&path, pdf(&[fixture::PUBLIC], Kind::Plain)).unwrap();
         let mut result = engine.search("basil").paths([&path]).execute().unwrap();
         let bytes = pdf(&[fixture::PUBLIC], kind);
@@ -63,7 +72,16 @@ fn real_binary_extract_contains_panics_and_preserves_public_text() {
 fn real_binary_index_preview_and_extract_never_leak_hidden_markers() {
     let dir = tempfile::tempdir().unwrap();
     let cache = dir.path().join("cache.db");
-    for kind in [Kind::Plain, Kind::Tint, Kind::InvalidUtf8, Kind::Panic] {
+    for kind in [
+        Kind::Plain,
+        Kind::Tint,
+        Kind::InvalidUtf8,
+        Kind::Panic,
+        Kind::MissingContents,
+        Kind::MissingArrayContents,
+        Kind::TruncatedContents,
+        Kind::BadFlate,
+    ] {
         let path = dir.path().join("fixture.pdf");
         std::fs::write(&path, pdf(&[fixture::PUBLIC], kind)).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_seyk"))
@@ -81,7 +99,7 @@ fn real_binary_index_preview_and_extract_never_leak_hidden_markers() {
             String::from_utf8_lossy(&output.stderr)
         );
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        if matches!(kind, Kind::InvalidUtf8 | Kind::Panic) {
+        if !matches!(kind, Kind::Plain | Kind::Tint) {
             assert_eq!(report["sync"]["skipped"].as_array().unwrap().len(), 1);
             continue;
         }

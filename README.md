@@ -193,6 +193,41 @@ an unsupported-extraction error. MCP extraction is deferred until MCP hits can
 carry exact locators and hashes with session-scoped read checks; MCP search and
 its root confinement are unchanged.
 
+### Text PDFs
+
+Normal builds include `pdf`; minimal library consumers can opt in with that
+feature. PDF pages with embedded text participate in semantic and keyword
+search. Hits use `page_text`: a 1-based physical page, half-open UTF-8 byte range
+in the extracted page text, extraction version and page-text hash. These are
+not byte offsets in the PDF file. Explicit extraction checks the full PDF hash
+before decoding, then verifies the derived page hash before returning text.
+
+Pages without usable embedded text are separate page diagnostics, not skipped
+resources. Mixed PDFs report that they indexed with those pages omitted.
+This release does not render
+PDFs or run OCR. Mixed PDFs index their usable text pages. Reading order,
+nonstandard fonts and sparse text over scanned pages remain limitations.
+Every page content reference must resolve, decompress completely and pass strict
+content decoding before any page output is accepted. Content streams currently
+support no filter or FlateDecode without DecodeParms; other filters/parameters
+are rejected explicitly because upstream decompression can silently return a
+prefix after errors.
+PDFs over 512 pages, 1 MiB extracted text per page or 32 MiB total extracted text
+are rejected explicitly; other resources continue indexing. These output limits
+do not bound upstream decompression, CPU time or memory use.
+
+CLI/MCP output now uses JSON schema 3. `seyk extract` accepts schema 2 and 3
+search envelopes. Cache schema 5 adds nullable media type and preserves existing
+vectors, profiles and keyword indexes. Older binaries may reset a schema-5
+cache, so keep a copy if downgrading.
+
+Library integrations that install a `log` logger **must filter `pdf_extract` to
+Off**: upstream diagnostics can contain document data. Seyk core installs no
+logger or panic hook. It converts unwinding PDF parser panics to sanitized
+errors, but an application's panic hook runs first and must not print payloads.
+The CLI installs a fixed-message, file-and-line-only hook. Neither mechanism
+contains aborts, out-of-memory failures, hangs or hostile allocation behaviour.
+
 ### Scores and tags
 
 In the default **hybrid** mode, three lists are ranked separately and merged by
@@ -604,31 +639,3 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
-
-### Text PDFs
-
-Normal builds include `pdf`; minimal library consumers can opt in with that
-feature. PDF pages with embedded text participate in semantic and keyword
-search. Hits use `page_text`: a 1-based physical page, half-open UTF-8 byte range
-in the extracted page text, extraction version and page-text hash. These are
-not byte offsets in the PDF file. Explicit extraction checks the full PDF hash
-before decoding, then verifies the derived page hash before returning text.
-
-Scans and empty pages are reported as unsupported; this release does not render
-PDFs or run OCR. Mixed PDFs index their usable text pages. Reading order,
-nonstandard fonts and sparse text over scanned pages remain limitations.
-PDFs over 512 pages, 1 MiB extracted text per page or 32 MiB total extracted text
-are rejected explicitly; other resources continue indexing. These output limits
-do not bound upstream decompression, CPU time or memory use.
-
-CLI/MCP output now uses JSON schema 3. `seyk extract` accepts schema 2 and 3
-search envelopes. Cache schema 5 adds nullable media type and preserves existing
-vectors, profiles and keyword indexes. Older binaries may reset a schema-5
-cache, so keep a copy if downgrading.
-
-Library integrations that install a `log` logger **must filter `pdf_extract` to
-Off**: upstream diagnostics can contain document data. Seyk core installs no
-logger or panic hook. It converts unwinding PDF parser panics to sanitized
-errors, but an application's panic hook runs first and must not print payloads.
-The CLI installs a fixed-message, file-and-line-only hook. Neither mechanism
-contains aborts, out-of-memory failures, hangs or hostile allocation behaviour.

@@ -14,7 +14,7 @@ pub const TEXT_VERSION: &str = "pdf-extract-0.12.1;plain-v1";
 pub const MAX_PAGES: usize = 512;
 pub const MAX_PAGE_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_DOCUMENT_TEXT_BYTES: usize = 32 * 1024 * 1024;
-pub(crate) const PREPARATION_VERSION: &str = "pdf-text-v1;512p;1MiB-page;32MiB-doc";
+pub(crate) const PREPARATION_VERSION: &str = "pdf-text-v2-strict;512p;1MiB-page;32MiB-doc";
 
 pub(crate) struct PageText {
     pub page: u32,
@@ -39,7 +39,7 @@ fn guarded<T>(source: &ResourceId, f: impl FnOnce() -> Result<T>) -> Result<T> {
 }
 
 fn document(bytes: &[u8], source: &ResourceId) -> Result<Document> {
-    let doc = Document::load_mem(bytes).map_err(|_| failure(source, "invalid document"))?;
+    let mut doc = Document::load_mem(bytes).map_err(|_| failure(source, "invalid document"))?;
     if doc.is_encrypted() {
         return Err(failure(source, "encrypted documents are unsupported"));
     }
@@ -62,7 +62,105 @@ fn document(bytes: &[u8], source: &ResourceId) -> Result<Document> {
             }
         }
     }
+    // Validate the whole resource even when the caller only requests one page.
+    // Normalize to precisely the validated bytes so upstream cannot fall back to
+    // raw compressed data or silently omit an unresolved reference.
+    let numbers = pages(&doc, source)?;
+    let page_ids = doc.get_pages();
+    for number in numbers {
+        let id = page_ids[&number];
+        let page = doc
+            .get_dictionary(id)
+            .map_err(|_| failure(source, "invalid page"))?;
+        let mut content = Vec::new();
+        if let Ok(contents) = page.get(b"Contents") {
+            let (_, resolved) = doc
+                .dereference(contents)
+                .map_err(|_| failure(source, "unresolved page contents"))?;
+            let objects: &[pdf_extract::Object] = match resolved {
+                pdf_extract::Object::Array(items) => items,
+                pdf_extract::Object::Null => &[],
+                pdf_extract::Object::Stream(_) => std::slice::from_ref(contents),
+                _ => return Err(failure(source, "page contents must reference streams")),
+            };
+            for object in objects {
+                let (_, object) = doc
+                    .dereference(object)
+                    .map_err(|_| failure(source, "unresolved page content stream"))?;
+                let stream = object
+                    .as_stream()
+                    .map_err(|_| failure(source, "page content is not a stream"))?;
+                content.extend(strict_plain_content(stream, source)?);
+                // Match lopdf's page-stream concatenation exactly.
+                content.push(b'\n');
+            }
+        }
+        pdf_extract::content::Content::decode_strict(&content)
+            .map_err(|_| failure(source, "invalid or incomplete page content"))?;
+        let stream = doc.add_object(pdf_extract::Stream::new(
+            pdf_extract::Dictionary::new(),
+            content,
+        ));
+        doc.get_object_mut(id)
+            .and_then(pdf_extract::Object::as_dict_mut)
+            .map_err(|_| failure(source, "invalid page"))?
+            .set("Contents", stream);
+    }
     Ok(doc)
+}
+
+fn strict_plain_content(stream: &pdf_extract::Stream, source: &ResourceId) -> Result<Vec<u8>> {
+    // Upstream Flate/LZW helpers log decompression errors and return prefixes.
+    // Content filters we cannot verify strictly are explicit unsupported errors.
+    if let Ok(params) = stream.dict.get(b"DecodeParms")
+        && !matches!(params, pdf_extract::Object::Null)
+    {
+        return Err(failure(source, "content DecodeParms are unsupported"));
+    }
+    let mut bytes = stream.content.clone();
+    if stream.dict.get(b"Filter").is_err() {
+        return Ok(bytes);
+    }
+    let filters = stream
+        .filters()
+        .map_err(|_| failure(source, "invalid content filter"))?;
+    if filters.is_empty() {
+        return Err(failure(source, "empty content filter"));
+    }
+    for filter in filters {
+        if filter != b"FlateDecode" {
+            return Err(failure(
+                source,
+                "content filter lacks strict validation support",
+            ));
+        }
+        let mut decoder = flate2::Decompress::new(true);
+        let mut decoded = Vec::new();
+        loop {
+            let mut chunk = [0u8; 8192];
+            let before_in = decoder.total_in();
+            let before_out = decoder.total_out();
+            let status = decoder
+                .decompress(
+                    &bytes[before_in as usize..],
+                    &mut chunk,
+                    flate2::FlushDecompress::None,
+                )
+                .map_err(|_| failure(source, "invalid compressed page content"))?;
+            decoded.extend_from_slice(&chunk[..(decoder.total_out() - before_out) as usize]);
+            if status == flate2::Status::StreamEnd {
+                if decoder.total_in() as usize != bytes.len() {
+                    return Err(failure(source, "trailing compressed page content"));
+                }
+                break;
+            }
+            if decoder.total_in() == before_in && decoder.total_out() == before_out {
+                return Err(failure(source, "incomplete compressed page content"));
+            }
+        }
+        bytes = decoded;
+    }
+    Ok(bytes)
 }
 
 struct LimitedText {
@@ -232,7 +330,7 @@ impl Extractor for PdfTextExtractor {
 
 #[cfg(test)]
 #[path = "../tests/support/pdf_fixture.rs"]
-mod fixture;
+pub(crate) mod fixture;
 
 #[cfg(test)]
 mod tests {
@@ -280,5 +378,57 @@ mod tests {
         ));
         let small = fixture::pdf(&vec!["garden basil"; MAX_PAGES], fixture::Kind::Plain);
         assert_eq!(read_pages(&small, &source).unwrap().len(), MAX_PAGES);
+    }
+    #[test]
+    fn flate_requires_stream_end_checksum_and_complete_content() {
+        use flate2::{Compression, write::ZlibEncoder};
+        let source = "mem://synthetic/flate".parse().unwrap();
+        let body = b"BT /F1 12 Tf 72 720 Td (garden basil) Tj ET";
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(body).unwrap();
+        let compressed = encoder.finish().unwrap();
+        for variant in 0..4 {
+            let mut bytes = compressed.clone();
+            match variant {
+                1 => {
+                    bytes.truncate(bytes.len() - 2);
+                }
+                2 => {
+                    *bytes.last_mut().unwrap() ^= 1;
+                }
+                3 => bytes.push(0),
+                _ => {}
+            }
+            let mut doc =
+                Document::load_mem(&fixture::pdf(&["placeholder"], fixture::Kind::Plain)).unwrap();
+            let stream = doc.get_object_mut((6, 0)).unwrap().as_stream_mut().unwrap();
+            stream.set_content(bytes);
+            stream.dict.set("Filter", "FlateDecode");
+            let mut pdf = Vec::new();
+            doc.save_to(&mut pdf).unwrap();
+            let result = read_page(&pdf, &source, 1);
+            if variant == 0 {
+                assert!(result.unwrap().contains("garden basil"));
+            } else {
+                assert!(matches!(result, Err(Error::PdfParse { .. })));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_page_validation_rejects_corruption_elsewhere() {
+        let source = "mem://synthetic/corrupt".parse().unwrap();
+        for kind in [
+            fixture::Kind::MissingContents,
+            fixture::Kind::MissingArrayContents,
+            fixture::Kind::TruncatedContents,
+            fixture::Kind::BadFlate,
+        ] {
+            let bytes = fixture::pdf(&["valid first page", "valid prefix"], kind);
+            assert!(matches!(
+                read_page(&bytes, &source, 1),
+                Err(Error::PdfParse { .. })
+            ));
+        }
     }
 }

@@ -147,7 +147,8 @@ fn mixed_pages_report_scans_and_preserve_physical_numbers() {
         .build()
         .unwrap();
     let result = engine.search("basil").paths([path]).execute().unwrap();
-    assert_eq!(result.stats.sync.skipped.len(), 2);
+    assert!(result.stats.sync.skipped.is_empty());
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
     assert!(matches!(
         result.hits[0].locator,
         ResourceLocator::PageText { page: 2, .. }
@@ -251,4 +252,73 @@ fn physical_pages_survive_duplicate_text_rotation_and_multiple_columns() {
             assert_eq!(text, "left column basil right column harbor");
         }
     }
+}
+
+#[test]
+fn corrupt_streams_reject_the_whole_resource_and_keep_other_files() {
+    for kind in [
+        Kind::MissingContents,
+        Kind::MissingArrayContents,
+        Kind::TruncatedContents,
+        Kind::BadFlate,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corrupt.pdf");
+        std::fs::write(&path, pdf(&["garden basil", "harbor anchors"], Kind::Plain)).unwrap();
+        let engine = SearchEngine::builder()
+            .embedder(FakeEmbedder::new(Dimension::D128, "pdf"))
+            .build()
+            .unwrap();
+        let mut hit = engine
+            .search("basil")
+            .paths([&path])
+            .mode(SearchMode::Lexical)
+            .execute()
+            .unwrap()
+            .hits
+            .remove(0);
+        let corrupt = pdf(&["garden basil", "harbor anchors"], kind);
+        std::fs::write(&path, &corrupt).unwrap();
+        hit.metadata.content_hash = blake3::hash(&corrupt).to_hex().to_string();
+        hit.metadata.size_bytes = corrupt.len() as u64;
+        // Selected page 1 is valid; corruption on page 2 still forbids extraction.
+        assert!(matches!(engine.extract(&hit), Err(Error::PdfParse { .. })));
+        std::fs::write(dir.path().join("good.txt"), "garden basil").unwrap();
+        let fresh = SearchEngine::builder()
+            .embedder(FakeEmbedder::new(Dimension::D128, "pdf"))
+            .build()
+            .unwrap();
+        let result = fresh.search("basil").paths([dir.path()]).execute().unwrap();
+        assert_eq!(result.stats.sync.resources_updated, 1);
+        assert_eq!(result.stats.sync.segments_embedded, 1);
+        assert_eq!(result.stats.sync.skipped.len(), 1);
+        assert!(result.stats.sync.page_diagnostics.is_empty());
+        assert!(
+            result.stats.sync.skipped[0]
+                .reason
+                .starts_with("PDF parse failed:")
+        );
+        assert!(!result.stats.sync.skipped[0].reason.contains("corrupt.pdf"));
+        assert_eq!(result.hits.len(), 1);
+    }
+}
+
+#[test]
+fn omitted_contents_is_a_legitimately_empty_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.pdf");
+    std::fs::write(&path, pdf(&["garden basil", ""], Kind::EmptyPage)).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "pdf"))
+        .build()
+        .unwrap();
+    let result = engine.search("basil").paths([&path]).execute().unwrap();
+    assert_eq!(result.stats.sync.resources_updated, 1);
+    assert!(result.stats.sync.skipped.is_empty());
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
+    assert_eq!(result.stats.sync.page_diagnostics[0].page, 2);
+    assert_eq!(
+        engine.extract(&result.hits[0]).unwrap().text,
+        "garden basil"
+    );
 }

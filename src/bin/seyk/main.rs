@@ -716,7 +716,7 @@ fn format_locator(locator: &ResourceLocator) -> String {
             byte_start,
             byte_end,
             ..
-        } => format!(" page {page} bytes {byte_start}..{byte_end}"),
+        } => format!(" page {page} bytes {byte_start}-{byte_end}"),
         ResourceLocator::Page { page } => format!(" page {page}"),
         ResourceLocator::Time { start_ms, end_ms } => {
             format!(" @ {}–{}", clock(*start_ms), clock(*end_ms))
@@ -822,7 +822,33 @@ fn format_sync(s: &SyncStats) -> String {
     if !s.skipped.is_empty() {
         out.push_str(&format!(", {} skipped", s.skipped.len()));
     }
+    if !s.page_diagnostics.is_empty() {
+        out.push_str(&format!(
+            ", {} pages without usable text",
+            s.page_diagnostics.len()
+        ));
+    }
     out
+}
+
+fn format_page_diagnostics(s: &SyncStats) -> String {
+    let mut counts = std::collections::BTreeMap::new();
+    for d in &s.page_diagnostics {
+        *counts.entry(&d.resource).or_insert(0usize) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(resource, count)| {
+            let label = resource
+                .to_file_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| resource.to_string());
+            format!(
+                "  indexed {label} with {count} page{} without usable text\n",
+                if count == 1 { "" } else { "s" }
+            )
+        })
+        .collect()
 }
 
 fn format_summary(r: &SearchResults) -> String {
@@ -842,6 +868,7 @@ fn format_summary(r: &SearchResults) -> String {
             s.reason
         ));
     }
+    out.push_str(&format_page_diagnostics(&r.stats.sync));
     out
 }
 
@@ -868,6 +895,7 @@ fn format_index_report(r: &IndexReport) -> String {
             s.reason
         ));
     }
+    out.push_str(&format_page_diagnostics(&r.sync));
     out
 }
 
@@ -1071,5 +1099,35 @@ mod tests {
         let mut malformed = value;
         malformed["hits"][0]["locator"] = serde_json::json!({"kind": "text"});
         assert!(read_search_hit(malformed.to_string().as_bytes(), 0).is_err());
+    }
+    #[test]
+    fn pdf_page_diagnostics_are_not_skipped_resources() {
+        let resource: ResourceId = "mem://mixed".parse().unwrap();
+        let report = IndexReport {
+            sync: SyncStats {
+                resources_discovered: 1,
+                resources_updated: 1,
+                page_diagnostics: vec![seyk::PageDiagnostic {
+                    resource,
+                    page: 2,
+                    reason: "no usable embedded text".into(),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let output = format_index_report(&report);
+        assert!(!output.contains("skipped"));
+        assert!(output.contains("indexed mem://mixed with 1 page without usable text"));
+        assert_eq!(
+            format_locator(&ResourceLocator::PageText {
+                page: 3,
+                byte_start: 0,
+                byte_end: 120,
+                text_version: "test".into(),
+                page_text_hash: "test".into()
+            }),
+            " page 3 bytes 0-120"
+        );
     }
 }
