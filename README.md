@@ -1,8 +1,11 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="128" alt="Seyk logo">
+  <img src="docs/assets/logo.png" width="600" alt="Seyk">
 </p>
 
-# Seyk
+<p align="center">
+  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
+</p>
 
 Local semantic search over your own files, built on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
