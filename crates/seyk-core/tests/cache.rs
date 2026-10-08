@@ -584,9 +584,11 @@ fn characterize_cross_profile_bm25_score_and_top_k_contamination() {
     }
     let removed = measure(&sqlite);
     assert_eq!(counts(), [("a".into(), 12, 114, 2)]);
-    // With the bundled SQLite, deleting B restores the order but NOT the scores,
-    // even after reopening. Keep this lifecycle effect visible for P11; do not
-    // assume that deleting a profile undoes its influence on shared statistics.
+    // Bundled SQLite 3.53.2's contentless-delete path adds tombstones without
+    // decrementing the stored row/token totals used by BM25. Live term matches
+    // exclude B, but those totals still include it: deleting B restores the order,
+    // NOT the scores, even after reopening. P11 must account for this lifecycle
+    // effect instead of assuming profile deletion restores shared statistics.
     for (original, deleted) in alone.iter().zip(&removed) {
         assert_eq!(original.resource, deleted.resource);
         let delta = deleted.score - original.score;
