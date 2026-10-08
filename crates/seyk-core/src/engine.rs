@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,9 @@ pub enum ProgressEvent {
     },
 }
 
+/// Called without the cache mutex held. During embedding, the indexing lease
+/// is held: callbacks may inspect the cache or search with `sync(false)`, but
+/// must not synchronously start another indexing pass on the same engine.
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
 
 pub struct SearchEngineBuilder {
@@ -237,6 +240,7 @@ impl SearchEngineBuilder {
             extractors: self.extractors,
             embedder,
             cache: Mutex::new(cache),
+            indexing: Mutex::new(()),
             segmenter: self.segmenter,
             profile,
             profile_id,
@@ -246,11 +250,19 @@ impl SearchEngineBuilder {
 }
 
 /// Search over provider resources; local files are the default.
+///
+/// Indexing passes on one engine are serialized through resource commits and
+/// orphan pruning. Separate engines, including two processes sharing one SQLite
+/// cache, are not covered by this engine-local lease. Cached searches do not
+/// acquire it.
 pub struct SearchEngine {
     provider: Arc<dyn ResourceProvider>,
     extractors: Vec<Arc<dyn Extractor>>,
     embedder: Arc<dyn Embedder>,
     cache: Mutex<Box<dyn EmbeddingCache>>,
+    /// Acquire before `cache`, never while holding it. Covers pending vectors
+    /// until their resource references are committed and pruning is complete.
+    indexing: Mutex<()>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
     profile_id: String,
@@ -329,6 +341,8 @@ impl SearchEngine {
     }
 
     /// Run a closure with exclusive access to the cache.
+    /// The closure must not start indexing, which acquires the indexing lease
+    /// before the cache mutex.
     pub fn with_cache<T>(&self, f: impl FnOnce(&mut dyn EmbeddingCache) -> Result<T>) -> Result<T> {
         let mut guard = self
             .cache
@@ -338,8 +352,10 @@ impl SearchEngine {
     }
 
     /// Make sure every resource has up-to-date vectors in the cache.
+    /// The caller keeps the indexing lease through any subsequent deletions.
     fn sync(
         &self,
+        _indexing: &MutexGuard<'_, ()>,
         resources: &[ProvidedResource],
         progress: Option<ProgressFn>,
     ) -> Result<SyncStats> {
@@ -1153,7 +1169,11 @@ impl<'e> SearchRequest<'e> {
             });
         }
         let sync = if self.sync {
-            engine.sync(&resources, self.progress)?
+            let indexing = engine
+                .indexing
+                .lock()
+                .map_err(|_| Error::Config("indexing lock poisoned".into()))?;
+            engine.sync(&indexing, &resources, self.progress)?
         } else {
             SyncStats {
                 resources_discovered: resources.len(),
@@ -1605,7 +1625,11 @@ impl<'e> IndexRequest<'e> {
                 resources: resources.len(),
             });
         }
-        let mut sync = engine.sync(&resources, self.progress)?;
+        let indexing = engine
+            .indexing
+            .lock()
+            .map_err(|_| Error::Config("indexing lock poisoned".into()))?;
+        let mut sync = engine.sync(&indexing, &resources, self.progress)?;
 
         let pid = engine.profile_id.as_str();
         let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
