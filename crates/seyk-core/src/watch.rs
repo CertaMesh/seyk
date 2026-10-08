@@ -4,6 +4,7 @@
 //! burst of file changes. Re-indexing is cheap when little changed: unchanged
 //! files are skipped by size and mtime, and only new segment texts reach the model.
 
+use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -32,7 +33,8 @@ impl Default for WatchOptions {
 /// Index `paths`, then keep indexing on change. Blocks until the watcher stops.
 ///
 /// `on_pass` receives every pass's outcome, the first one included. Errors in a
-/// pass are reported there and do not stop watching; failing to start does.
+/// pass and watcher errors are reported there and do not stop watching; failing
+/// to start does. Watcher errors also schedule a recovery pass.
 pub fn watch(
     engine: &SearchEngine,
     paths: &[PathBuf],
@@ -50,11 +52,11 @@ pub fn watch(
         })
         .collect();
     let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(tx).map_err(watch_error)?;
+    let mut watcher = notify::recommended_watcher(tx).map_err(|e| watch_error(&e))?;
     for p in &paths {
         watcher
             .watch(p, RecursiveMode::Recursive)
-            .map_err(watch_error)?;
+            .map_err(|e| watch_error(&e))?;
     }
 
     let run = |on_pass: &mut dyn FnMut(Result<IndexReport>)| {
@@ -67,11 +69,18 @@ pub fn watch(
 
     // Watch before the first pass so edits made during it are not lost.
     run(&mut on_pass);
+    // Both callbacks run serially in debounce_loop and share the reporter.
+    let on_pass = RefCell::new(on_pass);
     debounce_loop(
         &rx,
         options.debounce,
-        |event| matches!(event, Ok(e) if relevant(e, &paths, discovery)),
-        || run(&mut on_pass),
+        |event| {
+            if let Err(e) = event {
+                (on_pass.borrow_mut())(Err(watch_error(e)));
+            }
+            relevant(event, &paths, discovery)
+        },
+        || run(&mut *on_pass.borrow_mut()),
     );
     Ok(())
 }
@@ -114,13 +123,25 @@ fn debounce_loop<E>(
     }
 }
 
-fn watch_error(e: notify::Error) -> Error {
+fn watch_error(e: &notify::Error) -> Error {
     Error::Config(format!("file watcher: {e}"))
 }
 
 /// Ignore reads and churn in folders discovery skips anyway (`target/` during a
 /// build, `.git/` on every commit), so they do not trigger empty passes.
-fn relevant(event: &notify::Event, roots: &[PathBuf], discovery: &DiscoveryOptions) -> bool {
+fn relevant(
+    event: &notify::Result<notify::Event>,
+    roots: &[PathBuf],
+    discovery: &DiscoveryOptions,
+) -> bool {
+    // Lost events make freshness unknown, even without an affected path (for
+    // example, Linux inotify queue overflow). Rescan every watched root.
+    let Ok(event) = event else {
+        return true;
+    };
+    if event.need_rescan() {
+        return true;
+    }
     if matches!(event.kind, EventKind::Access(_)) {
         return false;
     }
@@ -167,7 +188,8 @@ mod tests {
     #[test]
     fn hidden_folders_above_the_root_do_not_matter() {
         let d = DiscoveryOptions::default();
-        let event = notify::Event::new(EventKind::Any).add_path("/home/me/.notes/idea.md".into());
+        let event =
+            Ok(notify::Event::new(EventKind::Any).add_path("/home/me/.notes/idea.md".into()));
         assert!(relevant(&event, &["/home/me/.notes".into()], &d));
         assert!(!relevant(&event, &["/home/me".into()], &d));
     }
@@ -175,11 +197,80 @@ mod tests {
     #[test]
     fn nested_roots_admit_in_any_order() {
         let d = DiscoveryOptions::default();
-        let event = notify::Event::new(EventKind::Any).add_path("/repo/.notes/idea.md".into());
+        let event = Ok(notify::Event::new(EventKind::Any).add_path("/repo/.notes/idea.md".into()));
         let parent: PathBuf = "/repo".into();
         let hidden: PathBuf = "/repo/.notes".into();
         assert!(relevant(&event, &[parent.clone(), hidden.clone()], &d));
         assert!(relevant(&event, &[hidden, parent], &d));
+    }
+
+    #[test]
+    fn lost_events_require_a_pass_before_path_filtering() {
+        let roots = ["/repo".into()];
+        let d = DiscoveryOptions::default();
+        let rescan = notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        assert!(rescan.paths.is_empty());
+        assert!(relevant(&Ok(rescan), &roots, &d));
+        assert!(relevant(
+            &Err(notify::Error::generic("lost events")),
+            &roots,
+            &d
+        ));
+        // A rescan remains relevant even if its path would normally be ignored.
+        let rescan = notify::Event::new(EventKind::Other)
+            .set_flag(notify::event::Flag::Rescan)
+            .add_path("/repo/target/debug".into());
+        assert!(relevant(&Ok(rescan), &roots, &d));
+    }
+
+    #[test]
+    fn ordinary_access_and_ignored_directory_events_remain_irrelevant() {
+        let roots = ["/repo".into()];
+        let d = DiscoveryOptions::default();
+        let access = notify::Event::new(EventKind::Access(notify::event::AccessKind::Any))
+            .add_path("/repo/notes.md".into());
+        assert!(!relevant(&Ok(access), &roots, &d));
+        for path in [
+            "/repo/target/debug/foo",
+            "/repo/.git/index",
+            "/repo/.notes/idea.md",
+        ] {
+            let event = notify::Event::new(EventKind::Any).add_path(path.into());
+            assert!(!relevant(&Ok(event), &roots, &d), "{path}");
+        }
+        assert!(!relevant(
+            &Ok(notify::Event::new(EventKind::Other)),
+            &roots,
+            &d
+        ));
+    }
+
+    #[test]
+    fn pathless_rescan_schedules_exactly_one_pass() {
+        let (tx, rx) = mpsc::channel();
+        let (pass_tx, pass_rx) = mpsc::channel();
+        let sender = std::thread::spawn(move || {
+            tx.send(Ok(
+                notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan)
+            ))
+            .unwrap();
+            // Keep the channel open until the scheduled pass actually runs.
+            pass_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("rescan pass");
+        });
+        let mut n = 0;
+        debounce_loop(
+            &rx,
+            Duration::from_millis(10),
+            |event| relevant(event, &["/repo".into()], &DiscoveryOptions::default()),
+            || {
+                n += 1;
+                pass_tx.send(()).unwrap();
+            },
+        );
+        sender.join().unwrap();
+        assert_eq!(n, 1);
     }
 
     /// Events are (relevant, gap before sending). Returns how many passes ran.
