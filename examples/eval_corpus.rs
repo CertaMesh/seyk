@@ -8,17 +8,19 @@
 //! For every query (one per line, `#` starts a comment) it prints the top
 //! semantic hits and the top keyword hits. Semantic hits that share no content
 //! word with the query are marked: those are the passages a keyword search
-//! would not have surfaced. Uses the persistent cache unless `--no-cache`.
+//! would not have surfaced under this overlap rule. Unavailable extractions are
+//! reported separately and excluded from the overlap denominator. Uses the
+//! persistent cache unless `--no-cache`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use seyk::discovery::{ResourceKind, discover};
 use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 use seyk::segment::TextSegmenter;
 use seyk::{
-    Dimension, DiscoveryOptions, MemoryCache, ResourceLocator, SearchEngine, SqliteCache,
-    expand_tilde, make_preview,
+    Dimension, DiscoveryOptions, MemoryCache, ResourceLocator, SearchEngine, SearchHit, SearchMode,
+    SqliteCache, expand_tilde, make_preview,
 };
 
 const PREVIEW_CHARS: usize = 160;
@@ -261,26 +263,55 @@ fn segment_corpus(paths: &[PathBuf], segmenter: &TextSegmenter) -> Vec<Segment> 
     out
 }
 
-/// The text of a hit, read back from the file (the cache stores no content).
-fn hit_text(
-    path: &Path,
-    locator: &ResourceLocator,
-    files: &mut HashMap<PathBuf, Vec<u8>>,
-) -> String {
-    let ResourceLocator::Text {
-        byte_start,
-        byte_end,
-        ..
-    } = locator
-    else {
-        return String::new();
-    };
-    let bytes = files
-        .entry(path.to_path_buf())
-        .or_insert_with(|| std::fs::read(path).unwrap_or_default());
-    let end = (*byte_end as usize).min(bytes.len());
-    let start = (*byte_start as usize).min(end);
-    String::from_utf8_lossy(&bytes[start..end]).into_owned()
+/// Only verified extraction is an observation; even empty text can be observed.
+fn hit_text(engine: &SearchEngine, hit: &SearchHit) -> seyk::Result<String> {
+    engine.extract(hit).map(|content| content.text)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct OverlapCounts {
+    evaluable: usize,
+    no_overlap: usize,
+    unavailable: usize,
+}
+
+impl OverlapCounts {
+    fn observe(&mut self, text: seyk::Result<String>, stems: &[&str]) -> String {
+        match text {
+            Ok(text) => {
+                self.evaluable += 1;
+                let overlap = keyword_score(stems, &stems_of(&text));
+                if overlap == 0 {
+                    self.no_overlap += 1;
+                    "  [no keyword overlap]".into()
+                } else {
+                    format!("  [{overlap}/{} words]", stems.len())
+                }
+            }
+            Err(reason) => {
+                self.unavailable += 1;
+                format!("  [keyword overlap unavailable: {reason}]")
+            }
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.evaluable += other.evaluable;
+        self.no_overlap += other.no_overlap;
+        self.unavailable += other.unavailable;
+    }
+
+    fn summary(&self) -> String {
+        let overlap = if self.evaluable == 0 {
+            "no evaluable semantic hits (keyword overlap not measured)".into()
+        } else {
+            format!(
+                "{} of {} evaluable semantic hits had no keyword overlap",
+                self.no_overlap, self.evaluable
+            )
+        };
+        format!("{overlap}; {} unavailable", self.unavailable)
+    }
 }
 
 fn display_path(path: &Path, cwd: &Path) -> String {
@@ -346,9 +377,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let segments = segment_corpus(&args.paths, &TextSegmenter::default());
-    let mut files = HashMap::new();
-    let mut total_no_overlap = 0;
-    let mut total_hits = 0;
+    let mut totals = OverlapCounts::default();
 
     for (qi, query) in queries.iter().enumerate() {
         let content = content_words(query);
@@ -358,23 +387,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let results = engine
             .search(query)
+            .mode(SearchMode::Semantic)
             .paths(&args.paths)
             .limit(args.limit)
             .previews(Some(PREVIEW_CHARS))
             .execute()?;
         println!("semantic (top {}):", args.limit);
         let mut semantic_keys = HashSet::new();
-        let mut no_overlap = 0;
+        let mut counts = OverlapCounts::default();
         for (i, hit) in results.hits.iter().enumerate() {
             let path = hit.resource.to_file_path().expect("file resource");
-            let text = hit_text(&path, &hit.locator, &mut files);
-            let overlap = keyword_score(&stems, &stems_of(&text));
-            let mark = if overlap == 0 {
-                no_overlap += 1;
-                "  [no keyword overlap]".to_string()
-            } else {
-                format!("  [{overlap}/{} words]", stems.len())
-            };
+            let mark = counts.observe(hit_text(&engine, hit), &stems);
             semantic_keys.insert((path.to_path_buf(), lines_of(&hit.locator)));
             println!(
                 "  {}. {:.3}  {}{}{mark}",
@@ -387,8 +410,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("       {p}");
             }
         }
-        total_no_overlap += no_overlap;
-        total_hits += results.hits.len();
+        totals.add(&counts);
 
         let mut ranked: Vec<(usize, &Segment)> = segments
             .iter()
@@ -416,15 +438,184 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("       {}", make_preview(&s.text, PREVIEW_CHARS));
         }
         println!(
-            "\n{no_overlap} of {} semantic hits share no content word with the query; {shared} also in the keyword top {}.\n",
-            results.hits.len(),
+            "\n{}; {shared} also in the keyword top {}.\n",
+            counts.summary(),
             args.limit
         );
     }
 
-    println!(
-        "summary: {} queries, {total_no_overlap} of {total_hits} semantic hits had no keyword overlap.",
-        queries.len()
-    );
+    println!("summary: {} queries, {}.", queries.len(), totals.summary());
     Ok(())
+}
+
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod common;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seyk::{Error, Modality, ResourceId, ResourceMetadata};
+
+    fn engine() -> SearchEngine {
+        SearchEngine::builder()
+            .embedder(common::FakeEmbedder::new(Dimension::D128, "eval-overlap"))
+            .build()
+            .unwrap()
+    }
+
+    fn locator(start: u64, end: u64) -> ResourceLocator {
+        ResourceLocator::Text {
+            byte_start: start,
+            byte_end: end,
+            line_start: None,
+            line_end: None,
+        }
+    }
+
+    fn hit(path: &Path, text: &str) -> SearchHit {
+        SearchHit {
+            resource: ResourceId::from_path(path).unwrap(),
+            locator: locator(0, text.len() as u64),
+            score: 1.0,
+            signals: Default::default(),
+            metadata: ResourceMetadata {
+                media_type: Some("text/plain".into()),
+                modality: Modality::Text,
+                size_bytes: text.len() as u64,
+                modified_ns: None,
+                content_hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
+            },
+            heading: None,
+            preview: None,
+            query_index: 0,
+        }
+    }
+
+    #[test]
+    fn empty_text_is_observed_but_unsupported_locator_is_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+        let engine = engine();
+        let mut hit = hit(&path, "");
+        let mut counts = OverlapCounts::default();
+        assert_eq!(hit_text(&engine, &hit).unwrap(), "");
+        assert_eq!(
+            counts.observe(hit_text(&engine, &hit), &["alpha"]),
+            "  [no keyword overlap]"
+        );
+        hit.locator = ResourceLocator::WholeResource;
+        let unavailable = hit_text(&engine, &hit);
+        assert!(matches!(
+            unavailable,
+            Err(Error::UnsupportedExtraction { .. })
+        ));
+        assert!(
+            counts
+                .observe(unavailable, &["alpha"])
+                .contains("unavailable:")
+        );
+        assert_eq!(
+            counts,
+            OverlapCounts {
+                evaluable: 1,
+                no_overlap: 1,
+                unavailable: 1
+            }
+        );
+    }
+
+    #[test]
+    fn read_failure_and_stale_content_are_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("note.txt");
+        let engine = engine();
+        let hit = hit(&path, "alpha");
+        let mut counts = OverlapCounts::default();
+        let missing = hit_text(&engine, &hit);
+        assert!(matches!(missing, Err(Error::Io { .. })));
+        counts.observe(missing, &["alpha"]);
+        std::fs::write(&path, "bravo").unwrap();
+        let stale = hit_text(&engine, &hit);
+        assert!(matches!(stale, Err(Error::StaleResource { .. })));
+        counts.observe(stale, &["alpha"]);
+        assert_eq!(
+            counts,
+            OverlapCounts {
+                evaluable: 0,
+                no_overlap: 0,
+                unavailable: 2
+            }
+        );
+        assert_eq!(
+            counts.summary(),
+            "no evaluable semantic hits (keyword overlap not measured); 2 unavailable"
+        );
+    }
+
+    #[test]
+    fn invalid_ranges_are_unavailable_instead_of_truncated() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("note.txt");
+        let text = "a🙂b";
+        std::fs::write(&path, text).unwrap();
+        let engine = engine();
+        let mut hit = hit(&path, text);
+        let mut counts = OverlapCounts::default();
+        for range in [locator(2, 1), locator(0, 99), locator(2, 5)] {
+            hit.locator = range;
+            let invalid = hit_text(&engine, &hit);
+            assert!(matches!(invalid, Err(Error::InvalidLocator { .. })));
+            counts.observe(invalid, &["alpha"]);
+        }
+        assert_eq!(
+            counts,
+            OverlapCounts {
+                evaluable: 0,
+                no_overlap: 0,
+                unavailable: 3
+            }
+        );
+    }
+
+    #[test]
+    fn aggregate_counts_exclude_unavailable_observations() {
+        let mut first = OverlapCounts::default();
+        assert_eq!(
+            first.observe(Ok("alpha".into()), &["alpha"]),
+            "  [1/1 words]"
+        );
+        first.observe(Ok("bravo".into()), &["alpha"]);
+        let mut second = OverlapCounts::default();
+        second.observe(Ok(String::new()), &["alpha"]);
+        let mark = second.observe(Err(Error::Config("extraction failed".into())), &["alpha"]);
+        assert_eq!(
+            mark,
+            "  [keyword overlap unavailable: invalid configuration: extraction failed]"
+        );
+        let mut totals = OverlapCounts::default();
+        totals.add(&first);
+        totals.add(&second);
+        assert_eq!(
+            totals,
+            OverlapCounts {
+                evaluable: 3,
+                no_overlap: 2,
+                unavailable: 1
+            }
+        );
+        assert_eq!(
+            totals.summary(),
+            "2 of 3 evaluable semantic hits had no keyword overlap; 1 unavailable"
+        );
+    }
+
+    #[test]
+    fn no_hits_does_not_claim_an_overlap_measurement() {
+        assert_eq!(
+            OverlapCounts::default().summary(),
+            "no evaluable semantic hits (keyword overlap not measured); 0 unavailable"
+        );
+    }
 }
