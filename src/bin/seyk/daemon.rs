@@ -15,8 +15,7 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -103,6 +102,63 @@ pub struct DaemonStatus {
 
 // ---- daemon side -----------------------------------------------------------
 
+/// Admission and idle shutdown share one lock: either a session owns a lease,
+/// or closing wins and every later admission is refused.
+struct Sessions {
+    state: Mutex<SessionState>,
+}
+
+struct SessionState {
+    active: usize,
+    last_release: Instant,
+    closing: bool,
+}
+
+impl Sessions {
+    fn new(now: Instant) -> Self {
+        Self {
+            state: Mutex::new(SessionState {
+                active: 0,
+                last_release: now,
+                closing: false,
+            }),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> Result<SessionLease> {
+        let mut state = self.state.lock().unwrap();
+        if state.closing {
+            bail!("daemon is closing");
+        }
+        state.active += 1;
+        Ok(SessionLease(self.clone()))
+    }
+
+    fn active(&self) -> usize {
+        self.state.lock().unwrap().active
+    }
+
+    fn close_if_idle(&self, now: Instant, idle: Duration) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.active == 0 && now.saturating_duration_since(state.last_release) >= idle {
+            state.closing = true;
+        }
+        state.closing
+    }
+}
+
+struct SessionLease(Arc<Sessions>);
+
+impl Drop for SessionLease {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap();
+        state.active -= 1;
+        if state.active == 0 {
+            state.last_release = Instant::now();
+        }
+    }
+}
+
 /// Run the daemon in the foreground until it is stopped or idle for `idle`.
 pub fn run(endpoint: &Endpoint, factory: EngineFactory, idle: Duration) -> Result<()> {
     // One daemon per endpoint: whoever holds the lock owns the socket path.
@@ -139,44 +195,48 @@ async fn serve(endpoint: &Endpoint, hub: Arc<Hub>, idle: Duration) -> Result<()>
         endpoint.socket.display()
     );
 
-    let sessions = Arc::new(AtomicUsize::new(0));
+    let sessions = Arc::new(Sessions::new(Instant::now()));
     let (stop_tx, mut stop_rx) = tokio::sync::mpsc::channel::<()>(1);
-    let mut quiet_since = Some(Instant::now());
+    let mut connections = tokio::task::JoinSet::new();
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
         tokio::select! {
             conn = listener.accept() => {
                 let (stream, _) = conn?;
                 let (hub, sessions, stop) = (hub.clone(), sessions.clone(), stop_tx.clone());
-                tokio::spawn(async move {
+                connections.spawn(async move {
                     if let Err(e) = handle(stream, hub, sessions, stop).await {
                         eprintln!("seyk daemon: connection: {e:#}");
                     }
                 });
             }
+            _ = connections.join_next(), if !connections.is_empty() => {}
             _ = stop_rx.recv() => {
                 eprintln!("seyk daemon: stopped on request");
                 return Ok(());
             }
             _ = tick.tick() => {
-                if sessions.load(Ordering::SeqCst) > 0 {
-                    quiet_since = None;
-                } else {
-                    let since = *quiet_since.get_or_insert_with(Instant::now);
-                    if since.elapsed() >= idle {
-                        eprintln!("seyk daemon: idle for {}s, exiting", idle.as_secs());
-                        return Ok(());
-                    }
+                if sessions.close_if_idle(Instant::now(), idle) {
+                    eprintln!("seyk daemon: idle for {}s, exiting", idle.as_secs());
+                    break;
                 }
             }
         }
     }
+    drop(listener);
+    // Let accepted connections receive the closing reply before the runtime
+    // exits. Incomplete hellos must not keep an idle daemon alive indefinitely.
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        while connections.join_next().await.is_some() {}
+    })
+    .await;
+    Ok(())
 }
 
 async fn handle(
     stream: UnixStream,
     hub: Arc<Hub>,
-    sessions: Arc<AtomicUsize>,
+    sessions: Arc<Sessions>,
     stop: tokio::sync::mpsc::Sender<()>,
 ) -> Result<()> {
     let (read, mut write) = stream.into_split();
@@ -190,7 +250,7 @@ async fn handle(
             let status = DaemonStatus {
                 pid: std::process::id(),
                 version: env!("CARGO_PKG_VERSION").into(),
-                sessions: sessions.load(Ordering::SeqCst),
+                sessions: sessions.active(),
                 folders: hub.watched(),
             };
             reply(&mut write, Ok(Some(status))).await
@@ -201,6 +261,10 @@ async fn handle(
             Ok(())
         }
         Hello::Session { roots } => {
+            let _lease = match sessions.acquire() {
+                Ok(lease) => lease,
+                Err(e) => return reply(&mut write, Err(e)).await,
+            };
             // Building a session canonicalizes roots and may start watchers.
             let server =
                 match tokio::task::spawn_blocking(move || SeykServer::new(roots, hub)).await? {
@@ -208,16 +272,10 @@ async fn handle(
                     Err(e) => return reply(&mut write, Err(e)).await,
                 };
             reply(&mut write, Ok(None)).await?;
-            sessions.fetch_add(1, Ordering::SeqCst);
             // The buffered reader keeps any MCP bytes that arrived with the hello.
-            let result = async {
-                let service = server.serve((read, write)).await?;
-                service.waiting().await?;
-                anyhow::Ok(())
-            }
-            .await;
-            sessions.fetch_sub(1, Ordering::SeqCst);
-            result
+            let service = server.serve((read, write)).await?;
+            service.waiting().await?;
+            Ok(())
         }
     }
 }
@@ -387,6 +445,227 @@ fn log_file(path: &Path) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const IDLE: Duration = Duration::from_secs(60);
+
+    fn test_hub() -> Arc<Hub> {
+        Hub::new(Box::new(|| bail!("test must not load a model")), false)
+    }
+
+    async fn send_hello(stream: &mut UnixStream, hello: Hello) {
+        let mut line = serde_json::to_string(&hello).unwrap();
+        line.push('\n');
+        stream.write_all(line.as_bytes()).await.unwrap();
+    }
+
+    #[test]
+    fn session_between_ticks_resets_idle_deadline() {
+        let start = Instant::now() - IDLE;
+        let sessions = Arc::new(Sessions::new(start));
+        assert!(!sessions.close_if_idle(start + IDLE - Duration::from_secs(5), IDLE));
+        // No idle tick observes this short session.
+        drop(sessions.acquire().unwrap());
+        assert!(!sessions.close_if_idle(start + IDLE, IDLE));
+        let released = sessions.state.lock().unwrap().last_release;
+        assert!(!sessions.close_if_idle(released + IDLE - Duration::from_nanos(1), IDLE));
+        assert!(sessions.close_if_idle(released + IDLE, IDLE));
+        assert!(sessions.acquire().is_err());
+    }
+
+    #[test]
+    fn only_last_drop_records_idle_start() {
+        let start = Instant::now() - IDLE;
+        let sessions = Arc::new(Sessions::new(start));
+        let first = sessions.acquire().unwrap();
+        let last = sessions.acquire().unwrap();
+        drop(first);
+        assert_eq!(sessions.active(), 1);
+        assert_eq!(sessions.state.lock().unwrap().last_release, start);
+        assert!(!sessions.close_if_idle(start + IDLE * 2, IDLE));
+        let before = Instant::now();
+        drop(last);
+        let after = Instant::now();
+        assert_eq!(sessions.active(), 0);
+        let released = sessions.state.lock().unwrap().last_release;
+        assert!((before..=after).contains(&released));
+        assert!(!sessions.close_if_idle(released, IDLE));
+    }
+
+    #[test]
+    fn admission_and_closing_have_one_winner() {
+        for _ in 0..32 {
+            let now = Instant::now();
+            let sessions = Arc::new(Sessions::new(now - IDLE));
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let admission = std::thread::spawn({
+                let sessions = sessions.clone();
+                let barrier = barrier.clone();
+                move || {
+                    barrier.wait();
+                    sessions.acquire()
+                }
+            });
+            barrier.wait();
+            let closed = sessions.close_if_idle(now, IDLE);
+            // The thread returns its lease, keeping it alive until both racers finish.
+            let lease = admission.join().unwrap();
+            assert_eq!(closed, lease.is_err());
+            assert_eq!(sessions.active(), usize::from(lease.is_ok()));
+            if closed {
+                assert!(sessions.acquire().is_err());
+            } else {
+                assert!(!sessions.close_if_idle(now + IDLE, IDLE));
+            }
+        }
+    }
+
+    #[test]
+    fn setup_crossing_idle_deadline_holds_a_lease() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // Occupy the blocking pool so the real handler cannot construct its
+            // server yet. Admission must already protect that queued setup.
+            let (release, wait) = std::sync::mpsc::channel();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                let _ = wait.recv();
+            });
+            ready.await.unwrap();
+            let now = Instant::now();
+            let sessions = Arc::new(Sessions::new(now - IDLE));
+            let (mut client, server) = UnixStream::pair().unwrap();
+            send_hello(&mut client, Hello::Session { roots: vec![] }).await;
+            let (stop, _) = tokio::sync::mpsc::channel(1);
+            let task = tokio::spawn(handle(server, test_hub(), sessions.clone(), stop));
+            let admitted = tokio::time::timeout(Duration::from_secs(5), async {
+                while sessions.active() == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            let closed = sessions.close_if_idle(now + IDLE, IDLE);
+            // Always unblock the pool before assertions (runtime drop waits for it).
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            task.await.unwrap().unwrap();
+            assert!(admitted.is_ok());
+            assert!(!closed);
+            assert_eq!(sessions.active(), 0);
+        });
+    }
+
+    #[tokio::test]
+    async fn failed_setup_and_ack_release_the_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        for roots in [vec![], vec![dir.path().to_path_buf()]] {
+            let start = Instant::now() - IDLE;
+            let sessions = Arc::new(Sessions::new(start));
+            let (mut client, server) = UnixStream::pair().unwrap();
+            send_hello(&mut client, Hello::Session { roots }).await;
+            // An empty root list fails setup; a valid root reaches the failed ack.
+            drop(client);
+            let (stop, _) = tokio::sync::mpsc::channel(1);
+            assert!(
+                handle(server, test_hub(), sessions.clone(), stop)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(sessions.active(), 0);
+            assert!(sessions.state.lock().unwrap().last_release > start);
+            assert!(!sessions.close_if_idle(Instant::now(), IDLE));
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_serving_future_releases_the_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = Arc::new(Sessions::new(Instant::now() - IDLE));
+        let (mut client, server) = UnixStream::pair().unwrap();
+        send_hello(
+            &mut client,
+            Hello::Session {
+                roots: vec![dir.path().into()],
+            },
+        )
+        .await;
+        let (stop, _) = tokio::sync::mpsc::channel(1);
+        let task = tokio::spawn(handle(server, test_hub(), sessions.clone(), stop));
+        let mut answer = String::new();
+        BufReader::new(client).read_line(&mut answer).await.unwrap();
+        assert!(serde_json::from_str::<Reply>(&answer).unwrap().ok);
+        assert_eq!(sessions.active(), 1);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(sessions.active(), 0);
+        assert!(!sessions.close_if_idle(Instant::now(), IDLE));
+    }
+
+    #[tokio::test]
+    async fn panic_in_serving_future_releases_the_lease() {
+        let sessions = Arc::new(Sessions::new(Instant::now() - IDLE));
+        let task = tokio::spawn({
+            let sessions = sessions.clone();
+            async move {
+                let _lease = sessions.acquire().unwrap();
+                tokio::task::yield_now().await;
+                panic!("serving future failed");
+            }
+        });
+        assert!(task.await.unwrap_err().is_panic());
+        assert_eq!(sessions.active(), 0);
+        assert!(!sessions.close_if_idle(Instant::now(), IDLE));
+    }
+
+    #[tokio::test]
+    async fn closing_refuses_sessions_with_an_error_reply() {
+        let now = Instant::now();
+        let sessions = Arc::new(Sessions::new(now - IDLE));
+        assert!(sessions.close_if_idle(now, IDLE));
+        let (mut client, server) = UnixStream::pair().unwrap();
+        send_hello(&mut client, Hello::Session { roots: vec![] }).await;
+        let (stop, _) = tokio::sync::mpsc::channel(1);
+        handle(server, test_hub(), sessions.clone(), stop)
+            .await
+            .unwrap();
+        let mut answer = String::new();
+        BufReader::new(client).read_line(&mut answer).await.unwrap();
+        let reply: Reply = serde_json::from_str(&answer).unwrap();
+        assert!(!reply.ok);
+        assert_eq!(reply.error.as_deref(), Some("daemon is closing"));
+        assert_eq!(sessions.active(), 0);
+    }
+
+    #[tokio::test]
+    async fn status_and_stop_do_not_reset_idle() {
+        let now = Instant::now();
+        let sessions = Arc::new(Sessions::new(now - IDLE));
+        for hello in [Hello::Status, Hello::Stop] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            send_hello(&mut client, hello).await;
+            let (stop, mut stopped) = tokio::sync::mpsc::channel(1);
+            handle(server, test_hub(), sessions.clone(), stop)
+                .await
+                .unwrap();
+            let mut answer = String::new();
+            BufReader::new(client).read_line(&mut answer).await.unwrap();
+            let reply: Reply = serde_json::from_str(&answer).unwrap();
+            assert!(reply.ok);
+            if let Some(status) = reply.status {
+                assert_eq!(status.sessions, 0);
+            } else {
+                assert_eq!(stopped.recv().await, Some(()));
+            }
+            assert_eq!(sessions.active(), 0);
+            assert_eq!(sessions.state.lock().unwrap().last_release, now - IDLE);
+        }
+        assert!(sessions.close_if_idle(now, IDLE));
+    }
+
     #[test]
     fn endpoint_changes_with_protocol_and_model_arguments() {
         let args = vec!["--dimension".into(), "256".into()];
