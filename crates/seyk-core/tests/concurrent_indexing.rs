@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +14,33 @@ use seyk_core::{
     SqliteCache,
 };
 use tempfile::TempDir;
+
+/// A one-shot signal: releasing a paused worker never waits for it to arrive.
+/// Every receiver has a deadline, including workers being joined during unwind.
+#[derive(Default)]
+struct Signal {
+    ready: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Signal {
+    fn notify(&self) {
+        *self.ready.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+
+    fn wait(&self, stage: &str) {
+        let (ready, _) = self
+            .changed
+            .wait_timeout_while(
+                self.ready.lock().unwrap(),
+                Duration::from_secs(5),
+                |ready| !*ready,
+            )
+            .unwrap();
+        assert!(*ready, "timed out waiting for {stage}");
+    }
+}
 
 #[derive(Clone, Copy)]
 enum CompetingPass {
@@ -49,8 +76,8 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
     // The progress event is after put_embeddings and before put_resource.
     // Pause with one published vector and no committed references for A.
     // No sleep or embedder timing is needed to reach the vulnerable interval.
-    let published = Barrier::new(2);
-    let release = Barrier::new(2);
+    let published = Signal::default();
+    let release = Signal::default();
     let progress_a = |event| {
         if matches!(event, ProgressEvent::Embedding { done: 1, total: 2 }) {
             // Callbacks must be able to inspect the cache and run cached searches:
@@ -63,8 +90,8 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
                 .mode(SearchMode::Semantic)
                 .execute()
                 .unwrap();
-            published.wait();
-            release.wait();
+            published.notify();
+            release.wait("A release");
         }
     };
     let (started_tx, started_rx) = mpsc::channel();
@@ -84,7 +111,7 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
                 .execute()
                 .unwrap()
         });
-        published.wait();
+        published.wait("A publication");
         let pass_b = scope.spawn(|| {
             match competing {
                 CompetingPass::Search => {
@@ -112,10 +139,11 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
         // B has discovered its disjoint root and is about to acquire the lease.
         // On the old engine it completes and prunes A's pending vector. On the
         // fixed engine it must wait. The timeout bounds that exclusion check;
-        // the barriers, rather than scheduling delays, establish the race.
+        // the signals pin A's pending-vector interval. Discovery alone does not
+        // prove B was scheduled past its callback before the timeout.
         let started = started_rx.recv_timeout(Duration::from_secs(5));
         let completed = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-        release.wait();
+        release.notify();
         assert!(started.is_ok(), "competing pass never reached discovery");
         let report = pass_a.join().unwrap();
         pass_b.join().unwrap();
@@ -180,8 +208,8 @@ fn disjoint_passes_preserve_pending_vectors_in_sqlite() {
 
 struct DeletionPause {
     armed: AtomicBool,
-    entered: Barrier,
-    release: Barrier,
+    entered: Signal,
+    release: Signal,
 }
 
 impl ResourceProvider for DeletionPause {
@@ -199,8 +227,8 @@ impl ResourceProvider for DeletionPause {
 
     fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
         if self.armed.swap(false, Ordering::SeqCst) {
-            self.entered.wait();
-            self.release.wait();
+            self.entered.notify();
+            self.release.wait("deletion release");
         }
         FsProvider.deletion_scope(scope)
     }
@@ -218,8 +246,8 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
     fs::write(&b_file, "quiet library").unwrap();
     let provider = Arc::new(DeletionPause {
         armed: AtomicBool::new(false),
-        entered: Barrier::new(2),
-        release: Barrier::new(2),
+        entered: Signal::default(),
+        release: Signal::default(),
     });
     let engine = SearchEngine::builder()
         .embedder(FakeEmbedder::new(Dimension::D128, "deletion-lease"))
@@ -233,19 +261,19 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
 
     let (started_tx, started_rx) = mpsc::channel();
     let (published_tx, published_rx) = mpsc::channel();
-    let release_a = Barrier::new(2);
+    let release_a = Signal::default();
     let progress_a = |event| match event {
         ProgressEvent::Discovered { .. } => started_tx.send(()).unwrap(),
         ProgressEvent::Embedding { done: 1, total: 1 } => {
             published_tx.send(()).unwrap();
-            release_a.wait();
+            release_a.wait("A release");
         }
         _ => {}
     };
     let published_during_deletion = thread::scope(|scope| {
         // B has finished sync but not deletion. A must still wait for B's lease.
         let pass_b = scope.spawn(|| engine.index().paths([b.path()]).execute().unwrap());
-        provider.entered.wait();
+        provider.entered.wait("deletion entry");
         let pass_a = scope.spawn(|| {
             engine
                 .index()
@@ -256,7 +284,7 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
         });
         let started = started_rx.recv_timeout(Duration::from_secs(5));
         let published = published_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-        provider.release.wait();
+        provider.release.notify();
         let removed = pass_b.join().unwrap().resources_removed;
         // Without the lease A has already published; with it, A starts now.
         let publication = if published {
@@ -264,7 +292,7 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
         } else {
             published_rx.recv_timeout(Duration::from_secs(5))
         };
-        release_a.wait();
+        release_a.notify();
         pass_a.join().unwrap();
         assert!(started.is_ok());
         assert!(publication.is_ok());
