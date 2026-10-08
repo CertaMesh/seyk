@@ -823,10 +823,7 @@ fn format_sync(s: &SyncStats) -> String {
         out.push_str(&format!(", {} skipped", s.skipped.len()));
     }
     if !s.page_diagnostics.is_empty() {
-        out.push_str(&format!(
-            ", {} pages without usable text",
-            s.page_diagnostics.len()
-        ));
+        out.push_str(&format!(", {} pages not indexed", s.page_diagnostics.len()));
     }
     out
 }
@@ -834,17 +831,17 @@ fn format_sync(s: &SyncStats) -> String {
 fn format_page_diagnostics(s: &SyncStats) -> String {
     let mut counts = std::collections::BTreeMap::new();
     for d in &s.page_diagnostics {
-        *counts.entry(&d.resource).or_insert(0usize) += 1;
+        *counts.entry((&d.resource, &d.reason)).or_insert(0usize) += 1;
     }
     counts
         .into_iter()
-        .map(|(resource, count)| {
+        .map(|((resource, reason), count)| {
             let label = resource
                 .to_file_path()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| resource.to_string());
             format!(
-                "  indexed {label} with {count} page{} without usable text\n",
+                "  {label}: {count} page{} not indexed: {reason}\n",
                 if count == 1 { "" } else { "s" }
             )
         })
@@ -1118,7 +1115,7 @@ mod tests {
         };
         let output = format_index_report(&report);
         assert!(!output.contains("skipped"));
-        assert!(output.contains("indexed mem://mixed with 1 page without usable text"));
+        assert!(output.contains("mem://mixed: 1 page not indexed: no usable embedded text"));
         assert_eq!(
             format_locator(&ResourceLocator::PageText {
                 page: 3,

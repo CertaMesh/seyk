@@ -110,6 +110,15 @@ pub(crate) fn unsupported(
     locator: &ResourceLocator,
     metadata: &ResourceMetadata,
 ) -> Error {
+    if metadata.modality == Modality::Document
+        && metadata.media_type.as_deref() == Some("application/pdf")
+        && let ResourceLocator::Page { page } = locator
+    {
+        return Error::PdfOcrUnavailable {
+            resource: source.clone(),
+            page: *page,
+        };
+    }
     Error::UnsupportedExtraction {
         resource: source.clone(),
         modality: metadata.modality,
@@ -184,6 +193,33 @@ mod tests {
             line_start: None,
             line_end: None,
         }
+    }
+
+    #[test]
+    fn scanned_page_extraction_has_a_typed_model_free_error() {
+        let source: ResourceId = "mem://scanned.pdf".parse().unwrap();
+        let metadata = ResourceMetadata {
+            media_type: Some("application/pdf".into()),
+            modality: Modality::Document,
+            size_bytes: 0,
+            modified_ns: None,
+            content_hash: String::new(),
+        };
+        let error = TextExtractor
+            .extract(&[], &source, &ResourceLocator::Page { page: 2 }, &metadata)
+            .unwrap_err();
+        assert!(matches!(error, Error::PdfOcrUnavailable { page: 2, .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("readable text for scanned pages needs OCR, which is not available yet")
+        );
+        let mut other = metadata;
+        other.media_type = Some("application/other".into());
+        assert!(matches!(
+            unsupported(&source, &ResourceLocator::Page { page: 2 }, &other),
+            Error::UnsupportedExtraction { .. }
+        ));
     }
 
     #[test]

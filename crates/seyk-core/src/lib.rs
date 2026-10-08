@@ -1,7 +1,8 @@
 //! Search, caching and verified evidence, independent of any concrete embedding backend.
 //!
 //! With `pdf`, applications installing a `log` logger MUST filter `pdf_extract`
-//! to Off: upstream diagnostics can contain document bytes. This crate installs
+//! to Off. With `pdf-render`, also filter `hayro_interpret`, `hayro_syntax` and
+//! `hayro_font` to Off: upstream diagnostics can contain document bytes. This crate installs
 //! neither a logger nor a panic hook. PDF panics become errors via catch_unwind,
 //! but the application's panic hook still runs first; use a payload-free hook.
 //! Unwinding does not contain aborts, OOM, hangs or excessive parser allocations.

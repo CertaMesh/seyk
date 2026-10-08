@@ -6,6 +6,18 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("PDF rendering failed for {resource}: {reason}")]
+    PdfRender {
+        resource: crate::ResourceId,
+        reason: &'static str,
+    },
+    #[error(
+        "readable text for scanned pages needs OCR, which is not available yet ({resource}, page {page})"
+    )]
+    PdfOcrUnavailable {
+        resource: crate::ResourceId,
+        page: u32,
+    },
     #[error("PDF parse failed for {resource}: {reason}")]
     PdfParse {
         resource: crate::ResourceId,
