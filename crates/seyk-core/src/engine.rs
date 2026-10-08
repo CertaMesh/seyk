@@ -371,6 +371,7 @@ impl SearchEngine {
                         &r.fingerprint(),
                         crate::pdf::TEXT_VERSION,
                         crate::pdf::PREPARATION_VERSION,
+                        &self.pdf_capabilities(),
                     ])
                 }
                 #[cfg(not(feature = "pdf"))]
@@ -442,6 +443,21 @@ impl SearchEngine {
                 modified_ns: r.modified_ns,
                 content_hash,
             };
+            #[cfg(feature = "pdf")]
+            if r.kind == ResourceKind::Pdf {
+                let target = Pending {
+                    resource: r.id.clone(),
+                    metadata,
+                    version,
+                    descriptor_hash,
+                    jobs: Vec::new(),
+                    page_diagnostics: Vec::new(),
+                };
+                if let Some(reason) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
+                    stats.skipped.push(skip(&r.id, reason));
+                }
+                continue;
+            }
             let prepared = self.prepare(r, bytes);
             match prepared {
                 Ok((jobs, page_diagnostics)) => pending.push(Pending {
@@ -509,7 +525,7 @@ impl SearchEngine {
             written = self.write_resources(&pending, written, ready_upto, &failed, &mut stats)?;
         }
         self.write_resources(&pending, written, pending.len(), &failed, &mut stats)?;
-        stats.embed_ms = started.elapsed().as_millis() as u64;
+        stats.embed_ms += started.elapsed().as_millis() as u64;
         if stats.resources_updated > 0 {
             self.with_cache(|c| c.prune_orphans(pid))?;
         }
@@ -598,57 +614,216 @@ impl SearchEngine {
 
     fn supports_kind(&self, kind: ResourceKind) -> bool {
         match kind {
-            ResourceKind::Pdf => {
-                cfg!(feature = "pdf") && self.embedder.supports(crate::Modality::Text)
-            }
+            ResourceKind::Pdf => cfg!(feature = "pdf"),
             _ => self.embedder.supports(kind.modality()),
         }
     }
 
+    fn supports_locator(&self, metadata: &ResourceMetadata, locator: &ResourceLocator) -> bool {
+        if metadata.media_type.as_deref() != Some("application/pdf") {
+            return true;
+        }
+        match locator {
+            ResourceLocator::Page { .. } => {
+                cfg!(feature = "pdf-render") && self.embedder.supports(crate::Modality::Image)
+            }
+            ResourceLocator::PageText { .. } => {
+                cfg!(feature = "pdf") && self.embedder.supports(crate::Modality::Text)
+            }
+            _ => false,
+        }
+    }
+
     #[cfg(feature = "pdf")]
-    fn prepare_pdf(
+    fn pdf_capabilities(&self) -> String {
+        #[cfg(feature = "pdf-render")]
+        let renderer = crate::pdf::RENDER_VERSION;
+        #[cfg(not(feature = "pdf-render"))]
+        let renderer = "no-render";
+        format!(
+            "pdf-cap-v1;text={};image={};{renderer}",
+            self.embedder.supports(crate::Modality::Text),
+            self.pdf_images()
+        )
+    }
+
+    #[cfg(feature = "pdf")]
+    fn pdf_images(&self) -> bool {
+        cfg!(feature = "pdf-render") && self.embedder.supports(crate::Modality::Image)
+    }
+
+    #[cfg(feature = "pdf")]
+    fn sync_pdf(
         &self,
         r: &ProvidedResource,
-        bytes: &[u8],
-    ) -> std::result::Result<(Vec<Job>, Vec<PageDiagnostic>), String> {
-        let pages = crate::pdf::read_pages(bytes, &r.id).map_err(|e| match e {
-            Error::PdfParse { reason, .. } => format!("PDF parse failed: {reason}"),
-            Error::ParserPanicked { .. } => "PDF parser panicked".into(),
-            _ => e.to_string(),
-        })?;
-        let mut jobs = Vec::new();
-        let mut diagnostics = Vec::new();
+        bytes: Vec<u8>,
+        mut target: Pending,
+        stats: &mut SyncStats,
+        progress: Option<ProgressFn>,
+    ) -> Result<Option<String>> {
+        let pages = match crate::pdf::read_pages(&bytes, &r.id) {
+            Ok(pages) => pages,
+            Err(error) => return Ok(Some(pdf_reason(error))),
+        };
+        #[cfg(feature = "pdf-render")]
+        let mut renderer = None;
+        let capacity = self.batch_size.min(4);
+        let mut batch = Vec::with_capacity(capacity);
+        let mut records = Vec::new();
         for page in pages {
-            if !crate::pdf::usable(&page.text) {
-                diagnostics.push(PageDiagnostic {
-                    resource: r.id.clone(),
-                    page: page.page,
-                    reason: "no usable embedded text; scan/OCR support is not enabled".into(),
-                });
-                continue;
-            }
-            let digest = blake3::hash(page.text.as_bytes()).to_hex().to_string();
-            for segment in self.segmenter.segment(&page.text, TextFormat::Plain) {
-                let title = segment_title(r.title.as_deref(), None);
-                jobs.push(Job::text(
-                    ResourceLocator::PageText {
+            if crate::pdf::usable(&page.text) {
+                if !self.embedder.supports(crate::Modality::Text) {
+                    target.page_diagnostics.push(PageDiagnostic {
+                        resource: r.id.clone(),
                         page: page.page,
-                        byte_start: segment.byte_range.start as u64,
-                        byte_end: segment.byte_range.end as u64,
-                        text_version: crate::pdf::TEXT_VERSION.into(),
-                        page_text_hash: digest.clone(),
-                    },
-                    None,
-                    segment.text.clone(),
-                    title,
-                    segment.text,
-                ));
+                        reason: "embedded text is not supported by this embedder".into(),
+                    });
+                    continue;
+                }
+                let digest = blake3::hash(page.text.as_bytes()).to_hex().to_string();
+                for segment in self.segmenter.segment(&page.text, TextFormat::Plain) {
+                    batch.push(Job::text(
+                        ResourceLocator::PageText {
+                            page: page.page,
+                            byte_start: segment.byte_range.start as u64,
+                            byte_end: segment.byte_range.end as u64,
+                            text_version: crate::pdf::TEXT_VERSION.into(),
+                            page_text_hash: digest.clone(),
+                        },
+                        None,
+                        segment.text.clone(),
+                        segment_title(r.title.as_deref(), None),
+                        segment.text,
+                    ));
+                    if batch.len() == capacity
+                        && let Some(reason) =
+                            self.flush_pdf_batch(&mut batch, &mut records, stats, progress)?
+                    {
+                        return Ok(Some(reason));
+                    }
+                }
+            } else if self.pdf_images() {
+                #[cfg(feature = "pdf-render")]
+                {
+                    if renderer.is_none() {
+                        renderer = match crate::pdf::render::PageRenderer::new(bytes.clone(), &r.id)
+                        {
+                            Ok(renderer) => Some(renderer),
+                            Err(error) => return Ok(Some(pdf_reason(error))),
+                        };
+                    }
+                    match renderer
+                        .as_ref()
+                        .expect("renderer initialized")
+                        .page(page.page)
+                    {
+                        Ok(png) => {
+                            batch.push(Job::image(ResourceLocator::Page { page: page.page }, png))
+                        }
+                        Err(Error::PdfRender { reason, .. }) => {
+                            target.page_diagnostics.push(PageDiagnostic {
+                                resource: r.id.clone(),
+                                page: page.page,
+                                reason: reason.into(),
+                            });
+                            continue;
+                        }
+                        Err(error) => return Ok(Some(pdf_reason(error))),
+                    }
+                }
+            } else {
+                target.page_diagnostics.push(PageDiagnostic {
+                    resource: r.id.clone(), page: page.page,
+                    reason: if cfg!(feature = "pdf-render") {
+                        "no usable embedded text; image embedding is disabled"
+                    } else {
+                        "no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)"
+                    }.into(),
+                });
+            }
+            if batch.len() == capacity
+                && let Some(reason) =
+                    self.flush_pdf_batch(&mut batch, &mut records, stats, progress)?
+            {
+                return Ok(Some(reason));
             }
         }
-        if jobs.is_empty() {
-            return Err("PDF has no usable embedded text; scan/OCR support is not enabled".into());
+        if let Some(reason) = self.flush_pdf_batch(&mut batch, &mut records, stats, progress)? {
+            return Ok(Some(reason));
         }
-        Ok((jobs, diagnostics))
+        // Commit the whole resource once. Failed model/parser work leaves the
+        // prior resource binding untouched, even if earlier vectors were cached.
+        let write = ResourceWrite {
+            metadata: &target.metadata,
+            version: &target.version,
+            descriptor_hash: Some(&target.descriptor_hash),
+            segments: records
+                .iter()
+                .map(|(segment, body)| SegmentWrite {
+                    segment,
+                    lexical_body: body,
+                })
+                .collect(),
+        };
+        self.with_cache(|c| c.put_resource(&self.profile_id, &r.id, &write))?;
+        stats.resources_updated += 1;
+        stats.page_diagnostics.extend(target.page_diagnostics);
+        Ok(None)
+    }
+
+    #[cfg(feature = "pdf")]
+    fn flush_pdf_batch(
+        &self,
+        batch: &mut Vec<Job>,
+        records: &mut Vec<(CachedSegment, String)>,
+        stats: &mut SyncStats,
+        progress: Option<ProgressFn>,
+    ) -> Result<Option<String>> {
+        if batch.is_empty() {
+            return Ok(None);
+        }
+        let hashes: Vec<_> = batch.iter().map(|j| j.segment.input_hash.clone()).collect();
+        let already = self.with_cache(|c| c.known_inputs(&self.profile_id, &hashes))?;
+        let mut queued = HashSet::new();
+        let work: Vec<_> = batch
+            .iter()
+            .filter(|j| {
+                !already.contains(&j.segment.input_hash) && queued.insert(&j.segment.input_hash)
+            })
+            .map(|j| (0, j))
+            .collect();
+        let mut store = Vec::new();
+        let mut failure = None;
+        if !work.is_empty() {
+            if let Some(p) = progress {
+                p(ProgressEvent::Embedding {
+                    done: 0,
+                    total: work.len(),
+                });
+            }
+            let started = Instant::now();
+            for ((_, job), result) in work.iter().zip(self.embed_batch(&work)) {
+                match result {
+                    Ok(vector) => store.push((job.segment.input_hash.clone(), vector)),
+                    Err(error) => {
+                        failure.get_or_insert_with(|| error.to_string());
+                    }
+                }
+            }
+            stats.embed_ms += started.elapsed().as_millis() as u64;
+            self.with_cache(|c| c.put_embeddings(&self.profile_id, &store))?;
+            stats.segments_embedded += store.len();
+            if let Some(p) = progress {
+                p(ProgressEvent::Embedding {
+                    done: work.len(),
+                    total: work.len(),
+                });
+            }
+        }
+        // Retain only compact locators and transient lexical text. Drop every
+        // PNG and model input here before the next bounded batch is rendered.
+        records.extend(batch.drain(..).map(|j| (j.segment, j.lexical_body)));
+        Ok(failure)
     }
 
     /// Turn a resource into embedding jobs. Errors are reasons to skip the resource.
@@ -661,7 +836,7 @@ impl SearchEngine {
             ResourceKind::Pdf => {
                 #[cfg(feature = "pdf")]
                 {
-                    self.prepare_pdf(r, &bytes)
+                    Err("PDF resources require the streaming preparation path".into())
                 }
                 #[cfg(not(feature = "pdf"))]
                 {
@@ -702,23 +877,21 @@ impl SearchEngine {
                     Vec::new(),
                 ))
             }
-            ResourceKind::Image => {
-                let hash = input_hash(&["image", &blake3::hash(&bytes).to_hex()]);
-                Ok((
-                    vec![Job {
-                        segment: CachedSegment {
-                            locator: ResourceLocator::WholeResource,
-                            heading: None,
-                            input_hash: hash,
-                        },
-                        // Images are indexed by name and path only.
-                        lexical_body: String::new(),
-                        input: JobInput::Image { bytes },
-                    }],
-                    Vec::new(),
-                ))
-            }
+            ResourceKind::Image => Ok((
+                vec![Job::image(ResourceLocator::WholeResource, bytes)],
+                Vec::new(),
+            )),
         }
+    }
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_reason(error: Error) -> String {
+    match error {
+        Error::PdfParse { reason, .. } => format!("PDF parse failed: {reason}"),
+        Error::PdfRender { reason, .. } => format!("PDF rendering failed: {reason}"),
+        Error::ParserPanicked { .. } => "PDF parser panicked".into(),
+        other => other.to_string(),
     }
 }
 
@@ -740,6 +913,18 @@ struct Job {
 }
 
 impl Job {
+    fn image(locator: ResourceLocator, bytes: Vec<u8>) -> Self {
+        Self {
+            segment: CachedSegment {
+                locator,
+                heading: None,
+                input_hash: input_hash(&["image", &blake3::hash(&bytes).to_hex()]),
+            },
+            lexical_body: String::new(),
+            input: JobInput::Image { bytes },
+        }
+    }
+
     /// Derive cache identity from exactly the title and text sent to the model.
     /// Lexical text may retain source syntax that model preparation removes.
     fn text(
@@ -988,6 +1173,24 @@ impl<'e> SearchRequest<'e> {
         let depth = (self.limit * 4).max(50);
 
         let mut segments = SegmentTable::default();
+        // Lexical caches limit their result list before the engine sees it.
+        // Reserve room for every ineligible PDF segment, then filter before
+        // restoring the candidate depth. A disabled scan cannot exhaust it.
+        let mut unsupported = HashSet::new();
+        for resource in &wanted {
+            if metadata
+                .get(resource)
+                .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
+                && let Some(cached) = engine.with_cache(|c| c.resource(pid, resource))?
+            {
+                for (ordinal, segment) in cached.segments.into_iter().enumerate() {
+                    if !engine.supports_locator(&cached.metadata, &segment.locator) {
+                        unsupported.insert((resource.clone(), ordinal));
+                    }
+                    segments.insert(resource.clone(), ordinal, segment);
+                }
+            }
+        }
         let mut semantic: Vec<(SegmentKey, f32, usize)> = Vec::new();
         let mut searched = 0;
         if self.mode != SearchMode::Lexical {
@@ -1010,7 +1213,11 @@ impl<'e> SearchRequest<'e> {
             let mut keys = Vec::with_capacity(stored.len());
             for v in stored {
                 // A wrong-sized vector means a corrupt cache; never compare it.
-                if v.vector.len() == dim {
+                if v.vector.len() == dim
+                    && metadata
+                        .get(&v.resource)
+                        .is_some_and(|m| engine.supports_locator(&m.metadata, &v.segment.locator))
+                {
                     index.add(&v.vector);
                     keys.push(segments.insert(v.resource, v.ordinal, v.segment));
                 }
@@ -1037,20 +1244,55 @@ impl<'e> SearchRequest<'e> {
         let mut named: Vec<SegmentKey> = Vec::new();
         if self.mode != SearchMode::Semantic {
             let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
-            lexical = engine
-                .with_cache(|c| c.lexical_search(pid, &query, &wanted, depth))?
-                .into_iter()
-                .map(|h| ((h.resource, h.ordinal), h.score))
-                .collect();
-            named = resources
-                .iter()
-                .filter(|r| {
-                    self.queries
+            for hit in engine.with_cache(|c| {
+                c.lexical_search(
+                    pid,
+                    &query,
+                    &wanted,
+                    depth.saturating_add(unsupported.len()),
+                )
+            })? {
+                let key = (hit.resource, hit.ordinal);
+                if unsupported.contains(&key) {
+                    continue;
+                }
+                if metadata
+                    .get(&key.0)
+                    .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
+                {
+                    let Some(segment) = segments.get_or_load(engine, pid, &key)? else {
+                        continue;
+                    };
+                    if !engine.supports_locator(&metadata[&key.0].metadata, &segment.locator) {
+                        continue;
+                    }
+                }
+                lexical.push((key, hit.score));
+                if lexical.len() == depth {
+                    break;
+                }
+            }
+            for resource in resources.iter().filter(|r| {
+                wanted.contains(&r.id)
+                    && self
+                        .queries
                         .iter()
                         .any(|q| names_file(q, Path::new(&r.id.labels().1)))
-                })
-                .map(|r| (r.id.clone(), 0))
-                .collect();
+            }) {
+                let Some(cached) = engine.with_cache(|c| c.resource(pid, &resource.id))? else {
+                    continue;
+                };
+                // A filename identifies the first supported cached location,
+                // which need not be ordinal zero in a mixed PDF.
+                if let Some((ordinal, segment)) = cached
+                    .segments
+                    .into_iter()
+                    .enumerate()
+                    .find(|(_, s)| engine.supports_locator(&cached.metadata, &s.locator))
+                {
+                    named.push(segments.insert(resource.id.clone(), ordinal, segment));
+                }
+            }
             if self.mode == SearchMode::Lexical {
                 searched = lexical.len();
             }
@@ -1073,6 +1315,9 @@ impl<'e> SearchRequest<'e> {
             let Some(segment) = segments.get_or_load(engine, pid, &key)? else {
                 continue;
             };
+            if !engine.supports_locator(&metadata, &segment.locator) {
+                continue;
+            }
             let preview = self.preview_chars.and_then(|n| {
                 previews.preview(
                     engine.provider.as_ref(),

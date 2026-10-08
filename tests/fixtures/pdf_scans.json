@@ -1,0 +1,40 @@
+{
+  "pages": [
+    ["Orchard irrigation", "The apple orchard uses drip irrigation to save water.", "Soil moisture sensors start the pump before sunrise.", "A blocked filter reduces pressure in the eastern row.", "Maintenance record ORC-204 belongs to the green shed."],
+    ["Harbor ferry timetable", "The passenger ferry leaves the harbor every forty minutes.", "Bicycles travel free on the morning crossing.", "Strong winds cancel the last trip to Cedar Island.", "Tickets are sold at the blue booth beside pier seven."],
+    ["Bread fermentation notes", "Sourdough bread rises slowly during a cold overnight proof.", "Feed the starter with equal weights of flour and water.", "The baker folds the dough three times before shaping.", "A hot covered pot produces a crisp golden crust."],
+    ["Solar battery inspection", "The rooftop solar array charges a lithium battery.", "An inverter supplies alternating current during an outage.", "Disconnect the battery before replacing the fuse.", "Inspection reference SOL-718 confirms the wiring is safe."],
+    ["Library archive policy", "Historic letters are stored in acid free paper folders.", "Keep the reading room cool and avoid direct sunlight.", "Researchers request fragile manuscripts one box at a time.", "Cotton gloves are required when handling old photographs."],
+    ["Mountain trail closure", "A rockslide has closed the northern mountain trail.", "Hikers should follow yellow markers through the forest.", "The alternate route crosses a wooden bridge above the creek.", "Rescue teams advise carrying water and a paper map."],
+    ["School telescope club", "The astronomy club observes Jupiter through a telescope.", "Four bright moons appear in a line beside the planet.", "A red flashlight protects night vision while reading charts.", "Cloud cover postponed the planned lunar photography session."],
+    ["Bicycle brake service", "Squealing disc brakes may indicate contaminated pads.", "Clean the rotor before installing replacement brake pads.", "Check the cable tension and center the wheel in the fork.", "Service ticket BIK-392 concerns the silver touring bicycle."],
+    ["River restoration plan", "Native willow trees stabilize the eroding river bank.", "Volunteers remove invasive plants from the wetland.", "Gravel beds provide spawning habitat for migrating salmon.", "Water samples are collected after heavy rainfall."],
+    ["Museum pottery workshop", "Visitors shape wet clay into bowls on a pottery wheel.", "Allow each bowl to dry completely before the first firing.", "Glaze colors change when the kiln reaches high temperature.", "The workshop provides aprons and reusable wooden tools."],
+    ["Train station renovation", "The railway station is adding elevators to both platforms.", "Passengers use the temporary footbridge during construction.", "The ticket office stays open beside the south entrance.", "Night trains still stop at platform three."],
+    ["Coffee roasting log", "Green coffee beans turn brown as heat develops aroma.", "Listen for the first crack before reducing the burner.", "Cool the roasted beans quickly to stop further cooking.", "Batch COF-561 has notes of chocolate and toasted nuts."],
+    ["Garden compost guide", "Compost needs a balance of green scraps and dry leaves.", "Turn the pile regularly to supply oxygen to microbes.", "A damp pile should feel like a squeezed sponge.", "Finished compost improves the soil around vegetable roots."],
+    ["Choir rehearsal schedule", "The community choir rehearses on Tuesday evenings.", "Singers practice breathing exercises before the opening song.", "Altos and tenors meet separately to learn difficult harmonies.", "The winter concert will take place in the town hall."],
+    ["Coastal weather bulletin", "A cold front brings heavy rain to the western coastline.", "Fishing boats should return before the evening gale.", "Tide gauges predict minor flooding near the harbor wall.", "The lighthouse weather station reports falling air pressure."],
+    ["Robotics classroom project", "Students build a small robot that follows a black line.", "Infrared sensors detect the contrast against white paper.", "Adjust motor speed when the robot reaches a sharp curve.", "Project ROB-846 uses a rechargeable battery pack."],
+    ["Bee colony observation", "Worker bees collect pollen from flowering fruit trees.", "The queen lays eggs in the center of the honeycomb.", "Inspect the hive gently and leave enough honey for winter.", "A healthy colony keeps a steady temperature around the brood."],
+    ["Canoe safety lesson", "Wear a fitted life jacket before entering the canoe.", "Keep heavy bags low to maintain balance on the water.", "Partners paddle on opposite sides and communicate clearly.", "Practice a controlled landing before approaching a rocky shore."],
+    ["Wool weaving instructions", "Thread the loom with evenly spaced cotton warp strands.", "Pass colored wool across the warp to form the pattern.", "A loose edge causes uneven tension in the finished cloth.", "The sample combines narrow blue stripes with a red border."],
+    ["Hospital equipment inventory", "The clinic checks oxygen cylinders at the start of each shift.", "Portable monitors need charged batteries and clean sensors.", "Record each inspection on the equipment maintenance form.", "Inventory code MED-273 identifies the spare pulse oximeter."]
+  ],
+  "queries": [
+    ["How does the orchard reduce water use?", 1],
+    ["When can I take a bicycle on the island ferry?", 2],
+    ["Instructions for overnight sourdough fermentation", 3],
+    ["Battery safety when replacing a solar power fuse", 4],
+    ["How are fragile historic manuscripts protected?", 5],
+    ["A hiking detour after a rockslide", 6],
+    ["Observing the moons of Jupiter", 7],
+    ["How to fix squealing bicycle brakes", 8],
+    ["Restoring habitat for salmon in a river", 9],
+    ["A workshop where clay bowls are glazed and fired", 10],
+    ["SOL-718", 4],
+    ["MED-273", 20],
+    ["Coffee roasting log", 12],
+    ["Hospital equipment inventory", 20]
+  ]
+}

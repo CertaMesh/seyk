@@ -1,9 +1,11 @@
 //! Bounded embedded-text extraction from PDF bytes.
 //!
-//! Applications with a logger must filter `pdf_extract` to Off. This module
+//! Applications with a logger must filter `pdf_extract` to Off, plus
+//! `hayro_interpret`, `hayro_syntax` and `hayro_font` with `pdf-render`. This module
 //! catches unwinding parser panics without exposing their payload, but installs
 //! no panic hook. The caller's hook must also avoid payloads. Abort, OOM and
-//! parser hangs are not contained. No OCR or rendering is performed.
+//! parser hangs are not contained. `pdf-render` adds CPU page rendering with
+//! bundled fallback fonts and no system-font lookup. No OCR is performed.
 
 use crate::extractor::{ExtractedContent, ExtractionProvenance, Extractor};
 use crate::{Error, Modality, ResourceId, ResourceLocator, ResourceMetadata, Result};
@@ -15,6 +17,12 @@ pub const MAX_PAGES: usize = 512;
 pub const MAX_PAGE_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_DOCUMENT_TEXT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const PREPARATION_VERSION: &str = "pdf-text-v2-strict;512p;1MiB-page;32MiB-doc";
+
+#[cfg(feature = "pdf-render")]
+#[path = "pdf/render.rs"]
+pub(crate) mod render;
+#[cfg(feature = "pdf-render")]
+pub use render::{RENDER_VERSION, render_page};
 
 pub(crate) struct PageText {
     pub page: u32,

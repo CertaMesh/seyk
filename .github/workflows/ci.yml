@@ -39,6 +39,10 @@ jobs:
         run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
       - name: Test standalone core
         run: cargo test -p seyk-core --no-default-features --locked
+      - name: Test core with PDF text extraction
+        run: cargo test -p seyk-core --no-default-features --features pdf --locked
+      - name: Test core with PDF rendering
+        run: cargo test -p seyk-core --no-default-features --features pdf,pdf-render --locked
 
   licenses:
     runs-on: ubuntu-24.04

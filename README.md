@@ -193,40 +193,56 @@ an unsupported-extraction error. MCP extraction is deferred until MCP hits can
 carry exact locators and hashes with session-scoped read checks; MCP search and
 its root confinement are unchanged.
 
-### Text PDFs
+### PDFs
 
-Normal builds include `pdf`; minimal library consumers can opt in with that
-feature. PDF pages with embedded text participate in semantic and keyword
-search. Hits use `page_text`: a 1-based physical page, half-open UTF-8 byte range
-in the extracted page text, extraction version and page-text hash. These are
-not byte offsets in the PDF file. Explicit extraction checks the full PDF hash
-before decoding, then verifies the derived page hash before returning text.
+Normal builds include `pdf-render` and image embedding. Minimal library
+consumers can enable `pdf` for embedded text or `pdf-render` for page rendering.
+PDF pages with embedded text participate in semantic and keyword search. Hits
+use `page_text`: a 1-based physical page, half-open UTF-8 byte range in the
+extracted page text, extraction version and page-text hash. These are not byte
+offsets in the PDF file. Explicit extraction checks the full PDF hash before
+decoding, then verifies the derived page hash before returning text.
 
-Pages without usable embedded text are separate page diagnostics, not skipped
-resources. Mixed PDFs report that they indexed with those pages omitted.
-This release does not render
-PDFs or run OCR. Mixed PDFs index their usable text pages. Reading order,
-nonstandard fonts and sparse text over scanned pages remain limitations.
+Scanned PDFs are found by meaning: pages without usable embedded text are
+rendered as whole-page images, respecting crop, rotation and a white background,
+then embedded at a maximum long edge of 2048 pixels. Hits use a 1-based `page`
+locator and have no text preview. Their text cannot be extracted yet: `extract`
+returns an explicit OCR-unavailable error. OCR is tracked as a follow-up; no OCR
+model is loaded or downloaded. Mixed PDFs keep their embedded-text hits and
+scanned-page hits. With `--text-only`, a text-only embedder or a build without
+`pdf-render`, image pages produce separate page diagnostics while supported text
+pages remain searchable. Scan indexing is much slower than text indexing:
+rendering measured about 34 ms/page in the compatibility spike, while image
+embedding takes seconds per page on CPU. The synthetic end-to-end scan test
+measured about 6.7 s/page with one CPU thread. Use `--text-only` to skip image
+embedding when indexing or searching large PDF collections.
+
+Corrupt image streams can be omitted by the renderer. A page with image XObjects
+that renders nearly uniform gets “scanned page could not be rendered” instead of
+a hit; very faint or nearly blank scans can also trigger this guard. Partial
+image omissions on otherwise nonblank pages remain a recall limitation. Reading
+order, nonstandard fonts and sparse text over scanned pages remain limitations.
 Every page content reference must resolve, decompress completely and pass strict
 content decoding before any page output is accepted. Content streams currently
 support no filter or FlateDecode without DecodeParms; other filters/parameters
 are rejected explicitly because upstream decompression can silently return a
-prefix after errors.
-PDFs over 512 pages, 1 MiB extracted text per page or 32 MiB total extracted text
-are rejected explicitly; other resources continue indexing. These output limits
-do not bound upstream decompression, CPU time or memory use.
+prefix after errors. PDFs over 512 pages, 1 MiB extracted text per page or 32
+MiB total extracted text are rejected explicitly; other resources continue
+indexing. These output limits do not bound upstream decompression, CPU time or
+memory use.
 
 CLI/MCP output now uses JSON schema 3. `seyk extract` accepts schema 2 and 3
 search envelopes. Cache schema 5 adds nullable media type and preserves existing
 vectors, profiles and keyword indexes. Older binaries may reset a schema-5
 cache, so keep a copy if downgrading.
 
-Library integrations that install a `log` logger **must filter `pdf_extract` to
-Off**: upstream diagnostics can contain document data. Seyk core installs no
-logger or panic hook. It converts unwinding PDF parser panics to sanitized
-errors, but an application's panic hook runs first and must not print payloads.
-The CLI installs a fixed-message, file-and-line-only hook. Neither mechanism
-contains aborts, out-of-memory failures, hangs or hostile allocation behaviour.
+Library integrations that install a `log` logger **must filter `pdf_extract`,
+`hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream
+diagnostics can contain document data. Seyk core installs no logger or panic
+hook. It converts unwinding PDF parser panics to sanitized errors, but an
+application's panic hook runs first and must not print payloads. The CLI
+installs a fixed-message, file-and-line-only hook. Neither mechanism contains
+aborts, out-of-memory failures, hangs or hostile allocation behaviour.
 
 ### Scores and tags
 
@@ -492,7 +508,7 @@ deletes every vector.
 | Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.tiff` | ✅ one vector per image (`WholeResource`) |
 | Audio | — | ❌ not implemented |
 | Video | — | ❌ not implemented |
-| PDF | — | ❌ not implemented (`Page` locator reserved) |
+| PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
 A file passed explicitly on the command line is searched as plain text even with
 an unknown extension. Directories skip `.git`, `target`, `node_modules`, `.hg`,
@@ -590,8 +606,9 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   segments. After that, only changes are embedded. Run `index --watch` or the MCP
   server so this happens in the background.
 
-- **Audio, video and PDF are not implemented.** See
-  [docs/multimodal.md](docs/multimodal.md) for what is missing.
+- **Audio, video and scanned-page OCR are not implemented.** See
+  [the multimodal status](docs/multimodal.md) for current support and remaining
+  work, including [PDF extraction limits](docs/multimodal.md#pdf-retrieval-done-ocr-deferred).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is
   enabled yet.
 - **Start-up costs about 1.5 s**, mostly ONNX graph optimisation and parsing the
