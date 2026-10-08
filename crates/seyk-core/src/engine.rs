@@ -1263,10 +1263,9 @@ impl<'e> SearchRequest<'e> {
                     if let Some(state) = metadata.get(resource)
                         && state.metadata.media_type.as_deref() == Some("application/pdf")
                     {
-                        for (ordinal, segment) in segments.load_resource(engine, pid, resource)? {
-                            if !engine.supports_locator(&state.metadata, &segment.locator) {
-                                unsupported.insert((resource.clone(), *ordinal));
-                            }
+                        for &ordinal in &segments.load_resource(engine, pid, resource)?.unsupported
+                        {
+                            unsupported.insert((resource.clone(), ordinal));
                         }
                     }
                 }
@@ -1307,17 +1306,14 @@ impl<'e> SearchRequest<'e> {
                         .iter()
                         .any(|q| names_file(q, Path::new(&r.id.labels().1)))
             }) {
-                let Some(state) = metadata.get(&resource.id) else {
+                if !metadata.contains_key(&resource.id) {
                     continue;
-                };
+                }
                 // A filename identifies the first supported cached location,
                 // which need not be ordinal zero in a mixed PDF.
                 if let Some(ordinal) = segments
                     .load_resource(engine, pid, &resource.id)?
-                    .iter()
-                    .filter(|(_, s)| engine.supports_locator(&state.metadata, &s.locator))
-                    .map(|(ordinal, _)| *ordinal)
-                    .min()
+                    .first_supported
                 {
                     named.push((resource.id.clone(), ordinal));
                 }
@@ -1390,7 +1386,15 @@ type SegmentKey = (ResourceId, usize);
 struct SegmentTable {
     segments: HashMap<ResourceId, HashMap<usize, CachedSegment>>,
     // Vector rows are only a partial view: keyword-only ordinals may be absent.
-    complete: HashSet<ResourceId>,
+    complete: HashMap<ResourceId, CompleteResource>,
+}
+
+/// Eligibility from the complete lookup, independent of earlier vector evidence.
+/// A missing resource has no filename candidate, even if scored rows survive.
+#[derive(Default)]
+struct CompleteResource {
+    unsupported: Vec<usize>,
+    first_supported: Option<usize>,
 }
 
 impl SegmentTable {
@@ -1409,16 +1413,26 @@ impl SegmentTable {
         engine: &SearchEngine,
         pid: &str,
         resource: &ResourceId,
-    ) -> Result<&HashMap<usize, CachedSegment>> {
-        if !self.complete.contains(resource) {
+    ) -> Result<&CompleteResource> {
+        if !self.complete.contains_key(resource) {
             let cached = engine.with_cache(|c| c.resource(pid, resource))?;
-            let all = cached
-                .map(|r| r.segments.into_iter().enumerate().collect())
-                .unwrap_or_default();
-            self.segments.insert(resource.clone(), all);
-            self.complete.insert(resource.clone());
+            let mut complete = CompleteResource::default();
+            let seen = self.segments.entry(resource.clone()).or_default();
+            if let Some(cached) = cached {
+                for (ordinal, segment) in cached.segments.into_iter().enumerate() {
+                    if engine.supports_locator(&cached.metadata, &segment.locator) {
+                        complete.first_supported.get_or_insert(ordinal);
+                    } else {
+                        complete.unsupported.push(ordinal);
+                    }
+                    // A concurrent indexer can replace/remove a resource after
+                    // vectors_for. Never relabel or discard already-scored evidence.
+                    seen.entry(ordinal).or_insert(segment);
+                }
+            }
+            self.complete.insert(resource.clone(), complete);
         }
-        Ok(&self.segments[resource])
+        Ok(&self.complete[resource])
     }
 
     fn get_or_load(

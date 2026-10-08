@@ -649,7 +649,8 @@ mod hydration {
     #[derive(Default)]
     struct Reads {
         count: AtomicUsize,
-        // 0 = normal, 1 = missing resource, 2 = missing ordinals, 3 = error once.
+        // 0 = normal, 1 = missing resource, 2 = missing ordinals, 3 = error once,
+        // 4 = replacement evidence observed after vectors were read.
         fault: AtomicUsize,
         partial_vectors: AtomicUsize,
     }
@@ -678,6 +679,23 @@ mod hydration {
                         "injected resource read failure".into(),
                     ))
                 }
+                4 => Ok(self.inner.resource(p, r)?.map(|mut r| {
+                    for segment in &mut r.segments {
+                        segment.locator =
+                            if r.metadata.media_type.as_deref() == Some("application/pdf") {
+                                seyk_core::ResourceLocator::Page { page: 99 }
+                            } else {
+                                seyk_core::ResourceLocator::Text {
+                                    byte_start: 999_000,
+                                    byte_end: 999_010,
+                                    line_start: None,
+                                    line_end: None,
+                                }
+                            };
+                        segment.heading = Some("replacement evidence".into());
+                    }
+                    r
+                })),
                 _ => self.inner.resource(p, r),
             }
         }
@@ -853,6 +871,84 @@ mod hydration {
                     .len()
                     >= 3
             );
+        }
+    }
+
+    fn preserves_scored_rows_after_complete_lookup(fault: usize) {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                "# One\n\nbasil\n\n# Two\n\nbasil\n\n# Three\n\nbasil",
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            let before = query(&e, &path, "garden.md", SearchMode::Hybrid).unwrap();
+            assert_eq!(before.hits.len(), 3);
+            // All vector rows remain available, while the later resource read
+            // observes a concurrent indexer's removal, truncation or replacement.
+            reads.fault.store(fault, Ordering::SeqCst);
+            reads.count.store(0, Ordering::SeqCst);
+            let after = query(&e, &path, "garden.md", SearchMode::Hybrid).unwrap();
+            assert_eq!(after.hits.len(), 3, "sqlite={sqlite}, fault={fault}");
+            assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                after.hits.iter().filter(|h| h.signals.filename).count(),
+                usize::from(fault != 1)
+            );
+            for (old, new) in before.hits.iter().zip(&after.hits) {
+                assert_eq!(new.resource, old.resource);
+                assert_eq!(new.locator, old.locator);
+                assert_eq!(new.heading, old.heading);
+                assert_eq!(new.metadata, old.metadata);
+                assert_eq!(new.signals.semantic, old.signals.semantic);
+            }
+        }
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_missing_resource_lookup() {
+        preserves_scored_rows_after_complete_lookup(1);
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_truncated_resource_lookup() {
+        preserves_scored_rows_after_complete_lookup(2);
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_replacement_locator_lookup() {
+        preserves_scored_rows_after_complete_lookup(4);
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn hybrid_complete_lookup_eligibility_does_not_use_preserved_vector_rows() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.pdf");
+            let text = b"BT /F1 12 Tf 50 720 Td (Public basil garden.) Tj ET";
+            fs::write(&path, fixture::document(&[(text.as_slice(), ""); 3], None)).unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            let before = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
+            assert_eq!(before.hits.len(), 3);
+            reads.fault.store(4, Ordering::SeqCst);
+            reads.count.store(0, Ordering::SeqCst);
+            let after = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
+            assert_eq!(after.hits.len(), 3);
+            assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            for (old, new) in before.hits.iter().zip(&after.hits) {
+                assert_eq!(new.locator, old.locator);
+                assert_eq!(new.heading, old.heading);
+                assert_eq!(new.signals.semantic, old.signals.semantic);
+                // The complete lookup contains only unsupported image pages:
+                // vector rows remain semantic evidence, not filename/lexical candidates.
+                assert!(!new.signals.filename);
+                assert!(new.signals.lexical.is_none());
+            }
         }
     }
 
