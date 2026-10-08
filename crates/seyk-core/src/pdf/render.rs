@@ -24,9 +24,7 @@ const LONG_EDGE: u16 = 2048;
 /// Pixels and parser allocations are transient; the viewport cap does not
 /// sandbox malicious decompression, aborts, OOM or hangs.
 pub fn render_page(bytes: &[u8], source: &ResourceId, page: u32) -> Result<Vec<u8>> {
-    guarded(source, || {
-        PageRenderer::new(bytes.to_vec(), source)?.page(page)
-    })
+    guarded(source, || PageRenderer::new(bytes, source)?.page(page))
 }
 
 /// Reused only while processing one resource. The engine must release each PNG
@@ -37,11 +35,11 @@ pub(crate) struct PageRenderer {
 }
 
 impl PageRenderer {
-    pub(crate) fn new(bytes: Vec<u8>, source: &ResourceId) -> Result<Self> {
+    pub(crate) fn new(bytes: &[u8], source: &ResourceId) -> Result<Self> {
         guarded(source, || {
             // Hayro can recover malformed inputs. Preserve the strict whole-
             // resource validation contract before preparing transient renderer bytes.
-            let mut validated = document(&bytes, source)?;
+            let mut validated = document(bytes, source)?;
             let expected = pages(&validated, source)?.len();
             // Supply validated streams even for empty pages. Hayro otherwise
             // omits pages with absent Contents. Resource bytes stay unchanged.
@@ -245,7 +243,7 @@ mod tests {
     fn renderer_unwind_is_contained_without_retaining_its_payload() {
         // Exercise an unwind from within Hayro via its font callback, using the
         // same guarded render path as production. No global panic hook changes.
-        let renderer = PageRenderer::new(fixture::text(&["public text"]), &source()).unwrap();
+        let renderer = PageRenderer::new(&fixture::text(&["public text"]), &source()).unwrap();
         let settings = InterpreterSettings {
             font_resolver: Arc::new(|_| panic!("{}", crate::pdf::fixture::MARKER)),
             ..Default::default()

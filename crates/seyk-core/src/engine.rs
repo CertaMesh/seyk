@@ -80,6 +80,7 @@ pub struct SearchHit {
     /// A short excerpt of the matched segment (text resources only).
     pub preview: Option<String>,
     /// Index into [`SearchResults::queries`] of the query that scored best here.
+    /// Meaningful only when [`MatchSignals::semantic`] is present.
     pub query_index: usize,
 }
 
@@ -722,8 +723,7 @@ impl SearchEngine {
                 #[cfg(feature = "pdf-render")]
                 {
                     if renderer.is_none() {
-                        renderer = match crate::pdf::render::PageRenderer::new(bytes.clone(), &r.id)
-                        {
+                        renderer = match crate::pdf::render::PageRenderer::new(&bytes, &r.id) {
                             Ok(renderer) => Some(renderer),
                             Err(error) => return Ok(Some(pdf_reason(error))),
                         };

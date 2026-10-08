@@ -115,7 +115,9 @@ impl Embedding {
         self.0
     }
 
-    /// Cosine similarity with another normalised embedding.
+    /// Raw dot product, equal to cosine similarity only when both embeddings
+    /// are L2-normalised. This method does not normalise either operand;
+    /// deserialised, unnormalised vectors therefore give non-cosine values.
     pub fn cosine(&self, other: &Embedding) -> f32 {
         dot(&self.0, &other.0)
     }
