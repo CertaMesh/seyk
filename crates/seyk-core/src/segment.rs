@@ -190,7 +190,8 @@ impl TextSegmenter {
             }
             let mut start = block.range.start;
             while block.range.end - start > max {
-                let (piece_end, next) = self.split_point(source, start);
+                // Keep whitespace skipping inside this block, with absolute offsets.
+                let (piece_end, next) = self.split_point(&source[..block.range.end], start);
                 out.push(trimmed_block(source, start..piece_end, &block));
                 start = next;
             }
@@ -644,6 +645,187 @@ mod tests {
             .segment(src, TextFormat::Plain);
             assert_well_formed(src, &s);
         }
+    }
+
+    #[test]
+    fn tiny_budget_does_not_skip_past_paragraph_end() {
+        let segmenter = TextSegmenter::new(TextSegmenterConfig {
+            min_chars: 0,
+            target_chars: 1,
+            max_chars: 1,
+            overlap_chars: 0,
+        });
+        let segments = segmenter.segment("é\n\nx", TextFormat::Plain);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].byte_range, 0..2);
+        assert_eq!(segments[0].text, "é");
+        assert_eq!(segments[1].byte_range, 4..5);
+        assert_eq!(segments[1].text, "x");
+        assert_eq!((segments[0].line_start, segments[1].line_start), (1, 3));
+    }
+
+    fn blocks_for(source: &str, format: TextFormat) -> Vec<Block> {
+        match format {
+            TextFormat::Markdown => markdown_blocks(source),
+            TextFormat::Plain | TextFormat::Code => paragraph_blocks(source),
+        }
+    }
+
+    fn assert_ranges_cover(source: &str, ranges: &[Range<usize>]) {
+        for range in ranges {
+            assert!(range.start < range.end);
+            assert!(range.end <= source.len());
+            assert!(source.is_char_boundary(range.start));
+            assert!(source.is_char_boundary(range.end));
+        }
+        for pair in ranges.windows(2) {
+            assert!(pair[0].start < pair[1].start, "starts must advance");
+            assert!(pair[0].end <= pair[1].end, "ends must not retreat");
+        }
+        // Whitespace may be trimmed or skipped; every other character must be
+        // represented, including when adjacent ranges deliberately overlap.
+        for (offset, ch) in source.char_indices() {
+            assert!(ch.is_whitespace() || ranges.iter().any(|range| range.contains(&offset)));
+        }
+    }
+
+    #[test]
+    fn tiny_budgets_stay_in_blocks_and_cover_multibyte_text() {
+        let sources = [
+            "é\n\nx",
+            "日\n\n🙂\n\né\t \n\n",
+            " \té\u{2003}\n\n日\u{a0}\r\n\r\n🙂 \t",
+            "Ab é 日. Cd ─ 🙂! Ef gh.\n\n é \n\n",
+            "a. b. c. d. é. 日. 🙂.\n\nx\n",
+            "# é\n\n日\n\n## 🙂\n\né\t\n",
+            "# 日\n\n```\né\n🙂\n```\n\n日\t\n",
+            "\n\t\u{2003}\n",
+            "",
+        ];
+        for source in sources {
+            for format in [TextFormat::Plain, TextFormat::Markdown] {
+                for max_chars in 0..=5 {
+                    for overlap_chars in [0, 2, 5] {
+                        let segmenter = TextSegmenter::new(TextSegmenterConfig {
+                            min_chars: 0,
+                            target_chars: max_chars,
+                            max_chars,
+                            overlap_chars,
+                        });
+                        // Inspect each original block independently: public
+                        // segments can intentionally merge headings forward.
+                        for block in blocks_for(source, format) {
+                            let pieces = segmenter.split_oversized(source, vec![block.clone()]);
+                            for piece in &pieces {
+                                assert!(piece.range.start >= block.range.start);
+                                assert!(piece.range.end <= block.range.end);
+                            }
+                            let relative_ranges: Vec<_> = pieces
+                                .iter()
+                                .map(|piece| {
+                                    piece.range.start - block.range.start
+                                        ..piece.range.end - block.range.start
+                                })
+                                .collect();
+                            assert_ranges_cover(&source[block.range], &relative_ranges);
+                        }
+                        let segments = segmenter.segment(source, format);
+                        assert_well_formed(source, &segments);
+                        let ranges: Vec<_> =
+                            segments.iter().map(|s| s.byte_range.clone()).collect();
+                        assert_ranges_cover(source, &ranges);
+                    }
+                }
+            }
+        }
+    }
+
+    // Frozen pre-fix split_oversized. The helpers and the public segment
+    // assembly are unchanged; comparing every resulting Block field proves
+    // identical inputs to that assembly, including heading and byte metadata.
+    fn old_split_oversized(
+        segmenter: &TextSegmenter,
+        source: &str,
+        blocks: Vec<Block>,
+    ) -> Vec<Block> {
+        let max = segmenter.config.max_chars;
+        let mut out = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            if block.range.len() <= max {
+                out.push(block);
+                continue;
+            }
+            let mut start = block.range.start;
+            while block.range.end - start > max {
+                let (piece_end, next) = segmenter.split_point(source, start);
+                out.push(trimmed_block(source, start..piece_end, &block));
+                start = next;
+            }
+            if start < block.range.end {
+                out.push(trimmed_block(source, start..block.range.end, &block));
+            }
+        }
+        out.retain(|b| !b.range.is_empty());
+        out
+    }
+
+    #[test]
+    fn successful_splits_match_the_previous_algorithm() {
+        let paragraphs = [
+            "é",
+            "日",
+            "🙂",
+            "a. b. é! 日? 🙂.",
+            "# Héading",
+            "```\né\n```",
+        ];
+        let mut compared = 0;
+        let mut formerly_panicked = 0;
+        let signature = |blocks: Vec<Block>| {
+            blocks
+                .into_iter()
+                .map(|block| (block.range, block.is_heading, block.heading_path))
+                .collect::<Vec<_>>()
+        };
+        for first in paragraphs {
+            for second in paragraphs {
+                for separator in ["\n\n", "\r\n\r\n", "\n \t\n", "\n\u{2003}\n"] {
+                    let source = format!("{first}{separator}{second}\t \n\n");
+                    for format in [TextFormat::Plain, TextFormat::Markdown, TextFormat::Code] {
+                        for max_chars in [0, 1, 2, 3, 4, 5, 6, 12, 64, 1800] {
+                            for overlap_chars in [0, 2, 300] {
+                                let segmenter = TextSegmenter::new(TextSegmenterConfig {
+                                    max_chars,
+                                    overlap_chars,
+                                    ..TextSegmenterConfig::default()
+                                });
+                                let blocks = blocks_for(&source, format);
+                                let new =
+                                    signature(segmenter.split_oversized(&source, blocks.clone()));
+                                match std::panic::catch_unwind(|| {
+                                    old_split_oversized(&segmenter, &source, blocks)
+                                }) {
+                                    Ok(old) => {
+                                        assert_eq!(
+                                            new,
+                                            signature(old),
+                                            "source={source:?}, format={format:?}, config={:?}",
+                                            segmenter.config
+                                        );
+                                        compared += 1;
+                                    }
+                                    Err(_) => formerly_panicked += 1,
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(compared > 0);
+        assert!(formerly_panicked > 0, "the table must exercise the old bug");
+        assert_eq!(compared + formerly_panicked, 12_960);
+        println!("{compared} identical successful splits; {formerly_panicked} former panics fixed");
     }
 
     #[test]
