@@ -1,0 +1,16 @@
+# Only permissive licence choices are accepted. GPL/AGPL/LGPL/SSPL and MPL
+# cannot pass without an explicit, reviewed exception. Alternative expressions
+# (e.g. MIT OR LGPL) select the permissive choice, never the copyleft choice.
+[licenses]
+version = 2
+allow = [
+    "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "CC0-1.0",
+    "CDLA-Permissive-2.0", "Unicode-3.0", "Zlib",
+]
+confidence-threshold = 0.9
+
+# Approved: Solo project 73 pad 11511, E1 decision (2026-10-08); existing dirs dependency.
+[[licenses.exceptions]]
+name = "option-ext"
+version = "=0.2.0"
+allow = ["MPL-2.0"]

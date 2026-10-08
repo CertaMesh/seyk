@@ -151,6 +151,14 @@ pub enum ResourceLocator {
         line_start: Option<u64>,
         line_end: Option<u64>,
     },
+    /// UTF-8 range within deterministic extracted text of a 1-based physical page.
+    PageText {
+        page: u32,
+        byte_start: u64,
+        byte_end: u64,
+        text_version: String,
+        page_text_hash: String,
+    },
     /// A page of a paged document (reserved for PDF and similar).
     Page { page: u32 },
     /// A time window of an audio or video resource.
@@ -170,6 +178,9 @@ pub enum ResourceLocator {
 /// Facts about a resource at the time it was embedded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceMetadata {
+    /// Persisted dispatch hint; never guessed from the resource URI on extraction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
     pub modality: Modality,
     pub size_bytes: u64,
     /// Modification time in nanoseconds since the Unix epoch, when available.

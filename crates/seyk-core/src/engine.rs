@@ -206,6 +206,8 @@ impl SearchEngineBuilder {
     }
 
     pub fn build(mut self) -> Result<SearchEngine> {
+        #[cfg(feature = "pdf")]
+        self.extractors.push(Arc::new(crate::PdfTextExtractor));
         self.extractors.push(Arc::new(TextExtractor));
         let embedder = self
             .embedder
@@ -341,14 +343,29 @@ impl SearchEngine {
         let mut pending: Vec<Pending> = Vec::new();
         for r in resources {
             let modality = r.kind.modality();
-            if !self.embedder.supports(modality) {
+            if !self.supports_kind(r.kind) {
                 stats.skipped.push(skip(
                     &r.id,
                     format!("{modality} search is not supported by this embedder"),
                 ));
                 continue;
             }
-            let descriptor_hash = r.fingerprint();
+            let descriptor_hash = if r.kind == ResourceKind::Pdf {
+                #[cfg(feature = "pdf")]
+                {
+                    input_hash(&[
+                        &r.fingerprint(),
+                        crate::pdf::TEXT_VERSION,
+                        crate::pdf::PREPARATION_VERSION,
+                    ])
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    r.fingerprint()
+                }
+            } else {
+                r.fingerprint()
+            };
             let cached = known.get(&r.id);
             // Listing already supplies a freshness token; only stat again before a read.
             if cached.is_some_and(|m| {
@@ -405,12 +422,30 @@ impl SearchEngine {
                 continue;
             }
             let metadata = ResourceMetadata {
+                media_type: (r.kind == ResourceKind::Pdf).then(|| "application/pdf".into()),
                 modality,
                 size_bytes: bytes.len() as u64,
                 modified_ns: r.modified_ns,
                 content_hash,
             };
-            match self.prepare(r, bytes) {
+            let prepared = if r.kind == ResourceKind::Pdf {
+                #[cfg(feature = "pdf")]
+                {
+                    self.prepare_pdf(r, &bytes).map(|(jobs, diagnostics)| {
+                        stats
+                            .skipped
+                            .extend(diagnostics.into_iter().map(|reason| skip(&r.id, reason)));
+                        jobs
+                    })
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    Err("PDF feature is disabled".into())
+                }
+            } else {
+                self.prepare(r, bytes)
+            };
+            match prepared {
                 Ok(jobs) => pending.push(Pending {
                     resource: r.id.clone(),
                     metadata,
@@ -554,6 +589,65 @@ impl SearchEngine {
         }
     }
 
+    fn supports_kind(&self, kind: ResourceKind) -> bool {
+        match kind {
+            ResourceKind::Pdf => {
+                cfg!(feature = "pdf") && self.embedder.supports(crate::Modality::Text)
+            }
+            _ => self.embedder.supports(kind.modality()),
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn prepare_pdf(
+        &self,
+        r: &ProvidedResource,
+        bytes: &[u8],
+    ) -> std::result::Result<(Vec<Job>, Vec<String>), String> {
+        let pages = crate::pdf::read_pages(bytes, &r.id).map_err(|e| e.to_string())?;
+        let mut jobs = Vec::new();
+        let mut diagnostics = Vec::new();
+        for page in pages {
+            if !crate::pdf::usable(&page.text) {
+                diagnostics.push(format!(
+                    "PDF page {} has no usable embedded text; scan/OCR support is not enabled",
+                    page.page
+                ));
+                continue;
+            }
+            let digest = blake3::hash(page.text.as_bytes()).to_hex().to_string();
+            for segment in self.segmenter.segment(&page.text, TextFormat::Plain) {
+                let title = segment_title(r.title.as_deref(), None);
+                jobs.push(Job {
+                    segment: CachedSegment {
+                        locator: ResourceLocator::PageText {
+                            page: page.page,
+                            byte_start: segment.byte_range.start as u64,
+                            byte_end: segment.byte_range.end as u64,
+                            text_version: crate::pdf::TEXT_VERSION.into(),
+                            page_text_hash: digest.clone(),
+                        },
+                        heading: None,
+                        input_hash: input_hash(&[
+                            "text",
+                            title.as_deref().unwrap_or(""),
+                            &segment.text,
+                        ]),
+                    },
+                    lexical_body: segment.text.clone(),
+                    input: JobInput::Text {
+                        title,
+                        text: segment.text,
+                    },
+                });
+            }
+        }
+        if jobs.is_empty() {
+            return Err("PDF has no usable embedded text; scan/OCR support is not enabled".into());
+        }
+        Ok((jobs, diagnostics))
+    }
+
     /// Turn a resource into embedding jobs. Errors are reasons to skip the resource.
     fn prepare(
         &self,
@@ -561,6 +655,16 @@ impl SearchEngine {
         bytes: Vec<u8>,
     ) -> std::result::Result<Vec<Job>, String> {
         match r.kind {
+            ResourceKind::Pdf => {
+                #[cfg(feature = "pdf")]
+                {
+                    self.prepare_pdf(r, &bytes).map(|(jobs, _)| jobs)
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    Err("PDF feature is disabled".into())
+                }
+            }
             ResourceKind::Text(format) => {
                 if bytes.iter().take(8192).any(|&b| b == 0) {
                     return Err("looks like a binary file".into());
@@ -849,7 +953,11 @@ impl<'e> SearchRequest<'e> {
         };
 
         let pid = engine.profile_id.as_str();
-        let wanted: HashSet<ResourceId> = resources.iter().map(|r| r.id.clone()).collect();
+        let wanted: HashSet<ResourceId> = resources
+            .iter()
+            .filter(|r| engine.supports_kind(r.kind))
+            .map(|r| r.id.clone())
+            .collect();
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
@@ -1273,6 +1381,10 @@ impl<'e> IndexRequest<'e> {
 struct PreviewReader {
     /// Each file read once per search, with the digest of exactly those bytes.
     files: HashMap<ResourceId, Option<ResourceBytes>>,
+    #[cfg(feature = "pdf")]
+    pages: HashMap<(ResourceId, u32), Option<String>>,
+    #[cfg(feature = "pdf")]
+    page_bytes: usize,
 }
 
 impl PreviewReader {
@@ -1284,7 +1396,10 @@ impl PreviewReader {
         meta: &ResourceMetadata,
         max_chars: usize,
     ) -> Option<String> {
-        if !matches!(locator, ResourceLocator::Text { .. }) {
+        if !matches!(
+            locator,
+            ResourceLocator::Text { .. } | ResourceLocator::PageText { .. }
+        ) {
             return None;
         }
         let read = self
@@ -1293,10 +1408,28 @@ impl PreviewReader {
             .or_insert_with(|| ResourceBytes::read(provider, path).ok())
             .as_ref()?;
         let bytes = read.verify(path, meta).ok()?;
-        Some(make_preview(
-            text_range(bytes, path, locator).ok()?,
-            max_chars,
-        ))
+        let text = match locator {
+            ResourceLocator::Text { .. } => text_range(bytes, path, locator).ok()?,
+            #[cfg(feature = "pdf")]
+            ResourceLocator::PageText { page, .. }
+                if meta.media_type.as_deref() == Some("application/pdf") =>
+            {
+                let key = (path.clone(), *page);
+                if !self.pages.contains_key(&key) {
+                    let text = crate::pdf::read_page(bytes, path, *page).ok();
+                    if let Some(t) = &text {
+                        if self.page_bytes + t.len() > crate::pdf::MAX_DOCUMENT_TEXT_BYTES {
+                            return None;
+                        }
+                        self.page_bytes += t.len();
+                    }
+                    self.pages.insert(key.clone(), text);
+                }
+                crate::pdf::slice(self.pages.get(&key)?.as_deref()?, path, locator).ok()?
+            }
+            _ => return None,
+        };
+        Some(make_preview(text, max_chars))
     }
 }
 

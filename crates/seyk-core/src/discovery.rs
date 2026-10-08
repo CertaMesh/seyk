@@ -34,6 +34,7 @@ const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "type", content = "format")]
 pub enum ResourceKind {
+    Pdf,
     Text(TextFormat),
     Image,
 }
@@ -41,6 +42,7 @@ pub enum ResourceKind {
 impl ResourceKind {
     pub fn modality(self) -> Modality {
         match self {
+            ResourceKind::Pdf => Modality::Document,
             ResourceKind::Text(_) => Modality::Text,
             ResourceKind::Image => Modality::Image,
         }
@@ -50,7 +52,9 @@ impl ResourceKind {
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         let ext = ext.as_str();
-        if MARKDOWN_EXT.contains(&ext) {
+        if ext == "pdf" {
+            Some(Self::Pdf)
+        } else if MARKDOWN_EXT.contains(&ext) {
             Some(Self::Text(TextFormat::Markdown))
         } else if PLAIN_EXT.contains(&ext) {
             Some(Self::Text(TextFormat::Plain))

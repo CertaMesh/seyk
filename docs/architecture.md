@@ -590,3 +590,84 @@ calls, the token default remains 2048, and audio/video are unsupported. Local
 model identity still fingerprints graph bytes plus weight-file sizes; staging
 still reuses equal-size targets. Changing those existing rules would require a
 separate cache-identity migration.
+
+## Phase 4a: embedded PDF text (0.1.0)
+
+### Implemented
+
+The default CLI discovers PDFs and converts usable embedded text into ordinary
+SearchDocument text requests, independently for each physical page. `Document`
+is container metadata, never a model input. A pinned pdf-extract 0.12.1 adapter
+is behind core's optional `pdf` feature; embedding crates remain PDF-free.
+The resource stem supplies the title. Ranking, text segmentation, input hashes,
+cache profiles and INPUT_FORMAT_VERSION remain unchanged for text and images.
+
+PDF evidence uses `PageText`: a 1-based physical page number, a half-open UTF-8
+range within the complete decoded page, the decoding version, and a page-text
+hash. Preparation, preview and explicit extraction share the decoder. Extraction
+first verifies the full source hash through the provider, then the derived page
+hash/version and boundaries. It returns exact decoded text with provenance;
+it does not promise original layout or byte identity with the PDF stream.
+Opaque provider identifiers work without filename inference. No-preview searches
+perform no preview reads or decoding. Selected-page preview text is transient
+and capped at 32 MiB per request.
+
+Cache schema 5 adds nullable media_type transactionally. A copied v4 database
+migration test preserves profile rows, segment rowids, FTS data and vector bytes,
+then proves zero warm re-embedding. Source text remains transient; the existing
+sorted-token privacy path is unchanged. JSON output is schema 3; extraction
+accepts schema 2 and 3. Do not open a v5 database with an older binary: its
+unknown-schema handling can recreate tables. Use a backup for rollback.
+
+### Deliberately not implemented
+
+No rendering, image-page retrieval, OCR, passwords, layout reconstruction,
+remote services or automatic model downloads. Blank/scan pages have explicit
+page diagnostics; all-scan documents fail explicitly. Parser failures reject
+the whole resource, preserving prior cache state until replacement succeeds.
+Missing results are preferable to a silently accepted prefix. No 4b dependency
+or model is present; all packages remain 0.1.0.
+
+### Learned and measured
+
+The convenience upstream per-page extraction function can silently return a
+prefix on errors, so the adapter enumerates/checks the page tree and propagates
+each page error. Output caps are 512 pages, 1 MiB decoded text per page and
+32 MiB per document, with explicit errors, never truncation. These bound adapter
+output, **not** upstream decompression, allocations or CPU time.
+
+Upstream log messages and panic payloads can contain content. The root binary
+and core install no log logger. The binary's panic hook emits only a fixed message
+and file:line, and every PDF parse catches unwinding panics into a sanitized
+per-resource error. Library callers must filter the `pdf_extract` logger target
+to Off and install a payload-safe panic hook themselves; core never installs one.
+This does not contain aborts, OOM or hangs. A non-UTF-8 Type-4 stream is rejected
+explicitly: without a logger, the upstream log argument's UTF-8 unwrap is never
+evaluated. A separate malformed operator exercises a real parser panic.
+Real-binary index/preview/extract tests capture both channels and prove hidden
+fixture markers never appear, with successful public text unchanged.
+
+A generated 20-page corpus with 10 queries, distractors and identifiers produced
+Recall@5=1.000 and MRR@10=1.000 for both PDF and equivalent text documents; all
+20 extractions were exact. Local Gemma q8/128, one CPU thread, debug macOS ARM:
+model load 3347 ms, cold PDF index 982 ms, warm query p50/p95 443/486 ms. This is a
+small synthetic regression gate, not a claim about arbitrary PDFs. The macOS
+ARM release executable is 40,919,520 bytes with PDF versus 39,427,232 without
+(+1,492,288 bytes, 3.8%). Linked libraries remain system libraries/frameworks;
+PDF adds no dynamic runtime. Unicode,
+ligature, malformed-page, stale-source, provider, limit and cache tests complement
+that evaluation. Existing model parity and profile goldens remain separate gates. A direct debug
+limit-test run (no compiler/model) used 55.8 MiB maximum RSS and 38.74 s for
+1 MiB/page rejection, 32 MiB/document rejection and 512 accepted pages. The
+full synthetic PDF/text evaluation process used 811.9 MiB maximum RSS, including
+the shared model and both engines; this is not incremental PDF memory. A second
+evaluation run again passed all quality gates, with 2152 ms load, 711 ms cold
+index and 436/897 ms warm p50/p95. Timings vary with concurrent local work.
+
+### Next
+
+Phase 4b needs its own approval and renderer/ORT compatibility spike before
+scanned-page retrieval and on-demand OCR. Subprocess parser isolation is a
+separate follow-up. Sparse embedded text, unusual font encodings, rotation and
+multi-column reading order remain retrieval/evidence limitations; the current
+adapter never claims semantic layout reconstruction.

@@ -39,3 +39,22 @@ jobs:
         run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
       - name: Test standalone core
         run: cargo test -p seyk-core --no-default-features --locked
+
+  licenses:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: "1.99.0"
+          command: check licenses
+          arguments: --locked --all-features
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.89.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.89
+      - run: cargo +1.89.0 check --workspace --all-targets --locked

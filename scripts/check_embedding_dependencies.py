@@ -3,7 +3,7 @@
 import re
 import subprocess
 
-FORBIDDEN = {"clap", "rusqlite", "walkdir", "globset", "notify", "rmcp", "tokio", "schemars", "url"}
+FORBIDDEN = {"clap", "rusqlite", "walkdir", "globset", "notify", "rmcp", "tokio", "schemars", "url", "pdf-extract", "lopdf"}
 
 def check(package, extra, forbidden):
     command = ["cargo", "tree", "--color", "never", "--locked", "-p", package, *extra]
@@ -20,3 +20,5 @@ check("seyk-embed", [], FORBIDDEN)
 check("seyk-embeddinggemma", ["-e", "normal"], FORBIDDEN)
 check("seyk-embeddinggemma", ["-e", "normal", "--features", "image"], FORBIDDEN)
 check("seyk-core", ["-e", "normal"], {"seyk-embeddinggemma", "ort", "tokenizers", "hf-hub"})
+
+check("seyk-core", ["-e", "normal", "--features", "pdf"], {"seyk-embeddinggemma", "ort", "tokenizers", "hf-hub"})

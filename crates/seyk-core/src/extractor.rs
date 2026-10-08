@@ -10,11 +10,21 @@ use serde::{Deserialize, Serialize};
 /// Unstable: may change before 1.0 (a range/streaming method is planned for audio and video).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedContent {
+    /// How readable text was derived; absent for exact raw text slices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ExtractionProvenance>,
     pub text: String,
     pub source: ResourceId,
     pub locator: ResourceLocator,
     /// Includes the BLAKE3 hash of the entire source resource, not just `text`.
     pub metadata: ResourceMetadata,
+}
+
+/// Provenance of derived readable evidence, not a claim about transcription accuracy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionProvenance {
+    pub method: String,
+    pub implementation: String,
 }
 
 /// Convert verified resource bytes into readable evidence.
@@ -66,6 +76,7 @@ impl Extractor for TextExtractor {
             return Err(unsupported(source, locator, metadata));
         }
         Ok(ExtractedContent {
+            provenance: None,
             text: text_range(bytes, source, locator)?.to_owned(),
             source: source.clone(),
             locator: locator.clone(),
@@ -185,6 +196,7 @@ mod tests {
         ] {
             let bytes = text.as_bytes();
             let metadata = ResourceMetadata {
+                media_type: None,
                 modality: Modality::Text,
                 size_bytes: bytes.len() as u64,
                 modified_ns: None,
@@ -261,6 +273,7 @@ mod tests {
         let source = "mem://notes/entry".parse().unwrap();
         let provider = Bytes(b"hello".to_vec());
         let mut metadata = ResourceMetadata {
+            media_type: None,
             modality: Modality::Text,
             size_bytes: 5,
             modified_ns: None,

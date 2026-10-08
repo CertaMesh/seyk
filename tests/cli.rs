@@ -47,7 +47,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 2);
+    assert_eq!(stats["schema_version"], 3);
     assert_eq!(stats["profiles"], serde_json::json!([]));
 
     binary()
@@ -218,7 +218,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 2);
+    assert_eq!(extracted["schema_version"], 3);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);
@@ -242,7 +242,7 @@ fn extract_round_trip_without_a_model() {
     for data in [
         "not json".to_string(),
         "{}".into(),
-        input.replace("\"schema_version\":2", "\"schema_version\":3"),
+        input.replace("\"schema_version\":2", "\"schema_version\":99"),
     ] {
         let bad = run(&["extract", "--from-json", "-"], &data);
         assert!(!bad.status.success());
