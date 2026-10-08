@@ -21,12 +21,14 @@ keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "s
 categories = ["command-line-utilities", "text-processing"]
 
 [features]
-default = ["onnx", "image", "cli", "mcp", "watch"]
+default = ["onnx", "image", "cli", "mcp", "watch", "pdf"]
 onnx = ["dep:seyk-embeddinggemma", "dep:hf-hub"]
 image = ["seyk-embeddinggemma?/image"]
 cli = ["onnx", "dep:clap", "dep:anyhow"]
 mcp = ["cli", "watch", "dep:rmcp", "dep:tokio", "dep:schemars"]
 watch = ["seyk-core/watch"]
+
+pdf = ["seyk-core/pdf"]
 
 [dependencies]
 seyk-core = { path = "crates/seyk-core", version = "0.1.0" }

@@ -158,6 +158,7 @@ fn filled_cache(
             descriptor_hash: None,
             version: ResourceVersion::known("fs:10000:0"),
             metadata: ResourceMetadata {
+                media_type: None,
                 modality: Modality::Text,
                 size_bytes: 10_000,
                 modified_ns: Some(0),

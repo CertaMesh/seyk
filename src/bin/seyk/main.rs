@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 2;
+const JSON_SCHEMA_VERSION: u32 = 3;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -240,6 +240,19 @@ enum ModelAction {
 }
 
 fn main() -> ExitCode {
+    // Never include a panic payload: dependency panics can contain source bytes.
+    // Core catches PDF unwinds; this hook also runs before catch_unwind returns.
+    std::panic::set_hook(Box::new(|info| {
+        if let Some(location) = info.location() {
+            eprintln!(
+                "seyk: internal failure at {}:{}",
+                location.file(),
+                location.line()
+            );
+        } else {
+            eprintln!("seyk: internal failure");
+        }
+    }));
     match run(Cli::parse()) {
         Ok(code) => code,
         Err(e) => {
@@ -316,9 +329,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )
             };
             let selected = read_search_hit(input, hit)?;
+            let extractor: &dyn seyk::Extractor = &seyk::TextExtractor;
+            #[cfg(feature = "pdf")]
+            let extractor: &dyn seyk::Extractor =
+                if matches!(selected.locator, ResourceLocator::PageText { .. }) {
+                    &seyk::PdfTextExtractor
+                } else {
+                    extractor
+                };
             let extracted = seyk::extract_resource(
                 &seyk::FsProvider,
-                &seyk::TextExtractor,
+                extractor,
                 &selected.resource,
                 &selected.locator,
                 &selected.metadata,
@@ -549,12 +570,13 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
 /// for usable byte locators. Parsing and selection happen before any source read.
 fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
     let value: serde_json::Value = serde_json::from_reader(input).context("invalid search JSON")?;
-    if value
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        != Some(u64::from(JSON_SCHEMA_VERSION))
-    {
-        bail!("expected search JSON schema_version {JSON_SCHEMA_VERSION}");
+    if !matches!(
+        value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(2 | 3)
+    ) {
+        bail!("expected search JSON schema_version 2 or 3");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -689,6 +711,12 @@ fn format_locator(locator: &ResourceLocator) -> String {
             byte_end,
             ..
         } => format!(" bytes {byte_start}-{byte_end}"),
+        ResourceLocator::PageText {
+            page,
+            byte_start,
+            byte_end,
+            ..
+        } => format!(" page {page} bytes {byte_start}-{byte_end}"),
         ResourceLocator::Page { page } => format!(" page {page}"),
         ResourceLocator::Time { start_ms, end_ms } => {
             format!(" @ {}–{}", clock(*start_ms), clock(*end_ms))
@@ -794,7 +822,33 @@ fn format_sync(s: &SyncStats) -> String {
     if !s.skipped.is_empty() {
         out.push_str(&format!(", {} skipped", s.skipped.len()));
     }
+    if !s.page_diagnostics.is_empty() {
+        out.push_str(&format!(
+            ", {} pages without usable text",
+            s.page_diagnostics.len()
+        ));
+    }
     out
+}
+
+fn format_page_diagnostics(s: &SyncStats) -> String {
+    let mut counts = std::collections::BTreeMap::new();
+    for d in &s.page_diagnostics {
+        *counts.entry(&d.resource).or_insert(0usize) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(resource, count)| {
+            let label = resource
+                .to_file_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| resource.to_string());
+            format!(
+                "  indexed {label} with {count} page{} without usable text\n",
+                if count == 1 { "" } else { "s" }
+            )
+        })
+        .collect()
 }
 
 fn format_summary(r: &SearchResults) -> String {
@@ -814,6 +868,7 @@ fn format_summary(r: &SearchResults) -> String {
             s.reason
         ));
     }
+    out.push_str(&format_page_diagnostics(&r.stats.sync));
     out
 }
 
@@ -840,6 +895,7 @@ fn format_index_report(r: &IndexReport) -> String {
             s.reason
         ));
     }
+    out.push_str(&format_page_diagnostics(&r.sync));
     out
 }
 
@@ -889,6 +945,7 @@ mod tests {
             locator,
             score,
             metadata: ResourceMetadata {
+                media_type: None,
                 modality: Modality::Text,
                 size_bytes: 10,
                 modified_ns: None,
@@ -970,7 +1027,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 2);
+        assert_eq!(v["schema_version"], 3);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -990,12 +1047,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            2
+            3
         );
     }
 
@@ -1026,7 +1083,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert!(
             value["hits"]
                 .as_array()
@@ -1042,5 +1099,35 @@ mod tests {
         let mut malformed = value;
         malformed["hits"][0]["locator"] = serde_json::json!({"kind": "text"});
         assert!(read_search_hit(malformed.to_string().as_bytes(), 0).is_err());
+    }
+    #[test]
+    fn pdf_page_diagnostics_are_not_skipped_resources() {
+        let resource: ResourceId = "mem://mixed".parse().unwrap();
+        let report = IndexReport {
+            sync: SyncStats {
+                resources_discovered: 1,
+                resources_updated: 1,
+                page_diagnostics: vec![seyk::PageDiagnostic {
+                    resource,
+                    page: 2,
+                    reason: "no usable embedded text".into(),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let output = format_index_report(&report);
+        assert!(!output.contains("skipped"));
+        assert!(output.contains("indexed mem://mixed with 1 page without usable text"));
+        assert_eq!(
+            format_locator(&ResourceLocator::PageText {
+                page: 3,
+                byte_start: 0,
+                byte_end: 120,
+                text_version: "test".into(),
+                page_text_hash: "test".into()
+            }),
+            " page 3 bytes 0-120"
+        );
     }
 }

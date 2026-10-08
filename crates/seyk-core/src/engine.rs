@@ -96,6 +96,14 @@ pub struct SkippedResource {
     pub reason: String,
 }
 
+/// A page omitted from a resource that was otherwise indexed successfully.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageDiagnostic {
+    pub resource: ResourceId,
+    pub page: u32,
+    pub reason: String,
+}
+
 /// What happened while bringing the cache up to date.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStats {
@@ -105,6 +113,8 @@ pub struct SyncStats {
     /// New or changed since last seen.
     pub resources_updated: usize,
     pub skipped: Vec<SkippedResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_diagnostics: Vec<PageDiagnostic>,
     /// Segments newly sent to the model.
     pub segments_embedded: usize,
     pub embed_ms: u64,
@@ -206,6 +216,8 @@ impl SearchEngineBuilder {
     }
 
     pub fn build(mut self) -> Result<SearchEngine> {
+        #[cfg(feature = "pdf")]
+        self.extractors.push(Arc::new(crate::PdfTextExtractor));
         self.extractors.push(Arc::new(TextExtractor));
         let embedder = self
             .embedder
@@ -341,14 +353,33 @@ impl SearchEngine {
         let mut pending: Vec<Pending> = Vec::new();
         for r in resources {
             let modality = r.kind.modality();
-            if !self.embedder.supports(modality) {
+            if !self.supports_kind(r.kind) {
                 stats.skipped.push(skip(
                     &r.id,
-                    format!("{modality} search is not supported by this embedder"),
+                    if r.kind == ResourceKind::Pdf && !cfg!(feature = "pdf") {
+                        "PDF support is not compiled in (feature `pdf`)".into()
+                    } else {
+                        format!("{modality} search is not supported by this embedder")
+                    },
                 ));
                 continue;
             }
-            let descriptor_hash = r.fingerprint();
+            let descriptor_hash = if r.kind == ResourceKind::Pdf {
+                #[cfg(feature = "pdf")]
+                {
+                    input_hash(&[
+                        &r.fingerprint(),
+                        crate::pdf::TEXT_VERSION,
+                        crate::pdf::PREPARATION_VERSION,
+                    ])
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    r.fingerprint()
+                }
+            } else {
+                r.fingerprint()
+            };
             let cached = known.get(&r.id);
             // Listing already supplies a freshness token; only stat again before a read.
             if cached.is_some_and(|m| {
@@ -405,18 +436,21 @@ impl SearchEngine {
                 continue;
             }
             let metadata = ResourceMetadata {
+                media_type: (r.kind == ResourceKind::Pdf).then(|| "application/pdf".into()),
                 modality,
                 size_bytes: bytes.len() as u64,
                 modified_ns: r.modified_ns,
                 content_hash,
             };
-            match self.prepare(r, bytes) {
-                Ok(jobs) => pending.push(Pending {
+            let prepared = self.prepare(r, bytes);
+            match prepared {
+                Ok((jobs, page_diagnostics)) => pending.push(Pending {
                     resource: r.id.clone(),
                     metadata,
                     version,
                     descriptor_hash,
                     jobs,
+                    page_diagnostics,
                 }),
                 Err(reason) => stats.skipped.push(skip(&r.id, reason)),
             }
@@ -516,6 +550,7 @@ impl SearchEngine {
             };
             self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
             stats.resources_updated += 1;
+            stats.page_diagnostics.extend(p.page_diagnostics.clone());
         }
         Ok(upto.max(from))
     }
@@ -554,64 +589,143 @@ impl SearchEngine {
         }
     }
 
+    fn supports_kind(&self, kind: ResourceKind) -> bool {
+        match kind {
+            ResourceKind::Pdf => {
+                cfg!(feature = "pdf") && self.embedder.supports(crate::Modality::Text)
+            }
+            _ => self.embedder.supports(kind.modality()),
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn prepare_pdf(
+        &self,
+        r: &ProvidedResource,
+        bytes: &[u8],
+    ) -> std::result::Result<(Vec<Job>, Vec<PageDiagnostic>), String> {
+        let pages = crate::pdf::read_pages(bytes, &r.id).map_err(|e| match e {
+            Error::PdfParse { reason, .. } => format!("PDF parse failed: {reason}"),
+            Error::ParserPanicked { .. } => "PDF parser panicked".into(),
+            _ => e.to_string(),
+        })?;
+        let mut jobs = Vec::new();
+        let mut diagnostics = Vec::new();
+        for page in pages {
+            if !crate::pdf::usable(&page.text) {
+                diagnostics.push(PageDiagnostic {
+                    resource: r.id.clone(),
+                    page: page.page,
+                    reason: "no usable embedded text; scan/OCR support is not enabled".into(),
+                });
+                continue;
+            }
+            let digest = blake3::hash(page.text.as_bytes()).to_hex().to_string();
+            for segment in self.segmenter.segment(&page.text, TextFormat::Plain) {
+                let title = segment_title(r.title.as_deref(), None);
+                jobs.push(Job {
+                    segment: CachedSegment {
+                        locator: ResourceLocator::PageText {
+                            page: page.page,
+                            byte_start: segment.byte_range.start as u64,
+                            byte_end: segment.byte_range.end as u64,
+                            text_version: crate::pdf::TEXT_VERSION.into(),
+                            page_text_hash: digest.clone(),
+                        },
+                        heading: None,
+                        input_hash: input_hash(&[
+                            "text",
+                            title.as_deref().unwrap_or(""),
+                            &segment.text,
+                        ]),
+                    },
+                    lexical_body: segment.text.clone(),
+                    input: JobInput::Text {
+                        title,
+                        text: segment.text,
+                    },
+                });
+            }
+        }
+        if jobs.is_empty() {
+            return Err("PDF has no usable embedded text; scan/OCR support is not enabled".into());
+        }
+        Ok((jobs, diagnostics))
+    }
+
     /// Turn a resource into embedding jobs. Errors are reasons to skip the resource.
     fn prepare(
         &self,
         r: &ProvidedResource,
         bytes: Vec<u8>,
-    ) -> std::result::Result<Vec<Job>, String> {
+    ) -> std::result::Result<(Vec<Job>, Vec<PageDiagnostic>), String> {
         match r.kind {
+            ResourceKind::Pdf => {
+                #[cfg(feature = "pdf")]
+                {
+                    self.prepare_pdf(r, &bytes)
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    Err("PDF feature is disabled".into())
+                }
+            }
             ResourceKind::Text(format) => {
                 if bytes.iter().take(8192).any(|&b| b == 0) {
                     return Err("looks like a binary file".into());
                 }
                 let text = String::from_utf8(bytes).map_err(|_| "not valid UTF-8".to_string())?;
                 let stem = &r.title;
-                Ok(self
-                    .segmenter
-                    .segment(&text, format)
-                    .into_iter()
-                    .map(|s| {
-                        let title = segment_title(stem.as_deref(), s.heading.as_deref());
-                        let model_text = match format {
-                            TextFormat::Markdown => strip_link_targets(&s.text),
-                            TextFormat::Plain | TextFormat::Code => s.text.clone(),
-                        };
-                        let hash =
-                            input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
-                        Job {
-                            segment: CachedSegment {
-                                locator: ResourceLocator::Text {
-                                    byte_start: s.byte_range.start as u64,
-                                    byte_end: s.byte_range.end as u64,
-                                    line_start: Some(s.line_start),
-                                    line_end: Some(s.line_end),
+                Ok((
+                    self.segmenter
+                        .segment(&text, format)
+                        .into_iter()
+                        .map(|s| {
+                            let title = segment_title(stem.as_deref(), s.heading.as_deref());
+                            let model_text = match format {
+                                TextFormat::Markdown => strip_link_targets(&s.text),
+                                TextFormat::Plain | TextFormat::Code => s.text.clone(),
+                            };
+                            let hash =
+                                input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
+                            Job {
+                                segment: CachedSegment {
+                                    locator: ResourceLocator::Text {
+                                        byte_start: s.byte_range.start as u64,
+                                        byte_end: s.byte_range.end as u64,
+                                        line_start: Some(s.line_start),
+                                        line_end: Some(s.line_end),
+                                    },
+                                    heading: s.heading,
+                                    input_hash: hash,
                                 },
-                                heading: s.heading,
-                                input_hash: hash,
-                            },
-                            // Index the original source, including link targets.
-                            lexical_body: s.text,
-                            input: JobInput::Text {
-                                title,
-                                text: model_text,
-                            },
-                        }
-                    })
-                    .collect())
+                                // Index the original source, including link targets.
+                                lexical_body: s.text,
+                                input: JobInput::Text {
+                                    title,
+                                    text: model_text,
+                                },
+                            }
+                        })
+                        .collect(),
+                    Vec::new(),
+                ))
             }
             ResourceKind::Image => {
                 let hash = input_hash(&["image", &blake3::hash(&bytes).to_hex()]);
-                Ok(vec![Job {
-                    segment: CachedSegment {
-                        locator: ResourceLocator::WholeResource,
-                        heading: None,
-                        input_hash: hash,
-                    },
-                    // Images are indexed by name and path only.
-                    lexical_body: String::new(),
-                    input: JobInput::Image { bytes },
-                }])
+                Ok((
+                    vec![Job {
+                        segment: CachedSegment {
+                            locator: ResourceLocator::WholeResource,
+                            heading: None,
+                            input_hash: hash,
+                        },
+                        // Images are indexed by name and path only.
+                        lexical_body: String::new(),
+                        input: JobInput::Image { bytes },
+                    }],
+                    Vec::new(),
+                ))
             }
         }
     }
@@ -623,6 +737,7 @@ struct Pending {
     version: ResourceVersion,
     metadata: ResourceMetadata,
     jobs: Vec<Job>,
+    page_diagnostics: Vec<PageDiagnostic>,
 }
 
 struct Job {
@@ -849,7 +964,11 @@ impl<'e> SearchRequest<'e> {
         };
 
         let pid = engine.profile_id.as_str();
-        let wanted: HashSet<ResourceId> = resources.iter().map(|r| r.id.clone()).collect();
+        let wanted: HashSet<ResourceId> = resources
+            .iter()
+            .filter(|r| engine.supports_kind(r.kind))
+            .map(|r| r.id.clone())
+            .collect();
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
@@ -1273,6 +1392,10 @@ impl<'e> IndexRequest<'e> {
 struct PreviewReader {
     /// Each file read once per search, with the digest of exactly those bytes.
     files: HashMap<ResourceId, Option<ResourceBytes>>,
+    #[cfg(feature = "pdf")]
+    pages: HashMap<(ResourceId, u32), Option<String>>,
+    #[cfg(feature = "pdf")]
+    page_bytes: usize,
 }
 
 impl PreviewReader {
@@ -1284,7 +1407,10 @@ impl PreviewReader {
         meta: &ResourceMetadata,
         max_chars: usize,
     ) -> Option<String> {
-        if !matches!(locator, ResourceLocator::Text { .. }) {
+        if !matches!(
+            locator,
+            ResourceLocator::Text { .. } | ResourceLocator::PageText { .. }
+        ) {
             return None;
         }
         let read = self
@@ -1293,10 +1419,28 @@ impl PreviewReader {
             .or_insert_with(|| ResourceBytes::read(provider, path).ok())
             .as_ref()?;
         let bytes = read.verify(path, meta).ok()?;
-        Some(make_preview(
-            text_range(bytes, path, locator).ok()?,
-            max_chars,
-        ))
+        let text = match locator {
+            ResourceLocator::Text { .. } => text_range(bytes, path, locator).ok()?,
+            #[cfg(feature = "pdf")]
+            ResourceLocator::PageText { page, .. }
+                if meta.media_type.as_deref() == Some("application/pdf") =>
+            {
+                let key = (path.clone(), *page);
+                if !self.pages.contains_key(&key) {
+                    let text = crate::pdf::read_page(bytes, path, *page).ok();
+                    if let Some(t) = &text {
+                        if self.page_bytes + t.len() > crate::pdf::MAX_DOCUMENT_TEXT_BYTES {
+                            return None;
+                        }
+                        self.page_bytes += t.len();
+                    }
+                    self.pages.insert(key.clone(), text);
+                }
+                crate::pdf::slice(self.pages.get(&key)?.as_deref()?, path, locator).ok()?
+            }
+            _ => return None,
+        };
+        Some(make_preview(text, max_chars))
     }
 }
 
@@ -1538,12 +1682,46 @@ mod pre_split_golden {
                 version: ResourceVersion::unknown(),
                 title: title.map(String::from),
             };
-            let jobs = engine.prepare(&resource, bytes.to_vec()).unwrap();
+            let (jobs, _) = engine.prepare(&resource, bytes.to_vec()).unwrap();
             assert_eq!(jobs.len(), 1);
             assert_eq!(
                 jobs[0].segment.input_hash,
                 golden["input_hashes"][name].as_str().unwrap(),
                 "{name}"
+            );
+        }
+    }
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn preview_rejects_a_valid_page_in_a_corrupt_resource() {
+        use crate::pdf::fixture::{Kind, pdf};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.pdf");
+        let source = ResourceId::from_path(&path).unwrap();
+        let text =
+            crate::pdf::read_page(&pdf(&["garden basil", "second"], Kind::Plain), &source, 1)
+                .unwrap();
+        let locator = ResourceLocator::PageText {
+            page: 1,
+            byte_start: 0,
+            byte_end: text.len() as u64,
+            text_version: crate::pdf::TEXT_VERSION.into(),
+            page_text_hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
+        };
+        for kind in [Kind::MissingContents, Kind::TruncatedContents] {
+            let bytes = pdf(&["garden basil", "second"], kind);
+            std::fs::write(&path, &bytes).unwrap();
+            let meta = ResourceMetadata {
+                media_type: Some("application/pdf".into()),
+                modality: crate::Modality::Document,
+                size_bytes: bytes.len() as u64,
+                modified_ns: None,
+                content_hash: blake3::hash(&bytes).to_hex().to_string(),
+            };
+            assert!(
+                PreviewReader::default()
+                    .preview(&crate::FsProvider, &source, &locator, &meta, 200)
+                    .is_none()
             );
         }
     }

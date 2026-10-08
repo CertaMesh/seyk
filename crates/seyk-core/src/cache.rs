@@ -444,7 +444,7 @@ fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalD
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 /// Persistent cache in a single SQLite file.
 pub struct SqliteCache {
@@ -521,7 +521,7 @@ impl SqliteCache {
             // Invalidate both fast paths: every resource must be re-read and
             // re-segmented, reusing its vectors, on its next normal sync.
             tx.execute_batch("UPDATE resources SET modified_ns = NULL, content_hash = '';")?;
-        } else if !matches!(version.as_deref(), Some("3") | Some(SCHEMA_VERSION)) {
+        } else if !matches!(version.as_deref(), Some("3" | "4") | Some(SCHEMA_VERSION)) {
             // It is a cache: on any other schema change, start over.
             tx.execute_batch(
                 "DROP TABLE IF EXISTS segments_fts;
@@ -573,6 +573,14 @@ impl SqliteCache {
                  tokenize = 'unicode61 remove_diacritics 2'
              );",
         )?;
+        let has_media_type: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'media_type')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !has_media_type {
+            tx.execute_batch("ALTER TABLE resources ADD COLUMN media_type TEXT;")?;
+        }
         // Add the provider token and preparation fingerprint: keys, segment rowids, FTS and vectors
         // remain byte-for-byte intact when upgrading an existing v3 cache.
         let has_version: bool = tx.query_row(
@@ -724,11 +732,12 @@ impl EmbeddingCache for SqliteCache {
 
     fn resource_index(&self, profile: &str) -> Result<HashMap<ResourceId, CachedResourceState>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1",
+            "SELECT path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash, media_type FROM resources WHERE profile = ?1",
         )?;
         let rows = stmt.query_map([profile], |r| {
             let id = key_resource(r.get(0)?)?;
             let metadata = ResourceMetadata {
+                media_type: r.get(7)?,
                 modality: parse_modality(&r.get::<_, String>(1)?),
                 size_bytes: r.get::<_, i64>(2)? as u64,
                 modified_ns: r.get(3)?,
@@ -752,10 +761,11 @@ impl EmbeddingCache for SqliteCache {
         let metadata = self
             .conn
             .query_row(
-                "SELECT modality, size_bytes, modified_ns, content_hash, version, descriptor_hash FROM resources WHERE profile = ?1 AND path = ?2",
+                "SELECT modality, size_bytes, modified_ns, content_hash, version, descriptor_hash, media_type FROM resources WHERE profile = ?1 AND path = ?2",
                 params![profile, key],
                 |r| {
                     Ok((ResourceMetadata {
+                        media_type: r.get(6)?,
                         modality: parse_modality(&r.get::<_, String>(0)?),
                         size_bytes: r.get::<_, i64>(1)? as u64,
                         modified_ns: r.get(2)?,
@@ -810,8 +820,8 @@ impl EmbeddingCache for SqliteCache {
         )?;
         let m = &resource.metadata;
         tx.execute(
-            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO resources (profile, path, modality, size_bytes, modified_ns, content_hash, version, descriptor_hash, media_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 profile,
                 key,
@@ -820,7 +830,8 @@ impl EmbeddingCache for SqliteCache {
                 m.modified_ns,
                 m.content_hash,
                 serde_json::to_string(&resource.version).map_err(json_err)?,
-                resource.descriptor_hash
+                resource.descriptor_hash,
+                m.media_type
             ],
         )?;
         {
@@ -864,8 +875,8 @@ impl EmbeddingCache for SqliteCache {
         version: &ResourceVersion,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7 WHERE profile = ?1 AND path = ?2",
-            params![profile, resource_key(path), metadata.modified_ns, metadata.size_bytes as i64, serde_json::to_string(version).map_err(json_err)?, metadata.content_hash, metadata.modality.to_string()],
+            "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7, media_type = ?8 WHERE profile = ?1 AND path = ?2",
+            params![profile, resource_key(path), metadata.modified_ns, metadata.size_bytes as i64, serde_json::to_string(version).map_err(json_err)?, metadata.content_hash, metadata.modality.to_string(), metadata.media_type],
         )?;
         Ok(())
     }

@@ -110,6 +110,8 @@ struct Hit {
     /// "start-end" line range, when the hit is a text segment.
     #[serde(skip_serializing_if = "Option::is_none")]
     lines: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
     score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     heading: Option<String>,
@@ -397,6 +399,12 @@ fn to_response(r: SearchResults) -> Response {
         .hits
         .into_iter()
         .map(|h| Hit {
+            page: match &h.locator {
+                ResourceLocator::Page { page } | ResourceLocator::PageText { page, .. } => {
+                    Some(*page)
+                }
+                _ => None,
+            },
             lines: match h.locator {
                 ResourceLocator::Text {
                     line_start: Some(a),
@@ -618,7 +626,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 2);
+        assert_eq!(response["schema_version"], 3);
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
             Path::new(response["hits"][0]["path"].as_str().unwrap())

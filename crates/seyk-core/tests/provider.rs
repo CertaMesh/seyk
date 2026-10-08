@@ -594,3 +594,32 @@ fn previews_share_one_verified_read_across_multiple_hits() {
         .unwrap();
     assert_eq!(notes.reads.load(Ordering::SeqCst), 0);
 }
+
+#[cfg(feature = "pdf")]
+#[test]
+fn opaque_pdf_provider_and_no_preview_reads() {
+    #[path = "support/pdf_fixture.rs"]
+    mod fixture;
+    let notes = Arc::new(Notes::default());
+    notes.set("mem://book/opaque", "unused");
+    {
+        let mut items = notes.items.lock().unwrap();
+        let item = items.values_mut().next().unwrap();
+        item.kind = ResourceKind::Pdf;
+        item.bytes = fixture::pdf(&["garden basil", "harbor anchors"], fixture::Kind::Plain);
+    }
+    let (engine, _) = engine(notes.clone());
+    let first = engine.search("basil").roots(roots()).execute().unwrap();
+    assert!(first.hits[0].preview.as_ref().unwrap().contains("basil"));
+    assert_eq!(engine.extract(&first.hits[0]).unwrap().text, "garden basil");
+    let before = notes.reads.load(Ordering::SeqCst);
+    let warm = engine
+        .search("basil")
+        .roots(roots())
+        .previews(None)
+        .execute()
+        .unwrap();
+    assert!(!warm.hits.is_empty());
+    assert!(warm.hits.iter().all(|h| h.preview.is_none()));
+    assert_eq!(notes.reads.load(Ordering::SeqCst), before);
+}

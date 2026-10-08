@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Modality {
+    /// Container metadata, never an embedding input.
+    Document,
     Text,
     Image,
     Audio,
@@ -21,6 +23,7 @@ pub enum Modality {
 impl std::fmt::Display for Modality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Modality::Document => "document",
             Modality::Text => "text",
             Modality::Image => "image",
             Modality::Audio => "audio",

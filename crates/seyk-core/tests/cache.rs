@@ -222,6 +222,7 @@ fn resource(hashes: &[&str]) -> CachedResource {
         descriptor_hash: Some("descriptor".into()),
         version: ResourceVersion::known("fs:1:1"),
         metadata: ResourceMetadata {
+            media_type: None,
             modality: Modality::Text,
             size_bytes: 1,
             modified_ns: Some(1),
@@ -525,7 +526,7 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "4"
+        "5"
     );
     drop(conn);
     let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
@@ -721,4 +722,47 @@ fn profile_serialization_and_hash_match_the_pre_split_binary() {
     let profile: CacheProfile = serde_json::from_str(json).unwrap();
     assert_eq!(serde_json::to_string(&profile).unwrap(), json);
     assert_eq!(profile.id(), "b14d0b2f2629a98e1614b142");
+}
+
+#[test]
+fn copied_v4_migration_preserves_vectors_fts_and_warm_reuse() {
+    use rusqlite::Connection;
+    let dir = TempDir::new().unwrap();
+    let notes = dir.path().join("notes");
+    fs::create_dir(&notes).unwrap();
+    fs::write(notes.join("note.txt"), "alpha garden\n\nbeta workshop").unwrap();
+    let v4 = dir.path().join("v4.db");
+    let (engine, _) = shared_engine(SqliteCache::open(&v4).unwrap(), Dimension::D128, "r1");
+    let before = search(&engine, &notes);
+    drop(engine);
+    let conn = Connection::open(&v4).unwrap();
+    conn.execute_batch("ALTER TABLE resources DROP COLUMN media_type; UPDATE meta SET value='4' WHERE key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    let snapshot = |c: &Connection| {
+        ["SELECT quote(profile)||quote(input_hash)||hex(vector) FROM embeddings ORDER BY profile,input_hash",
+         "SELECT quote(rowid)||quote(path)||quote(ordinal)||quote(locator)||quote(heading)||quote(input_hash) FROM segments ORDER BY rowid",
+         "SELECT quote(id)||hex(block) FROM segments_fts_data ORDER BY id",
+         "SELECT quote(id)||quote(profile)||quote(dimension) FROM profiles ORDER BY id"]
+        .map(|sql| c.prepare(sql).unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap())
+    };
+    let stored = snapshot(&conn);
+    drop(conn);
+    let copy = dir.path().join("v5-copy.db");
+    fs::copy(&v4, &copy).unwrap();
+    let (engine, fake) = shared_engine(SqliteCache::open(&copy).unwrap(), Dimension::D128, "r1");
+    let conn = Connection::open(&copy).unwrap();
+    assert_eq!(snapshot(&conn), stored);
+    assert_eq!(search(&engine, &notes).hits, before.hits);
+    assert_eq!(fake.resource_count(), 0);
+    assert_eq!(snapshot(&conn), stored);
+    assert_eq!(
+        Connection::open(&v4)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "4"
+    );
 }
