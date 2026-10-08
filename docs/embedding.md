@@ -32,7 +32,10 @@ let model = EmbeddingGemma2::builder()
 The default source is `onnx-community/embeddinggemma-2-ONNX`, revision
 `daa72c51243991dfcaf9f9137d2c573d8f7790c0`. Cached snapshots resolve under
 `$HF_HOME/hub`, or `~/.cache/huggingface/hub` when `HF_HOME` is unset, including
-`refs/` resolution for named revisions. A local directory has the same layout:
+`refs/` resolution for named revisions. A named revision is recorded in the identity
+as the commit it resolved to, so moving the branch (or upgrading from a build
+before PR #20) re-embeds once instead of reusing vectors. A local directory has
+the same layout:
 
 ```text
 model-directory/

@@ -236,10 +236,10 @@ impl ResolvedModel {
     fn identity(&self, config: &GemmaConfig) -> Result<ModelIdentity> {
         let revision = match &config.source {
             ModelSource::HuggingFace { repo, .. } => {
-                format!(
-                    "{repo}@{}",
-                    self.revision.as_deref().expect("resolved HF commit")
-                )
+                let commit = self.revision.as_deref().ok_or_else(|| {
+                    Error::Config("Hugging Face model has no resolved commit".into())
+                })?;
+                format!("{repo}@{commit}")
             }
             ModelSource::Directory(_) => format!("local:{}", fingerprint(&self.dir, config)?),
         };
@@ -881,6 +881,18 @@ mod resolution_tests {
             format!("{ONNX_REPO}@{B}")
         );
         assert_ne!(first_identity, second.identity(&config).unwrap());
+    }
+
+    #[test]
+    fn missing_resolved_commit_returns_an_error() {
+        let resolved = ResolvedModel {
+            dir: PathBuf::new(),
+            revision: None,
+        };
+        assert!(matches!(
+            resolved.identity(&config("main")),
+            Err(Error::Config(_))
+        ));
     }
 
     #[test]
