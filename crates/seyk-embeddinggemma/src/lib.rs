@@ -172,6 +172,17 @@ impl GemmaConfig {
 
 /// Resolve the local model directory without touching the network.
 pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
+    Ok(resolve(config)?.dir)
+}
+
+/// A snapshot and the commit selected in the same cache lookup. Local directories
+/// have no HF revision; their identity is still derived from their files.
+struct ResolvedModel {
+    dir: PathBuf,
+    revision: Option<String>,
+}
+
+fn resolve(config: &GemmaConfig) -> Result<ResolvedModel> {
     match &config.source {
         ModelSource::Directory(dir) => {
             for f in config.files() {
@@ -182,27 +193,66 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
                     )));
                 }
             }
-            Ok(dir.clone())
+            Ok(ResolvedModel {
+                dir: dir.clone(),
+                revision: None,
+            })
         }
         ModelSource::HuggingFace { repo, revision } => {
-            let repo_dir = hf_cache_path()?.join(format!("models--{}", repo.replace('/', "--")));
-            // Branch names resolve through refs/. A pinned commit often has no
-            // refs/ entry (the Python client never writes one), only snapshots/<sha>,
-            // so `hf_hub::CacheRepo::get` cannot be used here.
-            let commit = std::fs::read_to_string(repo_dir.join("refs").join(revision))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| revision.clone());
-            let dir = repo_dir.join("snapshots").join(commit);
-            for f in config.files() {
-                if !dir.join(&f).exists() {
-                    return Err(Error::ModelNotFound(format!(
-                        "{repo}@{} ({f}) is not present; provision the model files or select a local model directory",
-                        &revision[..revision.len().min(12)],
-                    )));
-                }
-            }
-            Ok(dir)
+            resolve_hf(config, &hf_cache_path()?, repo, revision)
         }
+    }
+}
+
+fn resolve_hf(
+    config: &GemmaConfig,
+    cache: &Path,
+    repo: &str,
+    revision: &str,
+) -> Result<ResolvedModel> {
+    let repo_dir = cache.join(format!("models--{}", repo.replace('/', "--")));
+    // Branch names resolve through refs/. A pinned commit often has no
+    // refs/ entry (the Python client never writes one), only snapshots/<sha>,
+    // so `hf_hub::CacheRepo::get` cannot be used here.
+    let commit = std::fs::read_to_string(repo_dir.join("refs").join(revision))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| revision.to_string());
+    let dir = repo_dir.join("snapshots").join(&commit);
+    for f in config.files() {
+        if !dir.join(&f).exists() {
+            return Err(Error::ModelNotFound(format!(
+                "{repo}@{} ({f}) is not present; provision the model files or select a local model directory",
+                &revision[..revision.len().min(12)],
+            )));
+        }
+    }
+    Ok(ResolvedModel {
+        dir,
+        revision: Some(commit),
+    })
+}
+
+impl ResolvedModel {
+    fn identity(&self, config: &GemmaConfig) -> Result<ModelIdentity> {
+        let revision = match &config.source {
+            ModelSource::HuggingFace { repo, .. } => {
+                let commit = self.revision.as_deref().ok_or_else(|| {
+                    Error::Config("Hugging Face model has no resolved commit".into())
+                })?;
+                format!("{repo}@{commit}")
+            }
+            ModelSource::Directory(_) => format!("local:{}", fingerprint(&self.dir, config)?),
+        };
+        Ok(ModelIdentity {
+            model_id: MODEL_ID.into(),
+            revision,
+            variant: format!("onnx-{}", config.precision.name()),
+            dimension: config.dimension,
+            normalization: "mean-pool;truncate;l2".into(),
+            query_prompt: QUERY_PROMPT.into(),
+            document_prompt: format!("{DOCUMENT_PROMPT_TEMPLATE}{{text}}"),
+            max_tokens: config.max_tokens,
+        })
     }
 }
 
@@ -311,11 +361,12 @@ impl EmbeddingGemma2 {
                 modality: Modality::Image,
             });
         }
-        let dir = locate(&config)?;
-        Self::from_dir(&dir, config)
+        let resolved = resolve(&config)?;
+        Self::from_resolved(resolved, config)
     }
 
-    fn from_dir(dir: &Path, config: GemmaConfig) -> Result<Self> {
+    fn from_resolved(resolved: ResolvedModel, config: GemmaConfig) -> Result<Self> {
+        let dir = &resolved.dir;
         let s = config.precision.suffix();
         let onnx_dir = onnx_dir_without_symlinks(dir, &config)?;
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json")).map_err(ort_err)?;
@@ -338,20 +389,7 @@ impl EmbeddingGemma2 {
             None
         };
 
-        let revision = match &config.source {
-            ModelSource::HuggingFace { repo, revision } => format!("{repo}@{revision}"),
-            ModelSource::Directory(_) => format!("local:{}", fingerprint(dir, &config)?),
-        };
-        let identity = ModelIdentity {
-            model_id: MODEL_ID.into(),
-            revision,
-            variant: format!("onnx-{}", config.precision.name()),
-            dimension: config.dimension,
-            normalization: "mean-pool;truncate;l2".into(),
-            query_prompt: QUERY_PROMPT.into(),
-            document_prompt: format!("{DOCUMENT_PROMPT_TEMPLATE}{{text}}"),
-            max_tokens: config.max_tokens,
-        };
+        let identity = resolved.identity(&config)?;
         Ok(Self {
             tokenizer,
             text: Mutex::new(text),
@@ -787,5 +825,140 @@ pub mod vision {
             assert_eq!(h, 48);
             assert!(w <= 280 * 48);
         }
+    }
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::*;
+
+    const A: &str = ONNX_REVISION;
+    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn config(revision: &str) -> GemmaConfig {
+        GemmaConfig {
+            source: ModelSource::HuggingFace {
+                repo: ONNX_REPO.into(),
+                revision: revision.into(),
+            },
+            vision: false,
+            ..GemmaConfig::default()
+        }
+    }
+
+    fn write_files(dir: &Path, config: &GemmaConfig) {
+        for file in config.files() {
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"synthetic model file").unwrap();
+        }
+    }
+
+    fn repo_dir(cache: &Path) -> PathBuf {
+        cache.join(format!("models--{}", ONNX_REPO.replace('/', "--")))
+    }
+
+    #[test]
+    fn moving_ref_changes_identity_but_not_an_already_resolved_model() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = config("main");
+        let repo = repo_dir(cache.path());
+        for commit in [A, B] {
+            write_files(&repo.join("snapshots").join(commit), &config);
+        }
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs/main"), format!("{A}\n")).unwrap();
+        let first = resolve_hf(&config, cache.path(), ONNX_REPO, "main").unwrap();
+        std::fs::write(repo.join("refs/main"), B).unwrap();
+        // Identity is built after the alias moves: it must still describe A.
+        let first_identity = first.identity(&config).unwrap();
+        assert_eq!(first.dir, repo.join("snapshots").join(A));
+        assert_eq!(first_identity.revision, format!("{ONNX_REPO}@{A}"));
+        let second = resolve_hf(&config, cache.path(), ONNX_REPO, "main").unwrap();
+        assert_eq!(second.dir, repo.join("snapshots").join(B));
+        assert_eq!(
+            second.identity(&config).unwrap().revision,
+            format!("{ONNX_REPO}@{B}")
+        );
+        assert_ne!(first_identity, second.identity(&config).unwrap());
+    }
+
+    #[test]
+    fn missing_resolved_commit_returns_an_error() {
+        let resolved = ResolvedModel {
+            dir: PathBuf::new(),
+            revision: None,
+        };
+        assert!(matches!(
+            resolved.identity(&config("main")),
+            Err(Error::Config(_))
+        ));
+    }
+
+    #[test]
+    fn pinned_sha_without_ref_keeps_exact_identity() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = config(A);
+        let dir = repo_dir(cache.path()).join("snapshots").join(A);
+        write_files(&dir, &config);
+        let resolved = resolve_hf(&config, cache.path(), ONNX_REPO, A).unwrap();
+        assert_eq!(resolved.dir, dir);
+        assert_eq!(
+            resolved.identity(&config).unwrap(),
+            ModelIdentity {
+                model_id: "google/embeddinggemma-2".into(),
+                revision:
+                    "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0"
+                        .into(),
+                variant: "onnx-q8".into(),
+                dimension: config.dimension,
+                normalization: "mean-pool;truncate;l2".into(),
+                query_prompt: "task: search result | query: ".into(),
+                document_prompt: "title: {title} | text: {text}".into(),
+                max_tokens: 2048,
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_must_contain_every_required_file() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = config(A);
+        let dir = repo_dir(cache.path()).join("snapshots").join(A);
+        write_files(&dir, &config);
+        let missing = config.files().pop().unwrap();
+        std::fs::remove_file(dir.join(&missing)).unwrap();
+        let Err(Error::ModelNotFound(message)) = resolve_hf(&config, cache.path(), ONNX_REPO, A)
+        else {
+            panic!("an incomplete snapshot must fail");
+        };
+        assert!(message.contains(&missing));
+    }
+
+    #[test]
+    fn local_directory_keeps_fingerprint_identity_and_path_only_locate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = GemmaConfig {
+            source: ModelSource::Directory(dir.path().to_path_buf()),
+            vision: false,
+            ..GemmaConfig::default()
+        };
+        write_files(dir.path(), &config);
+        let expected = format!("local:{}", fingerprint(dir.path(), &config).unwrap());
+        let resolved = resolve(&config).unwrap();
+        assert!(resolved.revision.is_none());
+        assert_eq!(locate(&config).unwrap(), dir.path());
+        assert_eq!(resolved.identity(&config).unwrap().revision, expected);
+        std::fs::write(dir.path().join("tokenizer.json"), b"changed graph").unwrap();
+        assert_ne!(
+            resolve(&config)
+                .unwrap()
+                .identity(&config)
+                .unwrap()
+                .revision,
+            expected
+        );
+        std::fs::remove_file(dir.path().join("tokenizer.json")).unwrap();
+        assert!(matches!(locate(&config), Err(Error::ModelNotFound(_))));
     }
 }
