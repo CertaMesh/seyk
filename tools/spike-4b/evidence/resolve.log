@@ -1,0 +1,5 @@
+    Updating crates.io index
+     Locking 304 packages to highest Rust 1.89 compatible versions
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding hayro v0.5.0 (available: v0.6.0)
+      Adding sha2 v0.10.9 (available: v0.11.0)

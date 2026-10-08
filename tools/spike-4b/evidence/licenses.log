@@ -1,0 +1,104 @@
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/krishankoenig/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/av1-grain-0.2.5/Cargo.toml:27:12
+   │
+27 │ license = "BSD-2-Clause"
+   │            ━━━━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ BSD-2-Clause - BSD 2-Clause "Simplified" License:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ av1-grain v0.2.5
+     └── rav1e v0.8.1
+         └── ravif v0.13.0
+             └── image v0.25.10
+                 ├── hayro v0.5.0
+                 │   └── seyk-4b-spike v0.0.0
+                 ├── imageproc v0.25.1
+                 │   └── paddle-ocr-rs v0.6.1
+                 │       └── seyk-4b-spike v0.0.0 (*)
+                 ├── paddle-ocr-rs v0.6.1 (*)
+                 ├── seyk-4b-spike v0.0.0 (*)
+                 └── seyk-embeddinggemma v0.1.0
+                     └── seyk-4b-spike v0.0.0 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/krishankoenig/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libfuzzer-sys-0.4.13/Cargo.toml:36:36
+   │
+36 │ license = "(MIT OR Apache-2.0) AND NCSA"
+   │            ────────────────────────━━━━
+   │                                    │
+   │                                    rejected: license is not explicitly allowed
+   │
+   ├ NCSA - University of Illinois/NCSA Open Source License:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ libfuzzer-sys v0.4.13
+     └── rav1e v0.8.1
+         └── ravif v0.13.0
+             └── image v0.25.10
+                 ├── hayro v0.5.0
+                 │   └── seyk-4b-spike v0.0.0
+                 ├── imageproc v0.25.1
+                 │   └── paddle-ocr-rs v0.6.1
+                 │       └── seyk-4b-spike v0.0.0 (*)
+                 ├── paddle-ocr-rs v0.6.1 (*)
+                 ├── seyk-4b-spike v0.0.0 (*)
+                 └── seyk-embeddinggemma v0.1.0
+                     └── seyk-4b-spike v0.0.0 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/krishankoenig/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rav1e-0.8.1/Cargo.toml:36:12
+   │
+36 │ license = "BSD-2-Clause"
+   │            ━━━━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ BSD-2-Clause - BSD 2-Clause "Simplified" License:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ rav1e v0.8.1
+     └── ravif v0.13.0
+         └── image v0.25.10
+             ├── hayro v0.5.0
+             │   └── seyk-4b-spike v0.0.0
+             ├── imageproc v0.25.1
+             │   └── paddle-ocr-rs v0.6.1
+             │       └── seyk-4b-spike v0.0.0 (*)
+             ├── paddle-ocr-rs v0.6.1 (*)
+             ├── seyk-4b-spike v0.0.0 (*)
+             └── seyk-embeddinggemma v0.1.0
+                 └── seyk-4b-spike v0.0.0 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/krishankoenig/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/v_frame-0.3.9/Cargo.toml:26:12
+   │
+26 │ license = "BSD-2-Clause"
+   │            ━━━━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ BSD-2-Clause - BSD 2-Clause "Simplified" License:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ v_frame v0.3.9
+     ├── av-scenechange v0.14.1
+     │   └── rav1e v0.8.1
+     │       └── ravif v0.13.0
+     │           └── image v0.25.10
+     │               ├── hayro v0.5.0
+     │               │   └── seyk-4b-spike v0.0.0
+     │               ├── imageproc v0.25.1
+     │               │   └── paddle-ocr-rs v0.6.1
+     │               │       └── seyk-4b-spike v0.0.0 (*)
+     │               ├── paddle-ocr-rs v0.6.1 (*)
+     │               ├── seyk-4b-spike v0.0.0 (*)
+     │               └── seyk-embeddinggemma v0.1.0
+     │                   └── seyk-4b-spike v0.0.0 (*)
+     ├── av1-grain v0.2.5
+     │   └── rav1e v0.8.1 (*)
+     └── rav1e v0.8.1 (*)
+
+licenses FAILED

@@ -1,0 +1,155 @@
+[
+  {
+    "_id": "6a1552d9868e2dff564b67c2",
+    "id": "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+    "private": false,
+    "pipeline_tag": "image-to-text",
+    "library_name": "PaddleOCR",
+    "tags": [
+      "PaddleOCR",
+      "onnx",
+      "OCR",
+      "PaddlePaddle",
+      "textline_detection",
+      "image-to-text",
+      "en",
+      "zh",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "downloads": 63192,
+    "likes": 0,
+    "modelId": "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+    "author": "PaddlePaddle",
+    "sha": "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
+    "lastModified": "2026-06-10T07:49:02.000Z",
+    "gated": false,
+    "disabled": false,
+    "model-index": null,
+    "config": {},
+    "cardData": {
+      "license": "apache-2.0",
+      "library_name": "PaddleOCR",
+      "language": [
+        "en",
+        "zh"
+      ],
+      "pipeline_tag": "image-to-text",
+      "tags": [
+        "OCR",
+        "PaddlePaddle",
+        "PaddleOCR",
+        "textline_detection"
+      ]
+    },
+    "siblings": [
+      {
+        "rfilename": ".gitattributes",
+        "blobId": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+        "size": 1519
+      },
+      {
+        "rfilename": "README.md",
+        "blobId": "c0efd4eeb6c418b77a80e08ebb44861c080a715a",
+        "size": 1828
+      },
+      {
+        "rfilename": "inference.onnx",
+        "blobId": "5d6d41e10487b71630ee7dc4964c53b226ac022f",
+        "size": 4826518,
+        "lfs": {
+          "sha256": "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d",
+          "size": 4826518,
+          "pointerSize": 132
+        }
+      },
+      {
+        "rfilename": "inference.yml",
+        "blobId": "579d10695d2dd6e85c5ecba02d151ae5c077aa49",
+        "size": 903
+      }
+    ],
+    "spaces": [
+      "tardellirs/model-pulse"
+    ],
+    "createdAt": "2026-05-26T07:59:21.000Z",
+    "usedStorage": 4826518
+  },
+  {
+    "_id": "6a1552f10ae0b32a09661949",
+    "id": "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+    "private": false,
+    "pipeline_tag": "image-to-text",
+    "library_name": "PaddleOCR",
+    "tags": [
+      "PaddleOCR",
+      "onnx",
+      "OCR",
+      "PaddlePaddle",
+      "textline_recognition",
+      "image-to-text",
+      "en",
+      "zh",
+      "license:apache-2.0",
+      "region:us"
+    ],
+    "downloads": 5080,
+    "likes": 0,
+    "modelId": "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+    "author": "PaddlePaddle",
+    "sha": "ed152b8b495f84de93cda5709d768548a9127622",
+    "lastModified": "2026-06-10T07:50:47.000Z",
+    "gated": false,
+    "disabled": false,
+    "model-index": null,
+    "config": {},
+    "cardData": {
+      "license": "apache-2.0",
+      "library_name": "PaddleOCR",
+      "language": [
+        "en",
+        "zh"
+      ],
+      "pipeline_tag": "image-to-text",
+      "tags": [
+        "OCR",
+        "PaddlePaddle",
+        "PaddleOCR",
+        "textline_recognition"
+      ]
+    },
+    "siblings": [
+      {
+        "rfilename": ".gitattributes",
+        "blobId": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+        "size": 1519
+      },
+      {
+        "rfilename": "README.md",
+        "blobId": "48258a8e11cc5a42db8523a9be3253c5771d5086",
+        "size": 1768
+      },
+      {
+        "rfilename": "inference.onnx",
+        "blobId": "70ad72c1c53b28c19eaef0732db8a955805d0e45",
+        "size": 16534782,
+        "lfs": {
+          "sha256": "da72dc72ca4dc220df0dfde68c1dedc31c58d3e76a25871122e5056227d50092",
+          "size": 16534782,
+          "pointerSize": 133
+        }
+      },
+      {
+        "rfilename": "inference.yml",
+        "blobId": "176f6d552a120e6fa0a812089fb36c1bb983ce28",
+        "size": 148345
+      }
+    ],
+    "spaces": [
+      "tardellirs/model-pulse",
+      "sankalpsthakur/forge-industrial-agent-lab"
+    ],
+    "createdAt": "2026-05-26T07:59:45.000Z",
+    "usedStorage": 16534782
+  }
+]

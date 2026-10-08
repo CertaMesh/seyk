@@ -1,0 +1,18 @@
+   Compiling seyk-4b-spike v0.0.0 (/Users/krishankoenig/anvil/workspaces/seyk/spike-4b/tools/spike-4b)
+warning: unused import: `util::PageExt`
+  --> src/main.rs:76:48
+   |
+76 |         hayro_interpret::{InterpreterSettings, util::PageExt},
+   |                                                ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: stripping debug info with `rust-objcopy` failed: signal: 6 (SIGABRT)
+  |
+  = note: dyld[58842]: Library not loaded: @rpath/libLLVM.dylib
+            Referenced from: <D6B3C499-A2AF-3E42-8F77-C42BD658AAB5> /Users/krishankoenig/.rustup/toolchains/1.99.0-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy
+            Reason: tried: '/Users/krishankoenig/.rustup/toolchains/1.99.0-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/../lib/libLLVM.dylib' (no such file), '/Users/krishankoenig/.rustup/toolchains/1.99.0-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/../lib/libLLVM.dylib' (no such file), '/Users/krishankoenig/anvil/workspaces/seyk/spike-4b/tools/spike-4b/target/release/deps/libLLVM.dylib' (no such file), '/Users/krishankoenig/lib/libLLVM.dylib' (no such file), '/usr/local/lib/libLLVM.dylib' (no such file), '/usr/lib/libLLVM.dylib' (no such file, not in dyld cache)
+          
+
+warning: `seyk-4b-spike` (bin "seyk-4b-spike") generated 2 warnings (run `cargo fix --bin "seyk-4b-spike" -p seyk-4b-spike` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 1.34s

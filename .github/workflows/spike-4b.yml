@@ -1,0 +1,71 @@
+name: 4b throwaway compatibility spike
+on:
+  pull_request:
+    paths: ["tools/spike-4b/**", ".github/workflows/spike-4b.yml"]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: aarch64-apple-darwin, os: macos-15}
+          - {target: x86_64-unknown-linux-gnu, os: ubuntu-24.04}
+          - {target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm}
+          - {target: x86_64-pc-windows-msvc, os: windows-2022}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/spike-4b
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.99.0 && rustup toolchain install 1.89.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/spike-4b
+          key: spike-${{ matrix.target }}
+      - run: cargo +1.89.0 check --locked --features render,native-ocr 2>&1 | tee evidence/ci-msrv.log
+      - name: Baseline binary
+        run: |
+          cargo +1.99.0 build --release --locked
+          cp target/release/seyk-4b-spike${{ runner.os == 'Windows' && '.exe' || '' }} target/baseline${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Renderer and native geometry
+        run: |
+          cargo +1.99.0 build --release --locked --features render,native-ocr
+          target/release/seyk-4b-spike render | tee evidence/ci-render.jsonl
+          wc -c target/baseline* target/release/seyk-4b-spike${{ runner.os == 'Windows' && '.exe' || '' }} > evidence/ci-size.txt
+      - name: OCR compatibility (must report actual failure)
+        id: ocr
+        continue-on-error: true
+        run: cargo +1.99.0 check --locked --features ocr 2>&1 | tee evidence/ci-ocr.log
+      - name: ORT versions
+        if: always()
+        run: cargo +1.99.0 tree --locked --features ocr -i ort > evidence/ci-ort-tree.txt
+      - name: Unix linked libraries
+        if: runner.os != 'Windows'
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            otool -L target/baseline > evidence/ci-baseline-libs.txt
+            otool -L target/release/seyk-4b-spike > evidence/ci-libs.txt
+          else
+            ldd target/baseline > evidence/ci-baseline-libs.txt
+            ldd target/release/seyk-4b-spike > evidence/ci-libs.txt
+          fi
+      - name: Windows linked libraries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1).FullName
+          & $dumpbin /DEPENDENTS target/baseline.exe | Out-File evidence/ci-baseline-libs.txt
+          & $dumpbin /DEPENDENTS target/release/seyk-4b-spike.exe | Out-File evidence/ci-libs.txt
+      - name: Record outcome
+        if: always()
+        run: echo '${{ steps.ocr.outcome }}' > evidence/ci-ocr-outcome.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-${{ matrix.target }}
+          path: tools/spike-4b/evidence/ci-*
