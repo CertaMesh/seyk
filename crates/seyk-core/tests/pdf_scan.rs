@@ -401,3 +401,79 @@ fn unsupported_first_page_cannot_consume_a_filename_result_slot() {
         );
     }
 }
+
+#[cfg(feature = "pdf-render")]
+#[test]
+fn image_only_cache_reuse_filters_text_pages_before_depth_and_filename_selection() {
+    struct ImageOnly(Model);
+    impl Embedder for ImageOnly {
+        fn identity(&self) -> &ModelIdentity {
+            self.0.identity()
+        }
+        fn supports(&self, modality: Modality) -> bool {
+            modality == Modality::Image
+        }
+        fn embed_batch(
+            &self,
+            requests: &[EmbeddingRequest<'_>],
+        ) -> seyk_embed::Result<Vec<Embedding>> {
+            self.0.embed_batch(requests)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.pdf");
+    let db = dir.path().join("cache.db");
+    // More unsupported rows than the minimum candidate depth (50), followed
+    // by the only supported page. A guard checking only Image fails this case.
+    let text = b"BT /F1 12 Tf 50 720 Td (Public basil garden.) Tj ET";
+    let mut pages = vec![(text.as_slice(), ""); 60];
+    pages.push((fixture::DRAWING, ""));
+    std::fs::write(&path, fixture::document(&pages, None)).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(Model::new(true))
+        .cache(SqliteCache::open(&db).unwrap())
+        .build()
+        .unwrap();
+    engine.index().paths([&path]).execute().unwrap();
+    let profile = engine.profile_id().to_owned();
+    let resource = seyk_core::ResourceId::from_path(path.canonicalize().unwrap()).unwrap();
+    assert_eq!(
+        engine
+            .with_cache(|c| c.resource(&profile, &resource))
+            .unwrap()
+            .unwrap()
+            .segments
+            .len(),
+        61
+    );
+    drop(engine);
+    let engine = SearchEngine::builder()
+        .embedder(ImageOnly(Model::new(true)))
+        .cache(SqliteCache::open(&db).unwrap())
+        .build()
+        .unwrap();
+    assert_eq!(engine.profile_id(), profile);
+    for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+        for query in ["mixed", "mixed.pdf"] {
+            let result = engine
+                .search(query)
+                .paths([&path])
+                .sync(false)
+                .previews(None)
+                .limit(1)
+                .mode(mode)
+                .execute()
+                .unwrap();
+            assert_eq!(result.hits.len(), 1, "{mode:?} {query}");
+            assert!(matches!(
+                result.hits[0].locator,
+                ResourceLocator::Page { page: 61 }
+            ));
+            assert!(
+                result.hits[0].signals.lexical.is_some(),
+                "unsupported rows must not consume lexical depth"
+            );
+            assert!(result.hits[0].signals.filename);
+        }
+    }
+}

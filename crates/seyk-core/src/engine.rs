@@ -1251,17 +1251,22 @@ impl<'e> SearchRequest<'e> {
             // Reserve room for every ineligible PDF segment, then filter before
             // restoring the candidate depth. A disabled scan cannot exhaust it.
             let mut unsupported = HashSet::new();
-            for resource in &wanted {
-                if metadata
-                    .get(resource)
-                    .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
-                    && let Some(cached) = engine.with_cache(|c| c.resource(pid, resource))?
-                {
-                    for (ordinal, segment) in cached.segments.into_iter().enumerate() {
-                        if !engine.supports_locator(&cached.metadata, &segment.locator) {
+            // These are the two locator kinds emitted by PDF preparation. Both
+            // feature gates AND model capabilities must hold, including when a
+            // different model configuration reuses this profile with sync(false).
+            let all_pdf_locators_supported = cfg!(feature = "pdf-render")
+                && engine.embedder.supports(crate::Modality::Image)
+                && cfg!(feature = "pdf")
+                && engine.embedder.supports(crate::Modality::Text);
+            if !all_pdf_locators_supported {
+                for resource in &wanted {
+                    if let Some(state) = metadata.get(resource)
+                        && state.metadata.media_type.as_deref() == Some("application/pdf")
+                    {
+                        for &ordinal in &segments.load_resource(engine, pid, resource)?.unsupported
+                        {
                             unsupported.insert((resource.clone(), ordinal));
                         }
-                        segments.insert(resource.clone(), ordinal, segment);
                     }
                 }
             }
@@ -1301,18 +1306,16 @@ impl<'e> SearchRequest<'e> {
                         .iter()
                         .any(|q| names_file(q, Path::new(&r.id.labels().1)))
             }) {
-                let Some(cached) = engine.with_cache(|c| c.resource(pid, &resource.id))? else {
+                if !metadata.contains_key(&resource.id) {
                     continue;
-                };
+                }
                 // A filename identifies the first supported cached location,
                 // which need not be ordinal zero in a mixed PDF.
-                if let Some((ordinal, segment)) = cached
-                    .segments
-                    .into_iter()
-                    .enumerate()
-                    .find(|(_, s)| engine.supports_locator(&cached.metadata, &s.locator))
+                if let Some(ordinal) = segments
+                    .load_resource(engine, pid, &resource.id)?
+                    .first_supported
                 {
-                    named.push(segments.insert(resource.id.clone(), ordinal, segment));
+                    named.push((resource.id.clone(), ordinal));
                 }
             }
             if self.mode == SearchMode::Lexical {
@@ -1381,14 +1384,55 @@ type SegmentKey = (ResourceId, usize);
 /// found only by keyword or name, from the cache on demand.
 #[derive(Default)]
 struct SegmentTable {
-    segments: HashMap<SegmentKey, Option<CachedSegment>>,
+    segments: HashMap<ResourceId, HashMap<usize, CachedSegment>>,
+    // Vector rows are only a partial view: keyword-only ordinals may be absent.
+    complete: HashMap<ResourceId, CompleteResource>,
+}
+
+/// Eligibility from the complete lookup, independent of earlier vector evidence.
+/// A missing resource has no filename candidate, even if scored rows survive.
+#[derive(Default)]
+struct CompleteResource {
+    unsupported: Vec<usize>,
+    first_supported: Option<usize>,
 }
 
 impl SegmentTable {
     fn insert(&mut self, path: ResourceId, ordinal: usize, segment: CachedSegment) -> SegmentKey {
-        let key = (path, ordinal);
-        self.segments.insert(key.clone(), Some(segment));
-        key
+        self.segments
+            .entry(path.clone())
+            .or_default()
+            .insert(ordinal, segment);
+        (path, ordinal)
+    }
+
+    /// Bulk-ingest one complete lookup, including a missing/empty resource.
+    /// Errors leave completion unset so a later attempt can retry.
+    fn load_resource(
+        &mut self,
+        engine: &SearchEngine,
+        pid: &str,
+        resource: &ResourceId,
+    ) -> Result<&CompleteResource> {
+        if !self.complete.contains_key(resource) {
+            let cached = engine.with_cache(|c| c.resource(pid, resource))?;
+            let mut complete = CompleteResource::default();
+            let seen = self.segments.entry(resource.clone()).or_default();
+            if let Some(cached) = cached {
+                for (ordinal, segment) in cached.segments.into_iter().enumerate() {
+                    if engine.supports_locator(&cached.metadata, &segment.locator) {
+                        complete.first_supported.get_or_insert(ordinal);
+                    } else {
+                        complete.unsupported.push(ordinal);
+                    }
+                    // A concurrent indexer can replace/remove a resource after
+                    // vectors_for. Never relabel or discard already-scored evidence.
+                    seen.entry(ordinal).or_insert(segment);
+                }
+            }
+            self.complete.insert(resource.clone(), complete);
+        }
+        Ok(&self.complete[resource])
     }
 
     fn get_or_load(
@@ -1397,13 +1441,14 @@ impl SegmentTable {
         pid: &str,
         key: &SegmentKey,
     ) -> Result<Option<&CachedSegment>> {
-        if !self.segments.contains_key(key) {
-            let segment = engine
-                .with_cache(|c| c.resource(pid, &key.0))?
-                .and_then(|r| r.segments.into_iter().nth(key.1));
-            self.segments.insert(key.clone(), segment);
+        if !self
+            .segments
+            .get(&key.0)
+            .is_some_and(|s| s.contains_key(&key.1))
+        {
+            self.load_resource(engine, pid, &key.0)?;
         }
-        Ok(self.segments[key].as_ref())
+        Ok(self.segments.get(&key.0).and_then(|s| s.get(&key.1)))
     }
 }
 

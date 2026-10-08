@@ -1,4 +1,7 @@
 mod common;
+#[cfg(feature = "pdf")]
+#[path = "support/scan_fixture.rs"]
+mod hydration_fixture;
 
 use std::fs;
 use std::path::Path;
@@ -630,4 +633,444 @@ fn spaced_names_and_cross_platform_suffixes_keep_the_filename_signal() {
         let result = search(&engine, root, "my father", SearchMode::Hybrid);
         assert!(result.hits.iter().all(|h| !h.signals.filename));
     });
+}
+
+/// A transparent cache wrapper with read accounting and controlled readback gaps.
+mod hydration {
+    use super::*;
+    use seyk_core::cache::{
+        CacheProfile, CacheStats, CachedResource, CachedResourceState, LexicalHit, ResourceWrite,
+        StoredVector,
+    };
+    use seyk_core::lexical::LexicalQuery;
+    use seyk_core::{ResourceId, ResourceMetadata, ResourceVersion, Result};
+    use std::collections::{HashMap, HashSet};
+
+    #[derive(Default)]
+    struct Reads {
+        count: AtomicUsize,
+        // 0 = normal, 1 = missing resource, 2 = missing ordinals, 3 = error once,
+        // 4 = replacement evidence observed after vectors were read.
+        fault: AtomicUsize,
+        partial_vectors: AtomicUsize,
+    }
+    struct CountCache {
+        inner: Box<dyn EmbeddingCache>,
+        reads: Arc<Reads>,
+    }
+    impl EmbeddingCache for CountCache {
+        fn register_profile(&mut self, p: &str, v: &CacheProfile) -> Result<()> {
+            self.inner.register_profile(p, v)
+        }
+        fn resource_index(&self, p: &str) -> Result<HashMap<ResourceId, CachedResourceState>> {
+            self.inner.resource_index(p)
+        }
+        fn resource(&self, p: &str, r: &ResourceId) -> Result<Option<CachedResource>> {
+            self.reads.count.fetch_add(1, Ordering::SeqCst);
+            match self.reads.fault.load(Ordering::SeqCst) {
+                1 => Ok(None),
+                2 => Ok(self.inner.resource(p, r)?.map(|mut r| {
+                    r.segments.truncate(1);
+                    r
+                })),
+                3 => {
+                    self.reads.fault.store(0, Ordering::SeqCst);
+                    Err(seyk_core::Error::Config(
+                        "injected resource read failure".into(),
+                    ))
+                }
+                4 => Ok(self.inner.resource(p, r)?.map(|mut r| {
+                    for segment in &mut r.segments {
+                        segment.locator =
+                            if r.metadata.media_type.as_deref() == Some("application/pdf") {
+                                seyk_core::ResourceLocator::Page { page: 99 }
+                            } else {
+                                seyk_core::ResourceLocator::Text {
+                                    byte_start: 999_000,
+                                    byte_end: 999_010,
+                                    line_start: None,
+                                    line_end: None,
+                                }
+                            };
+                        segment.heading = Some("replacement evidence".into());
+                    }
+                    r
+                })),
+                _ => self.inner.resource(p, r),
+            }
+        }
+        fn put_resource(&mut self, p: &str, r: &ResourceId, v: &ResourceWrite<'_>) -> Result<()> {
+            self.inner.put_resource(p, r, v)
+        }
+        fn touch_resource(
+            &mut self,
+            p: &str,
+            r: &ResourceId,
+            m: &ResourceMetadata,
+            v: &ResourceVersion,
+        ) -> Result<()> {
+            self.inner.touch_resource(p, r, m, v)
+        }
+        fn remove_resources(&mut self, p: &str, r: &[ResourceId]) -> Result<()> {
+            self.inner.remove_resources(p, r)
+        }
+        fn known_inputs(&self, p: &str, h: &[String]) -> Result<HashSet<String>> {
+            self.inner.known_inputs(p, h)
+        }
+        fn put_embeddings(&mut self, p: &str, v: &[(String, Vec<f32>)]) -> Result<()> {
+            self.inner.put_embeddings(p, v)
+        }
+        fn vectors_for(&self, p: &str, r: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
+            let mut rows = self.inner.vectors_for(p, r)?;
+            if self.reads.partial_vectors.load(Ordering::SeqCst) != 0 {
+                rows.retain(|v| v.ordinal == 0);
+            }
+            Ok(rows)
+        }
+        fn lexical_search(
+            &self,
+            p: &str,
+            q: &LexicalQuery,
+            r: &HashSet<ResourceId>,
+            n: usize,
+        ) -> Result<Vec<LexicalHit>> {
+            self.inner.lexical_search(p, q, r, n)
+        }
+        fn prune_orphans(&mut self, p: &str) -> Result<u64> {
+            self.inner.prune_orphans(p)
+        }
+        fn stats(&self) -> Result<CacheStats> {
+            self.inner.stats()
+        }
+        fn clear(&mut self) -> Result<()> {
+            self.inner.clear()
+        }
+    }
+
+    // Independently selectable capabilities, deliberately with the same identity:
+    // cached evidence must remain safe under sync(false) capability changes.
+    struct Capabilities {
+        inner: FakeEmbedder,
+        text: bool,
+        image: bool,
+    }
+    impl Embedder for Capabilities {
+        fn identity(&self) -> &ModelIdentity {
+            self.inner.identity()
+        }
+        fn supports(&self, m: Modality) -> bool {
+            (m == Modality::Text && self.text) || (m == Modality::Image && self.image)
+        }
+        fn embed_batch(
+            &self,
+            r: &[seyk_embed::EmbeddingRequest<'_>],
+        ) -> seyk_embed::Result<Vec<Embedding>> {
+            r.iter()
+                .map(|_| Embedding::from_raw(vec![1.0; 256], Dimension::D256))
+                .collect()
+        }
+    }
+
+    fn counted(sqlite: bool, db: &Path, text: bool, image: bool) -> (SearchEngine, Arc<Reads>) {
+        let reads = Arc::new(Reads::default());
+        let inner: Box<dyn EmbeddingCache> = if sqlite {
+            Box::new(SqliteCache::open(db).unwrap())
+        } else {
+            Box::new(MemoryCache::new())
+        };
+        let engine = SearchEngine::builder()
+            .embedder(Capabilities {
+                inner: FakeEmbedder::new(Dimension::D256, "hydration"),
+                text,
+                image,
+            })
+            .cache(CountCache {
+                inner,
+                reads: reads.clone(),
+            })
+            .build()
+            .unwrap();
+        (engine, reads)
+    }
+
+    fn query(
+        e: &SearchEngine,
+        root: &Path,
+        q: &str,
+        mode: SearchMode,
+    ) -> seyk_core::Result<SearchResults> {
+        e.search(q)
+            .paths([root])
+            .mode(mode)
+            .limit(100)
+            .previews(None)
+            .sync(false)
+            .execute()
+    }
+
+    #[test]
+    fn lexical_and_filename_hydrate_once_and_partial_vectors_are_not_complete() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                (0..8)
+                    .map(|i| format!("# Section {i}\n\nbasil garden number {i}\n\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            reads.partial_vectors.store(1, Ordering::SeqCst);
+            for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+                for q in ["basil", "garden.md"] {
+                    reads.count.store(0, Ordering::SeqCst);
+                    let result = query(&e, &path, q, mode).unwrap();
+                    assert!(result.hits.len() >= 8, "{mode:?}: {result:?}");
+                    assert_eq!(reads.count.load(Ordering::SeqCst), 1, "{mode:?} {q}");
+                }
+            }
+            // A new request must reload; completion is never engine-global.
+            reads.count.store(0, Ordering::SeqCst);
+            query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+            assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn complete_misses_are_reused_and_read_errors_propagate_without_poisoning_later_searches() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                "# One\n\nbasil\n\n# Two\n\nbasil\n\n# Three\n\nbasil",
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            for (fault, expected) in [(1, 0), (2, 1)] {
+                reads.fault.store(fault, Ordering::SeqCst);
+                reads.count.store(0, Ordering::SeqCst);
+                let result = query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+                assert_eq!(result.hits.len(), expected);
+                assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            }
+            reads.fault.store(3, Ordering::SeqCst);
+            assert!(
+                query(&e, &path, "basil", SearchMode::Lexical)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("injected")
+            );
+            assert!(
+                query(&e, &path, "basil", SearchMode::Lexical)
+                    .unwrap()
+                    .hits
+                    .len()
+                    >= 3
+            );
+        }
+    }
+
+    fn preserves_scored_rows_after_complete_lookup(fault: usize) {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                "# One\n\nbasil\n\n# Two\n\nbasil\n\n# Three\n\nbasil",
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            let before = query(&e, &path, "garden.md", SearchMode::Hybrid).unwrap();
+            assert_eq!(before.hits.len(), 3);
+            // All vector rows remain available, while the later resource read
+            // observes a concurrent indexer's removal, truncation or replacement.
+            reads.fault.store(fault, Ordering::SeqCst);
+            reads.count.store(0, Ordering::SeqCst);
+            let after = query(&e, &path, "garden.md", SearchMode::Hybrid).unwrap();
+            assert_eq!(after.hits.len(), 3, "sqlite={sqlite}, fault={fault}");
+            assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                after.hits.iter().filter(|h| h.signals.filename).count(),
+                usize::from(fault != 1)
+            );
+            for (old, new) in before.hits.iter().zip(&after.hits) {
+                assert_eq!(new.resource, old.resource);
+                assert_eq!(new.locator, old.locator);
+                assert_eq!(new.heading, old.heading);
+                assert_eq!(new.metadata, old.metadata);
+                assert_eq!(new.signals.semantic, old.signals.semantic);
+            }
+        }
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_missing_resource_lookup() {
+        preserves_scored_rows_after_complete_lookup(1);
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_truncated_resource_lookup() {
+        preserves_scored_rows_after_complete_lookup(2);
+    }
+
+    #[test]
+    fn hybrid_keeps_scored_rows_after_a_replacement_locator_lookup() {
+        preserves_scored_rows_after_complete_lookup(4);
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn hybrid_complete_lookup_eligibility_does_not_use_preserved_vector_rows() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.pdf");
+            let text = b"BT /F1 12 Tf 50 720 Td (Public basil garden.) Tj ET";
+            fs::write(&path, fixture::document(&[(text.as_slice(), ""); 3], None)).unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            let before = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
+            assert_eq!(before.hits.len(), 3);
+            reads.fault.store(4, Ordering::SeqCst);
+            reads.count.store(0, Ordering::SeqCst);
+            let after = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
+            assert_eq!(after.hits.len(), 3);
+            assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            for (old, new) in before.hits.iter().zip(&after.hits) {
+                assert_eq!(new.locator, old.locator);
+                assert_eq!(new.heading, old.heading);
+                assert_eq!(new.signals.semantic, old.signals.semantic);
+                // The complete lookup contains only unsupported image pages:
+                // vector rows remain semantic evidence, not filename/lexical candidates.
+                assert!(!new.signals.filename);
+                assert!(new.signals.lexical.is_none());
+            }
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    use super::hydration_fixture as fixture;
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn pdf_prepass_filename_and_hydration_share_complete_reads() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.pdf");
+            fs::write(&path, fixture::text(&["basil garden"])).unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+                reads.count.store(0, Ordering::SeqCst);
+                assert_eq!(query(&e, &path, "garden.pdf", mode).unwrap().hits.len(), 1);
+                assert_eq!(reads.count.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn pdf_prepass_requires_both_feature_gates_and_both_capabilities() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("garden.pdf");
+        let db = dir.path().join("cache.db");
+        fs::write(&path, fixture::text(&["basil garden"])).unwrap();
+        let (e, _) = counted(true, &db, true, true);
+        e.index().paths([&path]).execute().unwrap();
+        drop(e);
+        for (text, image) in [(true, true), (false, true), (true, false), (false, false)] {
+            let (e, reads) = counted(true, &db, text, image);
+            for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+                reads.count.store(0, Ordering::SeqCst);
+                query(&e, &path, "absent", mode).unwrap();
+                let fast = cfg!(feature = "pdf-render") && text && image;
+                assert_eq!(
+                    reads.count.load(Ordering::SeqCst),
+                    usize::from(!fast),
+                    "text={text} image={image} {mode:?}"
+                );
+            }
+        }
+    }
+
+    /// Stress the sibling-retention tradeoff separately from the PDF prepass.
+    #[test]
+    #[ignore = "synthetic 1000-segment hydration measurement"]
+    fn measure_large_resource_hydration() {
+        use std::time::Instant;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("garden.md");
+        let source = (0..1000)
+            .map(|i| format!("# Section {i}\n\nbasil garden number {i}\n\n"))
+            .collect::<String>();
+        fs::write(&path, source).unwrap();
+        let (e, reads) = counted(true, &dir.path().join("cache.db"), true, false);
+        e.index().paths([&path]).execute().unwrap();
+        let resource = seyk_core::ResourceId::from_path(path.canonicalize().unwrap()).unwrap();
+        let count = e
+            .with_cache(|c| c.resource(e.profile_id(), &resource))
+            .unwrap()
+            .unwrap()
+            .segments
+            .len();
+        assert_eq!(count, 1000);
+        query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+        reads.count.store(0, Ordering::SeqCst);
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            let start = Instant::now();
+            let result = query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(result.hits.len(), 100);
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "P7_LARGE segments={count} hits=100 sqlite reads_per_search={} median_ms={:.3} p95_ms={:.3}",
+            reads.count.load(Ordering::SeqCst) / 20,
+            samples[10],
+            samples[18]
+        );
+    }
+
+    /// Public synthetic fixture only. Run explicitly with --ignored --nocapture.
+    #[cfg(feature = "pdf-render")]
+    #[test]
+    #[ignore = "synthetic 1000-PDF hydration measurement"]
+    fn measure_pdf_hydration() {
+        use std::time::Instant;
+        let dir = TempDir::new().unwrap();
+        let corpus = dir.path().join("pdfs");
+        fs::create_dir(&corpus).unwrap();
+        let bytes = fixture::text(&["Public basil garden with lavender."]);
+        for i in 0..1000 {
+            fs::write(corpus.join(format!("garden-{i:04}.pdf")), &bytes).unwrap();
+        }
+        let (e, reads) = counted(true, &dir.path().join("cache.db"), true, true);
+        e.index().paths([&corpus]).execute().unwrap();
+        for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+            for q in ["absent", "basil", "garden-0000.pdf"] {
+                query(&e, &corpus, q, mode).unwrap(); // warm up
+                let mut samples = Vec::new();
+                reads.count.store(0, Ordering::SeqCst);
+                for _ in 0..20 {
+                    let start = Instant::now();
+                    let r = query(&e, &corpus, q, mode).unwrap();
+                    samples.push(start.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(r);
+                }
+                samples.sort_by(f64::total_cmp);
+                eprintln!(
+                    "P7_MEASURE pdfs=1000 pages=1 sqlite mode={mode:?} query={q} reads_per_search={} median_ms={:.3} p95_ms={:.3}",
+                    reads.count.load(Ordering::SeqCst) / 20,
+                    samples[10],
+                    samples[18]
+                );
+            }
+        }
+        // TempDir removes the generated PDFs and SQLite cache on return.
+    }
 }
