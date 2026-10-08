@@ -1,0 +1,11 @@
+{
+  "mode": "render-only",
+  "exit": 0,
+  "wall_seconds": 1.392382042002282,
+  "sample_interval_ms": 50,
+  "sample_count": 24,
+  "rss_p50_bytes": 221937664,
+  "rss_p95_bytes": 356843520,
+  "rss_sample_max_bytes": 371834880,
+  "note": "RSS samples span process startup/model load and all page work; ps reports KiB on macOS; sampled maximum is not OS high-water mark"
+}

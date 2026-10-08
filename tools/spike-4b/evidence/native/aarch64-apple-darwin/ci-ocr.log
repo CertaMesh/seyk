@@ -1,0 +1,450 @@
+ Downloading crates ...
+  Downloaded arg_enum_proc_macro v0.3.4
+  Downloaded aligned v0.4.3
+  Downloaded ab_glyph v0.2.32
+  Downloaded as-slice v0.2.1
+  Downloaded bumpalo v3.20.3
+  Downloaded aligned-vec v0.6.4
+  Downloaded bit_field v0.10.3
+  Downloaded color_quant v1.1.0
+  Downloaded equator v0.4.2
+  Downloaded new_debug_unreachable v1.0.6
+  Downloaded maybe-rayon v0.1.1
+  Downloaded loop9 v0.1.5
+  Downloaded num v0.4.3
+  Downloaded num-iter v0.1.46
+  Downloaded simd_helpers v0.1.0
+  Downloaded noop_proc_macro v0.3.0
+  Downloaded reborrow v0.5.5
+  Downloaded wasm-bindgen-shared v0.2.129
+  Downloaded rand_chacha v0.3.1
+  Downloaded profiling-procmacros v1.0.18
+  Downloaded pulp-wasm-simd-flag v0.1.1
+  Downloaded ab_glyph_rasterizer v0.1.10
+  Downloaded owned_ttf_parser v0.25.1
+  Downloaded equator-macro v0.4.2
+  Downloaded lebe v0.5.3
+  Downloaded num-derive v0.4.2
+  Downloaded quick-error v2.0.1
+  Downloaded profiling v1.0.18
+  Downloaded y4m v0.8.0
+  Downloaded wasm-bindgen-macro v0.2.129
+  Downloaded fax v0.2.7
+  Downloaded paste v1.0.15
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded ravif v0.13.0
+  Downloaded avif-serialize v0.8.9
+  Downloaded rustversion v1.0.23
+  Downloaded either v1.19.0
+  Downloaded crossbeam-deque v0.8.8
+  Downloaded imgref v1.12.3
+  Downloaded rand_core v0.6.4
+  Downloaded v_frame v0.3.9
+  Downloaded num-rational v0.4.2
+  Downloaded pastey v0.1.1
+  Downloaded getrandom v0.2.17
+  Downloaded gif v0.14.2
+  Downloaded rgb v0.8.53
+  Downloaded weezl v0.1.12
+  Downloaded av1-grain v0.2.5
+  Downloaded built v0.8.1
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded no_std_io2 v0.9.4
+  Downloaded jobserver v0.1.35
+  Downloaded zune-inflate v0.2.54
+  Downloaded anyhow v1.0.104
+  Downloaded bitstream-io v4.10.0
+  Downloaded half v2.7.1
+  Downloaded rand_distr v0.4.3
+  Downloaded simba v0.8.1
+  Downloaded crossbeam-epoch v0.9.21
+  Downloaded image-webp v0.2.4
+  Downloaded qoi v0.4.1
+  Downloaded rayon-core v1.13.0
+  Downloaded wasm-bindgen v0.2.129
+  Downloaded rand v0.8.8
+  Downloaded safe_arch v0.7.4
+  Downloaded tiff v0.11.3
+  Downloaded wide v0.7.33
+  Downloaded num-bigint v0.4.8
+  Downloaded itertools v0.12.1
+  Downloaded wasm-bindgen-macro-support v0.2.129
+  Downloaded zerocopy-derive v0.8.61
+  Downloaded imageproc v0.25.1
+  Downloaded nom v8.0.0
+  Downloaded pulp v0.22.3
+  Downloaded itertools v0.14.0
+  Downloaded rayon v1.12.0
+  Downloaded ttf-parser v0.25.1
+  Downloaded exr v1.74.2
+  Downloaded ndarray v0.16.1
+  Downloaded zerocopy v0.8.61
+  Downloaded nalgebra v0.32.6
+  Downloaded paddle-ocr-rs v0.6.1
+  Downloaded av-scenechange v0.14.1
+  Downloaded rav1e v0.8.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.190
+   Compiling libm v0.2.16
+    Checking cfg-if v1.0.5
+    Checking bytemuck v1.25.2
+   Compiling num-traits v0.2.19
+   Compiling crossbeam-utils v0.8.23
+   Compiling version_check v0.9.5
+   Compiling crossbeam-epoch v0.9.21
+   Compiling syn v2.0.119
+   Compiling syn v3.0.6
+   Compiling crossbeam-deque v0.8.8
+   Compiling zerocopy v0.8.61
+    Checking num-integer v0.1.47
+    Checking num-complex v0.4.6
+    Checking simd-adler32 v0.3.10
+   Compiling paste v1.0.15
+   Compiling rayon-core v1.13.0
+    Checking num-bigint v0.4.8
+   Compiling core-foundation-sys v0.8.7
+    Checking memchr v2.8.3
+    Checking either v1.19.0
+   Compiling bitflags v2.13.2
+   Compiling thiserror v2.0.21
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.5
+    Checking num-rational v0.4.2
+   Compiling errno v0.3.14
+   Compiling zeroize v1.9.1
+    Checking adler2 v2.0.1
+   Compiling anyhow v1.0.104
+   Compiling httparse v1.10.1
+   Compiling thiserror-impl v2.0.21
+   Compiling security-framework-sys v2.17.0
+   Compiling core-foundation v0.10.1
+   Compiling matrixmultiply v0.3.11
+   Compiling itoa v1.0.18
+    Checking typenum v1.20.1
+   Compiling fastrand v2.5.0
+   Compiling base64ct v1.8.3
+   Compiling native-tls v0.2.18
+   Compiling once_cell v1.21.4
+   Compiling bytes v1.12.1
+    Checking arrayvec v0.7.8
+   Compiling crc32fast v1.5.2
+    Checking stable_deref_trait v1.2.1
+    Checking as-slice v0.2.1
+   Compiling tempfile v3.27.0
+   Compiling pem-rfc7468 v1.0.0
+   Compiling http v1.5.0
+   Compiling security-framework v3.7.0
+   Compiling rustls-pki-types v1.15.1
+    Checking rayon v1.12.0
+   Compiling zerocopy-derive v0.8.61
+   Compiling equator-macro v0.4.2
+   Compiling log v0.4.34
+    Checking equator v0.4.2
+   Compiling base64 v0.23.1
+    Checking aligned-vec v0.6.4
+    Checking rawpointer v0.2.1
+    Checking v_frame v0.3.9
+   Compiling byteorder v1.5.0
+   Compiling built v0.8.1
+   Compiling av-scenechange v0.14.1
+   Compiling socks v0.3.4
+   Compiling ureq-proto v0.6.4
+   Compiling webpki-root-certs v1.0.9
+   Compiling rav1e v0.8.1
+   Compiling arg_enum_proc_macro v0.3.4
+   Compiling profiling-procmacros v1.0.18
+   Compiling der v0.8.2
+    Checking aligned v0.4.3
+    Checking miniz_oxide v0.9.1
+    Checking nom v8.0.0
+    Checking no_std_io2 v0.9.4
+    Checking getrandom v0.2.17
+   Compiling generic-array v0.14.7
+   Compiling pulp v0.22.3
+    Checking y4m v0.8.0
+    Checking quick-error v2.0.1
+   Compiling shlex v2.0.1
+   Compiling pastey v0.1.1
+   Compiling percent-encoding v2.3.2
+   Compiling find-msvc-tools v0.1.14
+   Compiling utf8-zero v0.8.1
+   Compiling ureq v3.4.2
+   Compiling cc v1.6.0
+    Checking av1-grain v0.2.5
+    Checking ppv-lite86 v0.2.21
+    Checking half v2.7.1
+    Checking flate2 v1.1.10
+    Checking rand_core v0.6.4
+    Checking bitstream-io v4.10.0
+    Checking profiling v1.0.18
+    Checking maybe-rayon v0.1.1
+   Compiling num-derive v0.4.2
+    Checking miniz_oxide v0.8.9
+    Checking itertools v0.14.0
+   Compiling simd_helpers v0.1.0
+    Checking safe_arch v0.7.4
+   Compiling serde_core v1.0.229
+    Checking zune-core v0.5.3
+    Checking imgref v1.12.3
+   Compiling noop_proc_macro v0.3.0
+   Compiling hmac-sha256 v1.1.15
+    Checking reborrow v0.5.5
+    Checking weezl v0.1.12
+    Checking pulp-wasm-simd-flag v0.1.1
+    Checking new_debug_unreachable v1.0.6
+   Compiling lzma-rust2 v0.15.8
+    Checking smallvec v1.16.2
+    Checking loop9 v0.1.5
+    Checking zune-jpeg v0.5.15
+    Checking wide v0.7.33
+   Compiling ort-sys v2.0.0-rc.13
+   Compiling clipper-sys v0.8.0
+    Checking rand_chacha v0.3.1
+    Checking avif-serialize v0.8.9
+    Checking fdeflate v0.3.7
+    Checking zune-inflate v0.2.54
+    Checking approx v0.5.1
+    Checking pxfm v0.1.30
+    Checking byteorder-lite v0.1.0
+    Checking fax v0.2.7
+   Compiling zmij v1.0.23
+    Checking bit_field v0.10.3
+    Checking ttf-parser v0.25.1
+    Checking lebe v0.5.3
+    Checking color_quant v1.1.0
+    Checking rgb v0.8.53
+    Checking gif v0.14.2
+    Checking tracing-core v0.1.36
+    Checking png v0.18.1
+    Checking moxcms v0.8.1
+    Checking owned_ttf_parser v0.25.1
+    Checking tiff v0.11.3
+    Checking exr v1.74.2
+    Checking ravif v0.13.0
+    Checking image-webp v0.2.4
+    Checking simba v0.8.1
+    Checking rand v0.8.8
+    Checking num-iter v0.1.46
+    Checking qoi v0.4.1
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+    Checking ab_glyph_rasterizer v0.1.10
+    Checking pin-project-lite v0.2.17
+    Checking tracing v0.1.44
+    Checking ab_glyph v0.2.32
+    Checking image v0.25.10
+    Checking num v0.4.3
+    Checking rand_distr v0.4.3
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking ndarray v0.17.2
+    Checking geo-types v0.7.20
+    Checking nalgebra v0.32.6
+   Compiling serde_derive v1.0.229
+    Checking itertools v0.12.1
+    Checking geo-clipper v0.9.0
+    Checking digest v0.10.7
+    Checking ndarray v0.16.1
+    Checking ort v2.0.0-rc.13
+    Checking cpufeatures v0.2.17
+    Checking sha2 v0.10.9
+    Checking imageproc v0.25.1
+    Checking paddle-ocr-rs v0.6.1
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/angle_net.rs:84:48
+    |
+ 84 |         let input_tensors = Tensor::from_array(input_tensors)?;
+    |                             ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                             |
+    |                             required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:20:73
+   |
+20 |                 .with_optimization_level(GraphOptimizationLevel::Level2)?
+   |                  -------------------------------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:21:48
+   |
+21 |                 .with_intra_threads(num_thread)?
+   |                  ------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:22:48
+   |
+22 |                 .with_inter_threads(num_thread)?,
+   |                  ------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0616]: field `inputs` of struct `Session` is private
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:33:14
+   |
+33 |             .inputs
+   |              ^^^^^^ private field
+   |
+help: a method `inputs` also exists, call it with parentheses
+   |
+33 |             .inputs()
+   |                    ++
+
+error[E0599]: no method named `expect` found for struct `std::string::String` in the current scope
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/crnn_net.rs:88:14
+   |
+80 |            let model_charater_list = self
+   |   ___________________________________-
+   |  |___________________________________|
+81 | ||             .session
+   | ||____________________- method `expect` is available on `&std::option::Option<Session>`
+82 | |              .as_ref()
+   | |               -------- method `expect` is available on `std::option::Option<&Session>`
+83 | |              .expect("crnn_net session not initialized")
+84 | |              .metadata()
+   | |               ---------- method `expect` is available on `Result<ModelMetadata<'_>, ort::Error>`
+85 | |              .expect("crnn_net metadata not initialized")
+86 | |              .custom("character")
+   | |               ------------------- method `expect` is available on `std::option::Option<std::string::String>`
+87 | |              .expect("crnn_net character not initialized[0]")
+88 | |              .expect("crnn_net character not initialized[1]");
+   | |              -^^^^^^ method not found in `std::string::String`
+   | |______________|
+   |
+
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/crnn_net.rs:152:48
+    |
+152 |         let input_tensors = Tensor::from_array(input_tensors)?;
+    |                             ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                             |
+    |                             required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/db_net.rs:71:41
+    |
+ 71 |         let tensor = Tensor::from_array(input_tensors)?;
+    |                      ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                      |
+    |                      required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+Some errors have detailed explanations: E0277, E0599, E0616.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `paddle-ocr-rs` (lib) due to 8 previous errors

@@ -1,7 +1,7 @@
 name: 4b throwaway compatibility spike
 on:
   pull_request:
-    paths: ["tools/spike-4b/**", ".github/workflows/spike-4b.yml"]
+    paths: ["tools/spike-4b/src/**", "tools/spike-4b/Cargo.toml", "tools/spike-4b/Cargo.lock", "tools/spike-4b/corpus.json", ".github/workflows/spike-4b.yml"]
 permissions:
   contents: read
 jobs:

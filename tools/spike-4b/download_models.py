@@ -4,6 +4,7 @@ root = pathlib.Path(__file__).parent
 models = root / 'models'
 models.mkdir(exist_ok=True)
 manifest=[]
+expected={(x['repo'],x['file'].split('-',1)[1]):(x['length'],x['sha256']) for x in json.loads((root/'evidence/models-manifest.json').read_text())}
 for repo, revision in [
  ('PaddlePaddle/PP-OCRv5_mobile_det_onnx','e6f4fa85f00e168c862bc462aebca69eef9b3d3d'),
  ('PaddlePaddle/PP-OCRv5_mobile_rec_onnx','ed152b8b495f84de93cda5709d768548a9127622')]:
@@ -11,6 +12,7 @@ for repo, revision in [
  for file in ['inference.onnx','inference.yml','README.md']:
   url=f'https://huggingface.co/{repo}/resolve/{revision}/{file}'
   data=urllib.request.urlopen(url).read()
+  assert (len(data),hashlib.sha256(data).hexdigest()) == expected[(repo,file)], f'asset mismatch: {url}'
   target=models / f'{kind}-{file}'
   target.write_bytes(data)
   manifest.append(dict(repo=repo,revision=revision,url=url,file=target.name,length=len(data),sha256=hashlib.sha256(data).hexdigest(),license='Apache-2.0 (publisher model card)'))

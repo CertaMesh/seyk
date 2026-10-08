@@ -140,6 +140,26 @@ fn render_corpus() -> Result<()> {
         assert_eq!(&pixels[0..4], &[255, 255, 255, 255]);
         assert!(pixels.chunks_exact(4).all(|px| px[3] == 255));
         assert!(pixels.chunks_exact(4).any(|px| px == [255, 0, 0, 255]));
+        let red: Vec<_> = pixels
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(_, p)| *p == [255, 0, 0, 255])
+            .map(|(i, _)| (i as u32 % w, i as u32 / w))
+            .collect();
+        let bounds = (
+            red.iter().map(|p| p.0).min().unwrap(),
+            red.iter().map(|p| p.1).min().unwrap(),
+            red.iter().map(|p| p.0).max().unwrap(),
+            red.iter().map(|p| p.1).max().unwrap(),
+        );
+        let expected = match name {
+            "normal" => (60, 572, 139, 691),
+            "rotated" => (100, 60, 219, 139),
+            "cropped" => (20, 380, 99, 499),
+            _ => unreachable!(),
+        };
+        assert_eq!(bounds, expected, "PDF crop/rotation placement");
+
         image::save_buffer(
             out.join(format!("{name}.png")),
             &pixels,

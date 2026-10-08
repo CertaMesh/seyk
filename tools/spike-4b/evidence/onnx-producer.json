@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "det",
+    "ir_version": 6,
+    "producer_name": "",
+    "producer_version": "",
+    "domain": "",
+    "model_version": null,
+    "doc_string": ""
+  },
+  {
+    "kind": "rec",
+    "ir_version": 3,
+    "producer_name": "",
+    "producer_version": "",
+    "domain": "",
+    "model_version": null,
+    "doc_string": ""
+  }
+]

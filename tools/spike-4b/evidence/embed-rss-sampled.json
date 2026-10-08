@@ -1,0 +1,11 @@
+{
+  "mode": "embed",
+  "exit": 0,
+  "wall_seconds": 41.51601516599476,
+  "sample_interval_ms": 50,
+  "sample_count": 693,
+  "rss_p50_bytes": 1360330752,
+  "rss_p95_bytes": 1361444864,
+  "rss_sample_max_bytes": 1365377024,
+  "note": "RSS samples span process startup/model load and all page work; ps reports KiB on macOS; sampled maximum is not OS high-water mark"
+}
