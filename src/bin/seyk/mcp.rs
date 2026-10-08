@@ -72,7 +72,7 @@ pub enum IndexStatus {
     PassFailed {
         error: String,
     },
-    /// Nothing keeps the cache fresh any more, so searches embed inline.
+    /// This watcher no longer keeps its root fresh; overlapping watchers may still do so.
     Stopped {
         error: String,
     },
@@ -182,6 +182,30 @@ impl Hub {
             cells.push(cell);
         }
         Ok(cells)
+    }
+
+    /// Inline sync owns the request only when every overlapping hub watcher
+    /// has stopped. Check both directions: registering a child before its parent
+    /// can leave two watchers, and a parent request includes its watched children.
+    fn may_sync_inline(&self, paths: &[PathBuf]) -> Result<bool> {
+        let watched = self
+            .watched
+            .lock()
+            .map_err(|_| anyhow!("watcher list lock poisoned"))?;
+        for (root, cell) in watched.iter() {
+            if paths
+                .iter()
+                .any(|path| path.starts_with(root) || root.starts_with(path))
+            {
+                let status = cell
+                    .lock()
+                    .map_err(|_| anyhow!("index status lock poisoned"))?;
+                if !matches!(*status, IndexStatus::Stopped { .. }) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     /// Index `root`, then keep it fresh, reporting into `cell`. Runs on its own
@@ -307,10 +331,10 @@ impl SeykServer {
         };
 
         let status = self.status()?;
-        // Embed inline only when no background indexer keeps the cache fresh. A
-        // failed pass does not count: the watcher retries, and embedding here too
-        // would race it.
-        let inline = matches!(status, None | Some(IndexStatus::Stopped { .. }));
+        // Display status is session-wide; ownership depends on the requested
+        // paths and every overlapping hub watcher, including other sessions.
+        // PassFailed still owns its root because it retries on the next change.
+        let inline = self.hub.may_sync_inline(&paths)?;
         let engine = self.hub.engine()?;
         let mut queries = queries.into_iter();
         let first = queries.next().expect("checked non-empty");
@@ -505,10 +529,11 @@ mod tests {
     use seyk::{
         Dimension, Embedder, Embedding, MemoryCache, Modality, ModelIdentity, ResourceInput,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     /// Bag-of-words hashing, enough for lifecycle tests without model weights.
-    struct WordHash(ModelIdentity);
+    struct WordHash(ModelIdentity, Arc<AtomicUsize>);
 
     impl WordHash {
         fn vector(&self, text: &str) -> seyk_embed::Result<Embedding> {
@@ -534,6 +559,7 @@ mod tests {
             &self,
             inputs: &[ResourceInput<'_>],
         ) -> seyk_embed::Result<Vec<Embedding>> {
+            self.1.fetch_add(inputs.len(), Ordering::SeqCst);
             inputs
                 .iter()
                 .map(|i| match i {
@@ -571,17 +597,24 @@ mod tests {
     }
 
     fn fake_engine() -> Result<SearchEngine> {
+        counted_engine(Arc::new(AtomicUsize::new(0)))
+    }
+
+    fn counted_engine(documents: Arc<AtomicUsize>) -> Result<SearchEngine> {
         Ok(SearchEngine::builder()
-            .embedder(WordHash(ModelIdentity {
-                model_id: "test/word-hash".into(),
-                revision: "1".into(),
-                variant: "test".into(),
-                dimension: Dimension::D128,
-                normalization: "l2".into(),
-                query_prompt: String::new(),
-                document_prompt: String::new(),
-                max_tokens: 512,
-            }))
+            .embedder(WordHash(
+                ModelIdentity {
+                    model_id: "test/word-hash".into(),
+                    revision: "1".into(),
+                    variant: "test".into(),
+                    dimension: Dimension::D128,
+                    normalization: "l2".into(),
+                    query_prompt: String::new(),
+                    document_prompt: String::new(),
+                    max_tokens: 512,
+                },
+                documents,
+            ))
             .cache(MemoryCache::new())
             .build()?)
     }
@@ -795,6 +828,169 @@ mod tests {
             combine(vec![indexing(1, 4), Stopped { error: "x".into() }]),
             Some(Stopped { .. })
         ));
+    }
+
+    fn stopped() -> IndexStatus {
+        IndexStatus::Stopped {
+            error: "test stopped".into(),
+        }
+    }
+
+    fn indexing() -> IndexStatus {
+        IndexStatus::Indexing {
+            segments_done: 0,
+            segments_total: 1,
+        }
+    }
+
+    fn params(paths: &[PathBuf]) -> SearchParams {
+        SearchParams {
+            queries: vec!["quartz".into()],
+            paths: paths.iter().map(|p| p.to_str().unwrap().into()).collect(),
+            limit: None,
+            min_score: None,
+            include: vec![],
+            exclude: vec![],
+            mode: None,
+        }
+    }
+
+    /// Seed statuses without live threads so only the search can embed documents.
+    fn ownership_server(
+        roots: Vec<PathBuf>,
+        watched: Vec<(PathBuf, IndexStatus)>,
+    ) -> (SeykServer, Arc<AtomicUsize>) {
+        let documents = Arc::new(AtomicUsize::new(0));
+        let count = documents.clone();
+        let hub = Hub::new(Box::new(move || counted_engine(count.clone())), false);
+        let mut server = SeykServer::new(roots, hub.clone()).unwrap();
+        let watched: Vec<_> = watched
+            .into_iter()
+            .map(|(path, state)| (path, Arc::new(Mutex::new(state))))
+            .collect();
+        server.watchers = Arc::new(
+            watched
+                .iter()
+                .filter(|(path, _)| server.roots.iter().any(|root| root.starts_with(path)))
+                .map(|(_, cell)| cell.clone())
+                .collect(),
+        );
+        *hub.watched.lock().unwrap() = watched;
+        (server, documents)
+    }
+
+    #[test]
+    fn inline_sync_uses_requested_coverage_not_session_display_status() {
+        // Fresh caches per case prove positive inline cases actually embed too.
+        for (states, requested, expected) in [
+            (vec![stopped(), indexing()], vec![1], 0),
+            (vec![stopped(), indexing()], vec![0, 1], 0),
+            (vec![stopped(), indexing()], vec![0], 1),
+            (vec![stopped(), stopped()], vec![0, 1], 2),
+            (vec![], vec![0, 1], 2),
+            (vec![indexing()], vec![1], 1),
+            (
+                vec![
+                    stopped(),
+                    IndexStatus::PassFailed {
+                        error: "retry".into(),
+                    },
+                ],
+                vec![0, 1],
+                0,
+            ),
+            (vec![stopped(), IndexStatus::Ready], vec![0, 1], 0),
+            (vec![stopped(), IndexStatus::LoadingModel], vec![0, 1], 0),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let roots: Vec<_> = ["a", "b"]
+                .into_iter()
+                .map(|name| {
+                    let root = dir.path().join(name);
+                    std::fs::create_dir(&root).unwrap();
+                    std::fs::write(root.join("note.txt"), format!("quartz pebble {name}")).unwrap();
+                    root.canonicalize().unwrap()
+                })
+                .collect();
+            let has_watchers = !states.is_empty();
+            let display = serde_json::to_value(combine(states.clone())).unwrap();
+            let (server, documents) =
+                ownership_server(roots.clone(), roots.iter().cloned().zip(states).collect());
+            let paths: Vec<_> = requested.into_iter().map(|i| roots[i].clone()).collect();
+            let response = server.run_search(params(&paths)).unwrap();
+            assert_eq!(
+                documents.load(Ordering::SeqCst),
+                expected,
+                "paths: {paths:?}"
+            );
+            assert_eq!(response.segments_embedded, expected);
+            let json = serde_json::to_value(response).unwrap();
+            if has_watchers {
+                assert_eq!(json["index"], display);
+            } else {
+                assert!(json.get("index").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn active_child_owns_search_of_parent_even_outside_session_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let child = root.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("note.txt"), "quartz pebble").unwrap();
+        let (server, documents) = ownership_server(
+            vec![root.clone()],
+            vec![(root.clone(), stopped()), (child, indexing())],
+        );
+        assert_eq!(server.watchers.len(), 1);
+        server.run_search(params(&[root])).unwrap();
+        assert_eq!(documents.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn child_first_registration_checks_later_parent_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let child = root.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("note.txt"), "quartz pebble").unwrap();
+        // Failed startup gives real registration without leaving live indexers.
+        let hub = Hub::new(Box::new(|| Err(anyhow!("test startup"))), true);
+        let inner = SeykServer::new(vec![child.clone()], hub.clone()).unwrap();
+        wait_for(&inner, |s| matches!(s, IndexStatus::Stopped { .. }));
+        let outer = SeykServer::new(vec![root], hub.clone()).unwrap();
+        wait_for(&outer, |s| matches!(s, IndexStatus::Stopped { .. }));
+        assert_eq!(hub.watched().len(), 2);
+        *outer.watchers[0].lock().unwrap() = indexing();
+        let documents = Arc::new(AtomicUsize::new(0));
+        *hub.engine.lock().unwrap() = Some(Arc::new(counted_engine(documents.clone()).unwrap()));
+        let response = inner.run_search(params(&[child])).unwrap();
+        assert!(matches!(response.index, Some(IndexStatus::Stopped { .. })));
+        assert_eq!(documents.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn poisoned_overlapping_status_does_not_enable_inline_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let child = root.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("note.txt"), "quartz pebble").unwrap();
+        let (server, documents) = ownership_server(
+            vec![root.clone()],
+            vec![(root.clone(), stopped()), (child, stopped())],
+        );
+        let cell = server.hub.watched.lock().unwrap()[1].1.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = cell.lock().unwrap();
+            panic!("poison status for test");
+        })
+        .join();
+        let error = server.run_search(params(&[root])).unwrap_err();
+        assert!(error.to_string().contains("index status lock poisoned"));
+        assert_eq!(documents.load(Ordering::SeqCst), 0);
     }
 
     #[test]
