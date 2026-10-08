@@ -901,6 +901,45 @@ mod hydration {
         }
     }
 
+    /// Stress the sibling-retention tradeoff separately from the PDF prepass.
+    #[test]
+    #[ignore = "synthetic 1000-segment hydration measurement"]
+    fn measure_large_resource_hydration() {
+        use std::time::Instant;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("garden.md");
+        let source = (0..1000)
+            .map(|i| format!("# Section {i}\n\nbasil garden number {i}\n\n"))
+            .collect::<String>();
+        fs::write(&path, source).unwrap();
+        let (e, reads) = counted(true, &dir.path().join("cache.db"), true, false);
+        e.index().paths([&path]).execute().unwrap();
+        let resource = seyk_core::ResourceId::from_path(path.canonicalize().unwrap()).unwrap();
+        let count = e
+            .with_cache(|c| c.resource(e.profile_id(), &resource))
+            .unwrap()
+            .unwrap()
+            .segments
+            .len();
+        assert_eq!(count, 1000);
+        query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+        reads.count.store(0, Ordering::SeqCst);
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            let start = Instant::now();
+            let result = query(&e, &path, "basil", SearchMode::Lexical).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(result.hits.len(), 100);
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "P7_LARGE segments={count} hits=100 sqlite reads_per_search={} median_ms={:.3} p95_ms={:.3}",
+            reads.count.load(Ordering::SeqCst) / 20,
+            samples[10],
+            samples[18]
+        );
+    }
+
     /// Public synthetic fixture only. Run explicitly with --ignored --nocapture.
     #[cfg(feature = "pdf-render")]
     #[test]
