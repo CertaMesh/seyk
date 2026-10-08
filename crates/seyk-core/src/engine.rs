@@ -1211,7 +1211,7 @@ impl<'e> SearchRequest<'e> {
             let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
             // Vector IDs break cosine ties, including at the top-k cutoff.
             stored.sort_by_cached_key(|v| (crate::cache::resource_key(&v.resource), v.ordinal));
-            let mut index = BruteForceIndex::with_capacity(dim, stored.len());
+            let mut index = BruteForceIndex::with_capacity(dim, stored.len())?;
             let mut keys = Vec::with_capacity(stored.len());
             for v in stored {
                 // A wrong-sized vector means a corrupt cache; never compare it.

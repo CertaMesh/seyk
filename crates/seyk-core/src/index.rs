@@ -8,6 +8,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use crate::embedding::dot;
+use crate::{Error, Result};
 
 /// A scored match: `id` is the position the vector was added at.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,18 +37,22 @@ pub struct BruteForceIndex {
 }
 
 impl BruteForceIndex {
-    pub fn new(dim: usize) -> Self {
-        Self {
-            dim,
-            data: Vec::new(),
-        }
+    /// Create an empty index. Returns [`Error::Config`] if `dim` is zero.
+    pub fn new(dim: usize) -> Result<Self> {
+        Self::with_capacity(dim, 0)
     }
 
-    pub fn with_capacity(dim: usize, n: usize) -> Self {
-        Self {
+    /// Reserve space for `n` vectors. Returns [`Error::Config`] if `dim` is zero.
+    pub fn with_capacity(dim: usize, n: usize) -> Result<Self> {
+        if dim == 0 {
+            return Err(Error::Config(
+                "vector index dimension must be nonzero".into(),
+            ));
+        }
+        Ok(Self {
             dim,
             data: Vec::with_capacity(dim * n),
-        }
+        })
     }
 
     /// Bytes held by the vector matrix.
@@ -123,8 +128,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn constructors_reject_zero_width() {
+        assert!(matches!(BruteForceIndex::new(0), Err(Error::Config(_))));
+        for capacity in [0, 1, 10] {
+            assert!(matches!(
+                BruteForceIndex::with_capacity(0, capacity),
+                Err(Error::Config(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn positive_width_indexes_start_empty_and_accept_vectors() {
+        for mut index in [
+            BruteForceIndex::new(1).unwrap(),
+            BruteForceIndex::with_capacity(1, 10).unwrap(),
+        ] {
+            assert_eq!(index.dimension(), 1);
+            assert!(index.is_empty());
+            assert_eq!(index.add(&[1.0]), 0);
+            assert_eq!(index.len(), 1);
+            assert_eq!(index.search(&[1.0], 1, 0.0), [Scored { id: 0, score: 1.0 }]);
+        }
+    }
+
+    #[test]
     fn returns_best_first_with_threshold() {
-        let mut idx = BruteForceIndex::new(2);
+        let mut idx = BruteForceIndex::new(2).unwrap();
         idx.add(&[1.0, 0.0]);
         idx.add(&[0.0, 1.0]);
         idx.add(&[0.6, 0.8]);
@@ -137,7 +167,7 @@ mod tests {
     #[test]
     fn matches_full_sort() {
         let dim = 8;
-        let mut idx = BruteForceIndex::new(dim);
+        let mut idx = BruteForceIndex::new(dim).unwrap();
         let mut seed = 7u64;
         let mut rnd = || {
             seed = seed
