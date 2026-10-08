@@ -623,28 +623,19 @@ impl SearchEngine {
             let digest = blake3::hash(page.text.as_bytes()).to_hex().to_string();
             for segment in self.segmenter.segment(&page.text, TextFormat::Plain) {
                 let title = segment_title(r.title.as_deref(), None);
-                jobs.push(Job {
-                    segment: CachedSegment {
-                        locator: ResourceLocator::PageText {
-                            page: page.page,
-                            byte_start: segment.byte_range.start as u64,
-                            byte_end: segment.byte_range.end as u64,
-                            text_version: crate::pdf::TEXT_VERSION.into(),
-                            page_text_hash: digest.clone(),
-                        },
-                        heading: None,
-                        input_hash: input_hash(&[
-                            "text",
-                            title.as_deref().unwrap_or(""),
-                            &segment.text,
-                        ]),
+                jobs.push(Job::text(
+                    ResourceLocator::PageText {
+                        page: page.page,
+                        byte_start: segment.byte_range.start as u64,
+                        byte_end: segment.byte_range.end as u64,
+                        text_version: crate::pdf::TEXT_VERSION.into(),
+                        page_text_hash: digest.clone(),
                     },
-                    lexical_body: segment.text.clone(),
-                    input: JobInput::Text {
-                        title,
-                        text: segment.text,
-                    },
-                });
+                    None,
+                    segment.text.clone(),
+                    title,
+                    segment.text,
+                ));
             }
         }
         if jobs.is_empty() {
@@ -686,26 +677,19 @@ impl SearchEngine {
                                 TextFormat::Markdown => strip_link_targets(&s.text),
                                 TextFormat::Plain | TextFormat::Code => s.text.clone(),
                             };
-                            let hash =
-                                input_hash(&["text", title.as_deref().unwrap_or(""), &model_text]);
-                            Job {
-                                segment: CachedSegment {
-                                    locator: ResourceLocator::Text {
-                                        byte_start: s.byte_range.start as u64,
-                                        byte_end: s.byte_range.end as u64,
-                                        line_start: Some(s.line_start),
-                                        line_end: Some(s.line_end),
-                                    },
-                                    heading: s.heading,
-                                    input_hash: hash,
+                            Job::text(
+                                ResourceLocator::Text {
+                                    byte_start: s.byte_range.start as u64,
+                                    byte_end: s.byte_range.end as u64,
+                                    line_start: Some(s.line_start),
+                                    line_end: Some(s.line_end),
                                 },
+                                s.heading,
                                 // Index the original source, including link targets.
-                                lexical_body: s.text,
-                                input: JobInput::Text {
-                                    title,
-                                    text: model_text,
-                                },
-                            }
+                                s.text,
+                                title,
+                                model_text,
+                            )
                         })
                         .collect(),
                     Vec::new(),
@@ -746,6 +730,28 @@ struct Job {
     segment: CachedSegment,
     lexical_body: String,
     input: JobInput,
+}
+
+impl Job {
+    /// Derive cache identity from exactly the title and text sent to the model.
+    /// Lexical text may retain source syntax that model preparation removes.
+    fn text(
+        locator: ResourceLocator,
+        heading: Option<String>,
+        lexical_body: String,
+        title: Option<String>,
+        text: String,
+    ) -> Self {
+        Self {
+            segment: CachedSegment {
+                locator,
+                heading,
+                input_hash: input_hash(&["text", title.as_deref().unwrap_or(""), &text]),
+            },
+            lexical_body,
+            input: JobInput::Text { title, text },
+        }
+    }
 }
 
 enum JobInput {
