@@ -1173,24 +1173,6 @@ impl<'e> SearchRequest<'e> {
         let depth = (self.limit * 4).max(50);
 
         let mut segments = SegmentTable::default();
-        // Lexical caches limit their result list before the engine sees it.
-        // Reserve room for every ineligible PDF segment, then filter before
-        // restoring the candidate depth. A disabled scan cannot exhaust it.
-        let mut unsupported = HashSet::new();
-        for resource in &wanted {
-            if metadata
-                .get(resource)
-                .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
-                && let Some(cached) = engine.with_cache(|c| c.resource(pid, resource))?
-            {
-                for (ordinal, segment) in cached.segments.into_iter().enumerate() {
-                    if !engine.supports_locator(&cached.metadata, &segment.locator) {
-                        unsupported.insert((resource.clone(), ordinal));
-                    }
-                    segments.insert(resource.clone(), ordinal, segment);
-                }
-            }
-        }
         let mut semantic: Vec<(SegmentKey, f32, usize)> = Vec::new();
         let mut searched = 0;
         if self.mode != SearchMode::Lexical {
@@ -1243,6 +1225,26 @@ impl<'e> SearchRequest<'e> {
         let mut lexical: Vec<(SegmentKey, f32)> = Vec::new();
         let mut named: Vec<SegmentKey> = Vec::new();
         if self.mode != SearchMode::Semantic {
+            // Semantic candidates already carry locators in vectors_for; only
+            // lexical search needs this separate eligibility lookup.
+            // Lexical caches limit their result list before the engine sees it.
+            // Reserve room for every ineligible PDF segment, then filter before
+            // restoring the candidate depth. A disabled scan cannot exhaust it.
+            let mut unsupported = HashSet::new();
+            for resource in &wanted {
+                if metadata
+                    .get(resource)
+                    .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
+                    && let Some(cached) = engine.with_cache(|c| c.resource(pid, resource))?
+                {
+                    for (ordinal, segment) in cached.segments.into_iter().enumerate() {
+                        if !engine.supports_locator(&cached.metadata, &segment.locator) {
+                            unsupported.insert((resource.clone(), ordinal));
+                        }
+                        segments.insert(resource.clone(), ordinal, segment);
+                    }
+                }
+            }
             let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
             for hit in engine.with_cache(|c| {
                 c.lexical_search(
