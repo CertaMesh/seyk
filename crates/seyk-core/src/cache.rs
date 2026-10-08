@@ -946,7 +946,13 @@ impl EmbeddingCache for SqliteCache {
                     heading: r.get(2)?,
                     input_hash: r.get(3)?,
                 },
-                vector: from_bytes(&r.get::<_, Vec<u8>>(4)?),
+                vector: from_bytes(&r.get::<_, Vec<u8>>(4)?).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Blob,
+                        Box::new(error),
+                    )
+                })?,
             });
         }
         Ok(out)

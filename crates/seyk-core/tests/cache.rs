@@ -43,6 +43,77 @@ fn search(engine: &SearchEngine, root: &Path) -> seyk_core::SearchResults {
 }
 
 #[test]
+fn malformed_vector_bytes_fail_direct_reads_and_search() {
+    for remainder in 1..=3 {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("notes.txt");
+        fs::write(&file, "alpha garden").unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let (engine, fake) =
+            shared_engine(SqliteCache::open(&database).unwrap(), Dimension::D128, "r1");
+        let hits = search(&engine, &file).hits;
+        assert!(!hits.is_empty());
+        let wanted = paths(&[&hits[0].resource]);
+        let profile = engine.profile_id();
+        let cache = SqliteCache::open(&database).unwrap();
+        let valid = cache.vectors_for(profile, &wanted).unwrap();
+        assert_eq!(valid.len(), 1);
+        assert_eq!(valid[0].vector.len(), 128);
+
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        let mut bytes: Vec<u8> = conn
+            .query_row(
+                "SELECT vector FROM embeddings WHERE profile = ?1 AND input_hash = ?2",
+                rusqlite::params![profile, valid[0].segment.input_hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bytes.len(), 128 * 4);
+        // A full-width vector plus a partial float used to pass the engine's width check.
+        bytes.extend(vec![0xff; remainder]);
+        assert_eq!(
+            conn.execute(
+                "UPDATE embeddings SET vector = ?1 WHERE profile = ?2 AND input_hash = ?3",
+                rusqlite::params![bytes, profile, valid[0].segment.input_hash],
+            )
+            .unwrap(),
+            1
+        );
+
+        let direct_error = cache.vectors_for(profile, &wanted).unwrap_err();
+        assert_malformed_vector_error(direct_error);
+        fake.reset_resource_count();
+        for mode in [
+            seyk_core::SearchMode::Semantic,
+            seyk_core::SearchMode::Hybrid,
+        ] {
+            let search_error = engine
+                .search("alpha garden")
+                .paths([&file])
+                .mode(mode)
+                .execute()
+                .unwrap_err();
+            assert_malformed_vector_error(search_error);
+        }
+        assert_eq!(fake.resource_count(), 0, "read the corrupted cached vector");
+    }
+}
+
+fn assert_malformed_vector_error(error: seyk_core::Error) {
+    match error {
+        seyk_core::Error::Cache(rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Blob,
+            source,
+        )) => assert_eq!(
+            source.to_string(),
+            "vector byte length must be a multiple of 4"
+        ),
+        other => panic!("expected a malformed vector cache error, got {other:?}"),
+    }
+}
+
+#[test]
 #[cfg_attr(
     windows,
     ignore = "Solo #4349: timestamp changes need a writable Windows file handle"

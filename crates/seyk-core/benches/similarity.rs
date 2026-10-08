@@ -48,7 +48,7 @@ fn brute_force(c: &mut Criterion) {
         let mut rng = Rng(dim as u64);
         let query = rng.unit_vector(dim);
         for n in SIZES {
-            let mut index = BruteForceIndex::with_capacity(dim, n);
+            let mut index = BruteForceIndex::with_capacity(dim, n).unwrap();
             for _ in 0..n {
                 index.add(&rng.unit_vector(dim));
             }
