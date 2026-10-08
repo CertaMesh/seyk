@@ -12,10 +12,10 @@ license = "Apache-2.0"
 [package]
 name = "seyk"
 version.workspace = true
-edition = "2024"
-rust-version = "1.89"
+edition.workspace = true
+rust-version.workspace = true
 description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"
-license = "Apache-2.0"
+license.workspace = true
 readme = "README.md"
 keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "search"]
 categories = ["command-line-utilities", "text-processing"]

@@ -506,6 +506,14 @@ the CLI supplies the process boundary needed by downstream wrappers.
   unstable: they may change before 1.0, and a range/streaming method is planned
   for audio and video.
 
+### Audit 2026-10: public API changes
+
+- `BruteForceIndex::new` and `BruteForceIndex::with_capacity` now return
+  `Result<Self>`, with `Error::Config` for zero width ([PR #27](https://github.com/CertaMesh/seyk/pull/27)).
+- Named Hugging Face revisions now record the resolved commit in `ModelIdentity`.
+  Alias/branch users get a new cache profile and re-embed once; users of pinned
+  commits are unaffected ([PR #20](https://github.com/CertaMesh/seyk/pull/20)).
+
 ### What we learned
 
 Verification belongs before extractor dispatch, where every implementation

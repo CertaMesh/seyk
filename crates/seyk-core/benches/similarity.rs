@@ -61,9 +61,8 @@ fn brute_force(c: &mut Criterion) {
     }
 }
 
-/// Reference kernel with eight independent accumulators. The library's
-/// iterator `sum` is a strict sequential float reduction that LLVM cannot
-/// vectorise; this measures what splitting it would gain.
+/// Reference kernel with eight independent accumulators, matching the library's
+/// lane-based reduction so the benchmark can compare equivalent kernels.
 fn dot_lanes(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
     let ((ca, ra), (cb, rb)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
