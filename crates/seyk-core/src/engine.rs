@@ -1725,6 +1725,8 @@ struct PreviewReader {
     pages: HashMap<(ResourceId, u32), Option<String>>,
     #[cfg(feature = "pdf")]
     page_bytes: usize,
+    #[cfg(all(test, feature = "pdf"))]
+    page_decodes: usize,
 }
 
 impl PreviewReader {
@@ -1756,9 +1758,14 @@ impl PreviewReader {
             {
                 let key = (path.clone(), *page);
                 if !self.pages.contains_key(&key) {
+                    #[cfg(test)]
+                    {
+                        self.page_decodes += 1;
+                    }
                     let text = crate::pdf::read_page(bytes, path, *page).ok();
                     if let Some(t) = &text {
                         if self.page_bytes + t.len() > crate::pdf::MAX_DOCUMENT_TEXT_BYTES {
+                            self.pages.insert(key, None);
                             return None;
                         }
                         self.page_bytes += t.len();
@@ -2020,6 +2027,101 @@ mod pre_split_golden {
             );
         }
     }
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn preview_decodes_a_budget_rejected_page_once_and_keeps_smaller_pages_available() {
+        use crate::pdf::fixture::{Kind, pdf};
+
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = |name: &str, texts: &[&str]| {
+            let path = dir.path().join(name);
+            let source = ResourceId::from_path(&path).unwrap();
+            let bytes = pdf(texts, Kind::Plain);
+            std::fs::write(&path, &bytes).unwrap();
+            let meta = ResourceMetadata {
+                media_type: Some("application/pdf".into()),
+                modality: crate::Modality::Document,
+                size_bytes: bytes.len() as u64,
+                modified_ns: None,
+                content_hash: blake3::hash(&bytes).to_hex().to_string(),
+            };
+            let pages = crate::pdf::read_pages(&bytes, &source).unwrap();
+            (source, meta, pages)
+        };
+        let (large, large_meta, large_pages) = fixture(
+            "large.pdf",
+            &["This page exceeds the remaining preview budget.", "basil"],
+        );
+        let (small, small_meta, small_pages) = fixture("small.pdf", &["mint"]);
+        let locator = |page: &crate::pdf::PageText| ResourceLocator::PageText {
+            page: page.page,
+            byte_start: 0,
+            byte_end: page.text.len() as u64,
+            text_version: crate::pdf::TEXT_VERSION.into(),
+            page_text_hash: blake3::hash(page.text.as_bytes()).to_hex().to_string(),
+        };
+        // Simulate earlier admitted pages leaving room for just the two small pages.
+        let remaining = large_pages[1].text.len() + small_pages[0].text.len();
+        assert!(large_pages[0].text.len() > remaining);
+        let initial_bytes = crate::pdf::MAX_DOCUMENT_TEXT_BYTES - remaining;
+        let mut reader = PreviewReader {
+            page_bytes: initial_bytes,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            assert!(
+                reader
+                    .preview(
+                        &crate::FsProvider,
+                        &large,
+                        &locator(&large_pages[0]),
+                        &large_meta,
+                        200
+                    )
+                    .is_none()
+            );
+        }
+        assert_eq!(reader.page_decodes, 1);
+        assert_eq!(reader.page_bytes, initial_bytes);
+
+        // Reject only the page, not the whole resource or the remaining request.
+        for (source, meta, page, expected) in [
+            (&large, &large_meta, &large_pages[1], "basil"),
+            (&small, &small_meta, &small_pages[0], "mint"),
+        ] {
+            let valid = locator(page);
+            let mut invalid = valid.clone();
+            if let ResourceLocator::PageText { byte_end, .. } = &mut invalid {
+                *byte_end += 1;
+            }
+            assert!(
+                reader
+                    .preview(&crate::FsProvider, source, &invalid, meta, 200)
+                    .is_none()
+            );
+            assert_eq!(
+                reader
+                    .preview(&crate::FsProvider, source, &valid, meta, 200)
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        assert_eq!(reader.page_decodes, 3);
+        assert_eq!(reader.page_bytes, crate::pdf::MAX_DOCUMENT_TEXT_BYTES);
+        assert!(
+            reader
+                .preview(
+                    &crate::FsProvider,
+                    &large,
+                    &locator(&large_pages[0]),
+                    &large_meta,
+                    200
+                )
+                .is_none()
+        );
+        assert_eq!(reader.page_decodes, 3);
+    }
+
     #[cfg(feature = "pdf")]
     #[test]
     fn preview_rejects_a_valid_page_in_a_corrupt_resource() {
