@@ -19,7 +19,7 @@ use crate::extractor::{
 use crate::index::{BruteForceIndex, Scored, VectorIndex};
 use crate::lexical::LexicalQuery;
 use crate::segment::{TextFormat, TextSegmenter};
-use crate::{Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
+use crate::{Embedding, Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
 use crate::{FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion};
 
 /// Bump when the way segments are turned into model inputs changes.
@@ -555,6 +555,25 @@ impl SearchEngine {
         Ok(upto.max(from))
     }
 
+    /// Validate backend output before associating vectors with requests or caching them.
+    /// Preserve the backend's order and exact vector bytes without normalization.
+    fn checked_embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>> {
+        let vectors = self.embedder.embed_batch(requests)?;
+        if vectors.len() != requests.len() {
+            return Err(Error::Embedding(
+                "embedder returned the wrong number of vectors".into(),
+            ));
+        }
+        let dimension = self.embedder.dimension().get();
+        if let Some(vector) = vectors.iter().find(|v| v.dim() != dimension) {
+            return Err(Error::DimensionMismatch {
+                expected: dimension,
+                actual: vector.dim(),
+            });
+        }
+        Ok(vectors)
+    }
+
     /// Embed a batch; on failure retry one by one so a single bad input only skips its resource.
     fn embed_batch(&self, batch: &[(usize, &Job)]) -> Vec<Result<Vec<f32>>> {
         let inputs: Vec<EmbeddingRequest> = batch
@@ -564,28 +583,16 @@ impl SearchEngine {
                 task: EmbeddingTask::SearchDocument,
             })
             .collect();
-        match self.embedder.embed_batch(&inputs) {
-            Ok(vs) if vs.len() == inputs.len() => {
-                vs.into_iter().map(|v| Ok(v.into_vec())).collect()
-            }
-            _ if inputs.len() > 1 => inputs
+        match self.checked_embed_batch(&inputs) {
+            Ok(vs) => vs.into_iter().map(|v| Ok(v.into_vec())).collect(),
+            Err(_) if inputs.len() > 1 => inputs
                 .iter()
                 .map(|i| {
-                    self.embedder
-                        .embed_batch(std::slice::from_ref(i))
-                        .and_then(|mut v| {
-                            v.pop().ok_or_else(|| {
-                                seyk_embed::Error::Embedding("no vector returned".into())
-                            })
-                        })
-                        .map(|e| e.into_vec())
-                        .map_err(Error::from)
+                    self.checked_embed_batch(std::slice::from_ref(i))
+                        .map(|mut v| v.remove(0).into_vec())
                 })
                 .collect(),
-            Ok(_) => vec![Err(Error::Embedding(
-                "embedder returned the wrong number of vectors".into(),
-            ))],
-            Err(e) => vec![Err(e.into())],
+            Err(e) => vec![Err(e)],
         }
     }
 
