@@ -739,7 +739,7 @@ These limits bound queued rasters, not hostile decoder allocation or CPU time.
 
 ### Deliberately not implemented
 
-OCR is deferred to [Solo todo 4378](solo://proj/73/todo/4378). The compatibility
+OCR is tracked as a follow-up. The compatibility
 spike found that paddle-ocr-rs 0.6.1 does not compile with the pinned single
 ORT rc.13 runtime, and model conversion provenance was incomplete. No OCR code,
 weights, download command, fork, MSRV increase or alternate inference runtime is
@@ -784,13 +784,24 @@ hashes, crop/rotation placement and opaque white pixels. Core tests cover mixed
 PDFs, vision-off diagnostics, cache capabilities, image omission and malformed
 model outputs with prior resource bindings preserved.
 
+The release scan evaluation on Apple M5 Max / 64 GiB / macOS 26.5 measured
+Recall@5=1.000 and MRR@20=1.000 (all 14 queries ranked the correct page first).
+With q8 Gemma revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0`,
+256 dimensions and one CPU thread, end-to-end indexing per page was
+6668 ms p50 / 7693 ms p95, 136896 ms total for 20 pages. Model loading took
+498 ms; peak process RSS was 1,502,969,856 bytes, including fixture generation,
+model and engine. These are shared-host measurements, not isolated performance
+benchmarks. The earlier compatibility spike measured rendering alone at roughly
+34 ms/page; image embedding accounts for seconds of CPU work per page. The
+`--text-only` option avoids scan embedding while retaining embedded-text search.
+
 ### Next
 
-Complete the compatible single-ORT OCR adapter and model-provenance work in todo
-4378 before adding scan text extraction. Process isolation remains separate.
+Complete the compatible single-ORT OCR adapter and model-provenance follow-up
+before adding scan text extraction. Process isolation remains separate.
 During the Actions billing block the full local macOS merge gate supplies
 implementation verification; Linux/Windows and all release targets must be
-rerun under [Solo todo 4381](solo://proj/73/todo/4381). The earlier four-target
+rerun once Actions is restored; this is tracked as a follow-up. The earlier four-target
 compatibility spike established renderer build/hash/link feasibility, but does
 not replace verification of this implementation. Platform-sensitive areas are
 floating-point raster/PNG determinism, filesystem behavior and dependency

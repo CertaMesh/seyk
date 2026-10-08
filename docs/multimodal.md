@@ -1,8 +1,8 @@
 # Multimodal support: status and what is missing
 
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
-space. This crate implements text and images. This note records what audio, video
-and PDF still need, based on the model's processor configuration
+space. This crate implements text, images and PDF retrieval. This note records
+current support and what audio, video and scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 `Gemma4AudioFeatureExtractor`).
@@ -10,9 +10,8 @@ implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 ## What is already in place
 
 - **Types.** `ResourceInput` has `Text`, `Image`, `Audio { samples, sample_rate }`
-  and `Video { frames }` variants. `ResourceLocator` has `Text`, `Page`,
-  `Time { start_ms, end_ms }` and `WholeResource`. Neither needs to change for
-  audio, video or PDF.
+  and `Video { frames }` variants. `ResourceLocator` has `Text`, `PageText`, `Page`,
+  `Time { start_ms, end_ms }` and `WholeResource`. PDF uses `PageText` for embedded text and `Page` for scanned pages.
 - **Capability check.** `Embedder::supports(Modality)` gates every resource. The
   engine reports unsupported files as skipped, with a reason, instead of guessing.
 - **Model plumbing.** The ONNX text model already takes `image_features`,
@@ -100,14 +99,31 @@ What is needed:
    frames and audio together in one interleaved input is supported by the model,
    but has not been evaluated here.
 
-## PDF (not implemented)
+## PDF (retrieval done, OCR deferred)
 
-`ResourceLocator::Page` is reserved. There are two options, and they can coexist:
+Normal builds support both embedded text and scanned pages. The `pdf` feature
+extracts embedded text per physical page and reuses the text segmenter. Hits
+carry `PageText` locators; extraction verifies the PDF content hash, extraction
+version and page-text hash before returning readable evidence.
 
-- extract text per page and reuse the text segmenter;
-- render pages to images and use the vision path. EmbeddingGemma 2 reports
-  MMEB-VisDoc NDCG@5 of 67.84, so page images are a real option for scanned or
-  layout-heavy documents.
+The optional `pdf-render` feature, enabled in normal CLI/release builds, renders
+pages without usable embedded text through pinned Hayro 0.5.0 and the existing
+Gemma image embedding path. It preserves crop and rotation, uses bundled fonts
+and a white background, and caps the longest edge at 2048 pixels. Each scanned
+page produces a `Page` hit with no text preview. Mixed PDFs keep both kinds of
+hit. Image-XObject pages that render nearly uniform get a page diagnostic
+instead of an embedding; faint scans and partially omitted corrupt images
+remain recall limitations.
+
+Scanned-page text extraction needs OCR, which is tracked as a follow-up.
+`extract` on a `Page` hit returns the typed `PdfOcrUnavailable` error; no OCR
+model is shipped or downloaded. Text-only models, `--text-only`, and builds
+without `pdf-render` retain embedded-text search and report omitted image pages
+as page diagnostics. Rendering alone measured roughly 34 ms/page in the spike;
+image embedding takes seconds per page on CPU. See the
+[Phase 4b architecture report](architecture.md#phase-4b-retrieval--scanned-pdf-pages)
+for the synthetic quality and end-to-end timing measurements, batching limits,
+cache behavior and parser containment contract.
 
 ## Verification standard
 

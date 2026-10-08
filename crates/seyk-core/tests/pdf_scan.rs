@@ -341,3 +341,63 @@ fn corrupt_image_is_a_page_diagnostic_and_capability_changes_retry_only_pdfs() {
             .is_empty()
     );
 }
+
+#[cfg(feature = "pdf-render")]
+#[test]
+fn unsupported_first_page_cannot_consume_a_filename_result_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.pdf");
+    let cache = dir.path().join("cache.db");
+    let text = b"BT /F1 12 Tf 50 720 Td (Public garden with basil.) Tj ET";
+    std::fs::write(
+        &path,
+        fixture::document(&[(fixture::DRAWING, ""), (text, "")], None),
+    )
+    .unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(Model::new(true))
+        .cache(SqliteCache::open(&cache).unwrap())
+        .build()
+        .unwrap();
+    assert_eq!(
+        engine
+            .index()
+            .paths([&path])
+            .execute()
+            .unwrap()
+            .sync
+            .segments_embedded,
+        2
+    );
+    let profile = engine.profile_id().to_owned();
+    drop(engine);
+    let engine = SearchEngine::builder()
+        .embedder(Model::new(false))
+        .cache(SqliteCache::open(&cache).unwrap())
+        .build()
+        .unwrap();
+    assert_eq!(engine.profile_id(), profile);
+    for mode in [
+        SearchMode::Hybrid,
+        SearchMode::Lexical,
+        SearchMode::Semantic,
+    ] {
+        let result = engine
+            .search("mixed.pdf")
+            .paths([&path])
+            .sync(false)
+            .previews(None)
+            .limit(1)
+            .mode(mode)
+            .execute()
+            .unwrap();
+        assert_eq!(result.hits.len(), 1, "{mode:?}");
+        assert!(
+            matches!(
+                result.hits[0].locator,
+                ResourceLocator::PageText { page: 2, .. }
+            ),
+            "{mode:?}"
+        );
+    }
+}

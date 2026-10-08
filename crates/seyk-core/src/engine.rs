@@ -1173,6 +1173,24 @@ impl<'e> SearchRequest<'e> {
         let depth = (self.limit * 4).max(50);
 
         let mut segments = SegmentTable::default();
+        // Lexical caches limit their result list before the engine sees it.
+        // Reserve room for every ineligible PDF segment, then filter before
+        // restoring the candidate depth. A disabled scan cannot exhaust it.
+        let mut unsupported = HashSet::new();
+        for resource in &wanted {
+            if metadata
+                .get(resource)
+                .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
+                && let Some(cached) = engine.with_cache(|c| c.resource(pid, resource))?
+            {
+                for (ordinal, segment) in cached.segments.into_iter().enumerate() {
+                    if !engine.supports_locator(&cached.metadata, &segment.locator) {
+                        unsupported.insert((resource.clone(), ordinal));
+                    }
+                    segments.insert(resource.clone(), ordinal, segment);
+                }
+            }
+        }
         let mut semantic: Vec<(SegmentKey, f32, usize)> = Vec::new();
         let mut searched = 0;
         if self.mode != SearchMode::Lexical {
@@ -1226,8 +1244,18 @@ impl<'e> SearchRequest<'e> {
         let mut named: Vec<SegmentKey> = Vec::new();
         if self.mode != SearchMode::Semantic {
             let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
-            for hit in engine.with_cache(|c| c.lexical_search(pid, &query, &wanted, depth))? {
+            for hit in engine.with_cache(|c| {
+                c.lexical_search(
+                    pid,
+                    &query,
+                    &wanted,
+                    depth.saturating_add(unsupported.len()),
+                )
+            })? {
                 let key = (hit.resource, hit.ordinal);
+                if unsupported.contains(&key) {
+                    continue;
+                }
                 if metadata
                     .get(&key.0)
                     .is_some_and(|m| m.metadata.media_type.as_deref() == Some("application/pdf"))
@@ -1240,16 +1268,31 @@ impl<'e> SearchRequest<'e> {
                     }
                 }
                 lexical.push((key, hit.score));
+                if lexical.len() == depth {
+                    break;
+                }
             }
-            named = resources
-                .iter()
-                .filter(|r| {
-                    self.queries
+            for resource in resources.iter().filter(|r| {
+                wanted.contains(&r.id)
+                    && self
+                        .queries
                         .iter()
                         .any(|q| names_file(q, Path::new(&r.id.labels().1)))
-                })
-                .map(|r| (r.id.clone(), 0))
-                .collect();
+            }) {
+                let Some(cached) = engine.with_cache(|c| c.resource(pid, &resource.id))? else {
+                    continue;
+                };
+                // A filename identifies the first supported cached location,
+                // which need not be ordinal zero in a mixed PDF.
+                if let Some((ordinal, segment)) = cached
+                    .segments
+                    .into_iter()
+                    .enumerate()
+                    .find(|(_, s)| engine.supports_locator(&cached.metadata, &s.locator))
+                {
+                    named.push(segments.insert(resource.id.clone(), ordinal, segment));
+                }
+            }
             if self.mode == SearchMode::Lexical {
                 searched = lexical.len();
             }
