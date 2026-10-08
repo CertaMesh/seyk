@@ -1,0 +1,90 @@
+[
+  {
+    "target": "aarch64-apple-darwin",
+    "baseline_bytes": 18264192,
+    "probe_bytes": 24743872,
+    "delta_bytes": 6479680,
+    "new_imports": [],
+    "imports": [
+      "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+      "/System/Library/Frameworks/CoreML.framework/Versions/A/CoreML",
+      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+      "/usr/lib/libSystem.B.dylib",
+      "/usr/lib/libc++.1.dylib",
+      "/usr/lib/libobjc.A.dylib"
+    ],
+    "ocr_compile_errors": 8,
+    "render_hashes_equal": 23
+  },
+  {
+    "target": "aarch64-unknown-linux-gnu",
+    "baseline_bytes": 23346664,
+    "probe_bytes": 30162448,
+    "delta_bytes": 6815784,
+    "new_imports": [],
+    "imports": [
+      "/lib/ld-linux-aarch64.so.1",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libstdc++.so.6",
+      "linux-vdso.so.1"
+    ],
+    "ocr_compile_errors": 8,
+    "render_hashes_equal": 23
+  },
+  {
+    "target": "x86_64-pc-windows-msvc",
+    "baseline_bytes": 21544960,
+    "probe_bytes": 30768128,
+    "delta_bytes": 9223168,
+    "new_imports": [
+      "bcryptprimitives.dll"
+    ],
+    "imports": [
+      "ADVAPI32.dll",
+      "DirectML.dll",
+      "KERNEL32.dll",
+      "MSVCP140.dll",
+      "MSVCP140_1.dll",
+      "SETUPAPI.dll",
+      "VCRUNTIME140.dll",
+      "VCRUNTIME140_1.dll",
+      "api-ms-win-core-path-l1-1-0.dll",
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "api-ms-win-crt-convert-l1-1-0.dll",
+      "api-ms-win-crt-filesystem-l1-1-0.dll",
+      "api-ms-win-crt-heap-l1-1-0.dll",
+      "api-ms-win-crt-locale-l1-1-0.dll",
+      "api-ms-win-crt-math-l1-1-0.dll",
+      "api-ms-win-crt-runtime-l1-1-0.dll",
+      "api-ms-win-crt-stdio-l1-1-0.dll",
+      "api-ms-win-crt-string-l1-1-0.dll",
+      "api-ms-win-crt-time-l1-1-0.dll",
+      "bcryptprimitives.dll",
+      "d3d12.dll",
+      "dbghelp.dll",
+      "dxgi.dll",
+      "ntdll.dll"
+    ],
+    "ocr_compile_errors": 8,
+    "render_hashes_equal": 23
+  },
+  {
+    "target": "x86_64-unknown-linux-gnu",
+    "baseline_bytes": 22970016,
+    "probe_bytes": 32183232,
+    "delta_bytes": 9213216,
+    "new_imports": [],
+    "imports": [
+      "/lib64/ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libstdc++.so.6",
+      "linux-vdso.so.1"
+    ],
+    "ocr_compile_errors": 8,
+    "render_hashes_equal": 23
+  }
+]

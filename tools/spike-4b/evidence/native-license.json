@@ -1,0 +1,20 @@
+{
+  "package": "clipper-sys 0.8.0",
+  "component": "Clipper 6.4.2",
+  "license": "BSL-1.0",
+  "note": "Native source notice differs from MIT wrapper package metadata; existing cargo-deny allow-list does not enumerate BSL-1.0. Not treated as product licence approval.",
+  "files": [
+    {
+      "name": "LICENSE.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "name": "clipper.hpp",
+      "sha256": "734eba9dc9d399089b2b467017074bd24728a1b9e64c7429e827806ed10e54cc"
+    },
+    {
+      "name": "clipper.cpp",
+      "sha256": "5309e7ba034dfaf9c16aaf23378fb8023c4fcfe7e8ad91ee8790ea8a53e9b2b4"
+    }
+  ]
+}

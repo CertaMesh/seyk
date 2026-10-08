@@ -1,0 +1,4 @@
+ort v2.0.0-rc.13
+├── paddle-ocr-rs v0.6.1
+│   └── seyk-4b-spike v0.0.0 (/home/runner/work/seyk/seyk/tools/spike-4b)
+└── seyk-4b-spike v0.0.0 (/home/runner/work/seyk/seyk/tools/spike-4b)

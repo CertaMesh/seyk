@@ -1,0 +1,17 @@
+[
+  {
+    "fixture": "normal",
+    "local_vs_macos_ci_equal": true,
+    "sha256": "4ede3f8e4fd91ddd196f8734a834bd855fd2c158cd3bc737f77e340c3fa035d8"
+  },
+  {
+    "fixture": "rotated",
+    "local_vs_macos_ci_equal": true,
+    "sha256": "5b62a4b6947719f700d9dc60db9f7ce035ac316f4b9af2c632a0682a0d5ac974"
+  },
+  {
+    "fixture": "cropped",
+    "local_vs_macos_ci_equal": true,
+    "sha256": "a4dc651d7c35c609666d3f2eebcd45d68b6a02ee5b2786a55d5d726b151349b9"
+  }
+]

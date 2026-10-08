@@ -1,0 +1,43 @@
+Microsoft (R) COFF/PE Dumper Version 14.44.35229.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file target\release\seyk-4b-spike.exe
+
+File Type: EXECUTABLE IMAGE
+
+  Image has the following dependencies:
+
+    api-ms-win-core-synch-l1-2-0.dll
+    bcryptprimitives.dll
+    dxgi.dll
+    d3d12.dll
+    DirectML.dll
+    KERNEL32.dll
+    ntdll.dll
+    dbghelp.dll
+    MSVCP140.dll
+    MSVCP140_1.dll
+    api-ms-win-core-path-l1-1-0.dll
+    SETUPAPI.dll
+    ADVAPI32.dll
+    VCRUNTIME140.dll
+    VCRUNTIME140_1.dll
+    api-ms-win-crt-math-l1-1-0.dll
+    api-ms-win-crt-string-l1-1-0.dll
+    api-ms-win-crt-runtime-l1-1-0.dll
+    api-ms-win-crt-heap-l1-1-0.dll
+    api-ms-win-crt-stdio-l1-1-0.dll
+    api-ms-win-crt-convert-l1-1-0.dll
+    api-ms-win-crt-filesystem-l1-1-0.dll
+    api-ms-win-crt-time-l1-1-0.dll
+    api-ms-win-crt-locale-l1-1-0.dll
+
+  Summary
+
+       60000 .data
+       85000 .pdata
+      788000 .rdata
+       5B000 .reloc
+     1498000 .text
+        1000 _RDATA

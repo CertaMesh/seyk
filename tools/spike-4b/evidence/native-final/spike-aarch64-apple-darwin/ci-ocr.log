@@ -1,0 +1,196 @@
+    Checking paddle-ocr-rs v0.6.1
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/angle_net.rs:84:48
+    |
+ 84 |         let input_tensors = Tensor::from_array(input_tensors)?;
+    |                             ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                             |
+    |                             required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:20:73
+   |
+20 |                 .with_optimization_level(GraphOptimizationLevel::Level2)?
+   |                  -------------------------------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:21:48
+   |
+21 |                 .with_intra_threads(num_thread)?
+   |                  ------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0277]: `?` couldn't convert the error to `OcrError`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:22:48
+   |
+22 |                 .with_inter_threads(num_thread)?,
+   |                  ------------------------------^ the trait `From<ort::Error<SessionBuilder>>` is not implemented for `OcrError`
+   |                  |
+   |                  this can't be annotated with `?` because it has type `Result<_, ort::Error<SessionBuilder>>`
+   |
+note: `OcrError` needs to implement `From<ort::Error<SessionBuilder>>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:4:1
+   |
+ 4 | pub enum OcrError {
+   | ^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `OcrError` implements trait `From<T>`
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/ocr_error.rs:6:11
+   |
+ 6 |     Ort(#[from] ort::Error),
+   |           ^^^^ `From<ort::Error>`
+ 7 |     #[error("Io error")]
+ 8 |     Io(#[from] std::io::Error),
+   |          ^^^^ `From<std::io::Error>`
+ 9 |     #[error("Session not initialized")]
+10 |     ImageError(#[from] image::ImageError),
+   |                  ^^^^ `From<ImageError>`
+
+error[E0616]: field `inputs` of struct `Session` is private
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/base_net.rs:33:14
+   |
+33 |             .inputs
+   |              ^^^^^^ private field
+   |
+help: a method `inputs` also exists, call it with parentheses
+   |
+33 |             .inputs()
+   |                    ++
+
+error[E0599]: no method named `expect` found for struct `std::string::String` in the current scope
+  --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/crnn_net.rs:88:14
+   |
+80 |            let model_charater_list = self
+   |   ___________________________________-
+   |  |___________________________________|
+81 | ||             .session
+   | ||____________________- method `expect` is available on `&std::option::Option<Session>`
+82 | |              .as_ref()
+   | |               -------- method `expect` is available on `std::option::Option<&Session>`
+83 | |              .expect("crnn_net session not initialized")
+84 | |              .metadata()
+   | |               ---------- method `expect` is available on `Result<ModelMetadata<'_>, ort::Error>`
+85 | |              .expect("crnn_net metadata not initialized")
+86 | |              .custom("character")
+   | |               ------------------- method `expect` is available on `std::option::Option<std::string::String>`
+87 | |              .expect("crnn_net character not initialized[0]")
+88 | |              .expect("crnn_net character not initialized[1]");
+   | |              -^^^^^^ method not found in `std::string::String`
+   | |______________|
+   |
+
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/crnn_net.rs:152:48
+    |
+152 |         let input_tensors = Tensor::from_array(input_tensors)?;
+    |                             ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                             |
+    |                             required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+error[E0277]: the trait bound `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>: OwnedTensorArrayData<_>` is not satisfied
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/paddle-ocr-rs-0.6.1/src/db_net.rs:71:41
+    |
+ 71 |         let tensor = Tensor::from_array(input_tensors)?;
+    |                      ------------------ ^^^^^^^^^^^^^ the trait `OwnedTensorArrayData<_>` is not implemented for `ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>`
+    |                      |
+    |                      required by a bound introduced by this call
+    |
+help: the following other types implement trait `OwnedTensorArrayData<I>`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:448:1
+    |
+448 | impl<T: Clone + 'static, D: Dimension + 'static> OwnedTensorArrayData<T> for Array<T, D> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ndarray::ArrayBase<ndarray::data_repr::OwnedRepr<T>, D>`
+...
+559 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Vec<T>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Vec<T>)`
+...
+575 | impl<T: Clone + 'static, D: ToShape> OwnedTensorArrayData<T> for (D, Box<[T]>) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(D, Box<[T]>)`
+    = note: there are multiple different versions of crate `ndarray` in the dependency graph
+    = help: you can use `cargo tree` to explore your dependency tree
+note: required by a bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+   --> /Users/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ort-2.0.0-rc.13/src/value/impl_tensor/create.rs:139:32
+    |
+139 |     pub fn from_array(input: impl OwnedTensorArrayData<T>) -> Result<Tensor<T>> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ort::value::impl_tensor::create::<impl Value<TensorValueType<T>>>::from_array`
+
+Some errors have detailed explanations: E0277, E0599, E0616.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `paddle-ocr-rs` (lib) due to 8 previous errors
