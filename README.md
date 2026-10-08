@@ -196,7 +196,8 @@ its root confinement are unchanged.
 ### PDFs
 
 Normal builds include `pdf-render` and image embedding. Minimal library
-consumers can enable `pdf` for embedded text or `pdf-render` for page rendering. PDF pages with embedded text participate in semantic and keyword
+consumers can enable `pdf` for embedded text or `pdf-render` for page rendering. PDF pages with embedded text participate in semantic and
+keyword
 search. Hits use `page_text`: a 1-based physical page, half-open UTF-8 byte range
 in the extracted page text, extraction version and page-text hash. These are
 not byte offsets in the PDF file. Explicit extraction checks the full PDF hash
@@ -211,6 +212,10 @@ returns an explicit OCR-unavailable error. OCR is deferred to
 Mixed PDFs keep their embedded-text hits and scanned-page hits. With
 `--text-only`, a text-only embedder or a build without `pdf-render`, image pages
 produce separate page diagnostics while supported text pages remain searchable.
+Corrupt image streams can be omitted by the renderer. A page with image
+XObjects that renders nearly uniform gets “scanned page could not be rendered”
+instead of a hit; very faint or nearly blank scans can also trigger this guard.
+Partial image omissions on otherwise nonblank pages remain a recall limitation.
 Reading order, nonstandard fonts and sparse text over scanned pages remain
 limitations.
 Every page content reference must resolve, decompress completely and pass strict
@@ -228,8 +233,7 @@ vectors, profiles and keyword indexes. Older binaries may reset a schema-5
 cache, so keep a copy if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
-`hayro_interpret`, `hayro_syntax` and `hayro_font` to
-Off**: upstream diagnostics can contain document data. Seyk core installs no
+`hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream diagnostics can contain document data. Seyk core installs no
 logger or panic hook. It converts unwinding PDF parser panics to sanitized
 errors, but an application's panic hook runs first and must not print payloads.
 The CLI installs a fixed-message, file-and-line-only hook. Neither mechanism

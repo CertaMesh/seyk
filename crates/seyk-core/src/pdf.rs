@@ -1,6 +1,7 @@
 //! Bounded embedded-text extraction from PDF bytes.
 //!
-//! Applications with a logger must filter `pdf_extract` to Off. This module
+//! Applications with a logger must filter `pdf_extract` to Off, plus
+//! `hayro_interpret`, `hayro_syntax` and `hayro_font` with `pdf-render`. This module
 //! catches unwinding parser panics without exposing their payload, but installs
 //! no panic hook. The caller's hook must also avoid payloads. Abort, OOM and
 //! parser hangs are not contained. `pdf-render` adds CPU page rendering with

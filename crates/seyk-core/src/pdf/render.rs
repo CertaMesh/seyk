@@ -10,7 +10,7 @@ use std::sync::{
 /// The encoded image bytes, not this label alone, identify an embedding input.
 /// Change this when the renderer, fonts, raster dimensions or encoding changes.
 pub const RENDER_VERSION: &str =
-    "hayro-0.5.0;foxit-bundled;crop-rotate;white;edge-2048;vello-png-v1";
+    "hayro-0.5.0;foxit-bundled;crop-rotate;white;edge-2048;uniform-8-0.01pct-v1;vello-png-v1";
 const LONG_EDGE: u16 = 2048;
 
 /// Render a physical PDF page to PNG using the same policy as scan retrieval.
@@ -126,11 +126,66 @@ impl PageRenderer {
             if warned.load(Ordering::Relaxed) {
                 return Err(failure("unsupported font or undecodable image"));
             }
+            if has_image_xobjects(page.resources()) && near_uniform(pixmap.data_as_u8_slice()) {
+                return Err(failure("scanned page could not be rendered"));
+            }
             pixmap
                 .into_png()
                 .map_err(|_| failure("PNG encoding failed"))
         })
     }
+}
+
+// Conservatively inspect inherited and nested form resources. Unknown/cyclic
+// XObjects count as potentially containing an image; never recurse unboundedly.
+fn has_image_xobjects(resources: &hayro::hayro_syntax::page::Resources<'_>) -> bool {
+    let mut current = Some(resources);
+    while let Some(resource) = current {
+        if image_dictionary(&resource.x_objects, 0) {
+            return true;
+        }
+        current = resource.parent();
+    }
+    false
+}
+
+fn image_dictionary(dict: &hayro::hayro_syntax::object::Dict<'_>, depth: usize) -> bool {
+    use hayro::hayro_syntax::object::{Dict, Name, Stream};
+    dict.keys().any(|key| {
+        if depth >= 16 {
+            return true;
+        }
+        let Some(stream) = dict.get::<Stream<'_>>(key) else {
+            return true;
+        };
+        let dictionary = stream.dict();
+        match dictionary
+            .get::<Name<'_>>(b"Subtype".as_slice())
+            .as_ref()
+            .map(|n| n.as_str())
+        {
+            Some("Image") => true,
+            Some("Form") => dictionary
+                .get::<Dict<'_>>(b"Resources".as_slice())
+                .and_then(|r| r.get::<Dict<'_>>(b"XObject".as_slice()))
+                .is_some_and(|d| image_dictionary(&d, depth + 1)),
+            _ => true,
+        }
+    })
+}
+
+fn near_uniform(rgba: &[u8]) -> bool {
+    let mut low = [255u8; 3];
+    let mut high = [0u8; 3];
+    let mut nonwhite = 0usize;
+    for pixel in rgba.as_chunks::<4>().0.iter() {
+        for channel in 0..3 {
+            low[channel] = low[channel].min(pixel[channel]);
+            high[channel] = high[channel].max(pixel[channel]);
+        }
+        nonwhite += usize::from(pixel[..3].iter().any(|v| *v < 247));
+    }
+    (0..3).all(|i| high[i].saturating_sub(low[i]) <= 8) || nonwhite <= (rgba.len() / 4) / 10_000
 }
 
 #[cfg(test)]
@@ -175,7 +230,7 @@ mod tests {
             assert_eq!((pixmap.width(), pixmap.height()), expected_size);
             let rgba = pixmap.data_as_u8_slice();
             assert_eq!(&rgba[..4], &[255, 255, 255, 255]);
-            assert!(rgba.chunks_exact(4).all(|p| p[3] == 255));
+            assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
             let offset = (red_point.1 * usize::from(pixmap.width()) + red_point.0) * 4;
             assert_eq!(&rgba[offset..offset + 4], &[255, 0, 0, 255]);
             assert_eq!(
@@ -228,6 +283,21 @@ mod tests {
                 Err(Error::PdfParse { .. })
             ));
         }
+    }
+
+    #[test]
+    fn corrupt_image_omission_is_a_sanitized_render_diagnostic() {
+        let broken = fixture::broken_image(crate::pdf::fixture::MARKER);
+        let error = render_page(&broken, &source(), 1)
+            .expect_err("corrupt image must not become a blank scan hit");
+        assert!(matches!(
+            error,
+            Error::PdfRender {
+                reason: "scanned page could not be rendered",
+                ..
+            }
+        ));
+        assert!(!error.to_string().contains(crate::pdf::fixture::MARKER));
     }
 
     #[test]

@@ -125,3 +125,77 @@ fn real_binary_index_preview_and_extract_never_leak_hidden_markers() {
         assert_eq!(output.stdout, fixture::PUBLIC.as_bytes());
     }
 }
+
+#[test]
+fn real_binary_page_extract_returns_explicit_ocr_unavailable_without_a_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.pdf");
+    std::fs::write(&path, pdf(&[fixture::PUBLIC], Kind::Plain)).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "pdf"))
+        .build()
+        .unwrap();
+    let mut result = engine.search("basil").paths([&path]).execute().unwrap();
+    result.hits[0].locator = seyk::ResourceLocator::Page { page: 1 };
+    result.hits[0].preview = None;
+    let mut envelope = serde_json::to_value(result).unwrap();
+    envelope["schema_version"] = 3.into();
+    let json = dir.path().join("hit.json");
+    std::fs::write(&json, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_seyk"))
+        .args(["extract", "--from-json"])
+        .arg(json)
+        .env("HF_HOME", dir.path().join("no-models"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("readable text for scanned pages needs OCR, which is not available yet")
+    );
+    no_leak(&output);
+}
+
+#[cfg(feature = "pdf-render")]
+#[path = "../crates/seyk-core/tests/support/scan_fixture.rs"]
+mod scan_fixture;
+
+#[cfg(feature = "pdf-render")]
+#[test]
+#[ignore = "requires local Gemma vision weights; no downloads"]
+fn real_binary_scan_render_path_never_leaks_hidden_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scan.pdf");
+    for (bytes, diagnostic) in [
+        (scan_fixture::broken_image(fixture::MARKER), true),
+        (pdf(&[""], Kind::Tint), false),
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_seyk"))
+            .arg("index")
+            .arg(&path)
+            .args(["--dimension", "256", "--cache-path"])
+            .arg(dir.path().join("cache.db"))
+            .arg("--json")
+            .output()
+            .unwrap();
+        no_leak(&output);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(report["sync"]["skipped"].as_array().unwrap().is_empty());
+        if diagnostic {
+            assert_eq!(
+                report["sync"]["page_diagnostics"][0]["reason"],
+                "scanned page could not be rendered"
+            );
+            assert_eq!(report["sync"]["segments_embedded"], 0);
+        } else {
+            assert_eq!(report["sync"]["segments_embedded"], 1);
+        }
+    }
+}

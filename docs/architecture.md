@@ -701,3 +701,99 @@ After strict validation, the same cap regression passes in 37.51 s with
 streams. The repeated synthetic evaluation still gives 100% Recall@5, MRR@10
 1.0 and 20/20 exact extractions; load 2196 ms, cold index 795 ms, warm p50/p95
 290/386 ms on the same debug Mac ARM setup.
+
+## Phase 4b retrieval — scanned PDF pages
+
+### Implemented
+
+Normal CLI/release builds enable `pdf-render`, which implies `pdf` and the
+existing image embedding feature. Minimal core users can omit rendering or all
+PDF support. `hayro =0.5.0` renders on the CPU with bundled Foxit fonts, no system
+font lookup or GPU. Crop and rotation are respected, the background is opaque
+white and the longest edge is 2048 pixels. The complete page appearance is the
+image embedding input; no text prompt is fabricated from the raster.
+
+Pages with usable embedded text keep their verified `PageText` segments. Other
+pages become one `Page { page }` hit through Gemma's image `SearchDocument`
+path. These hits have no preview and an empty lexical body; filename/path
+signals remain available. Extract returns typed `PdfOcrUnavailable`, explaining
+that readable scan text needs OCR. Text-only models/builds index embedded text
+and report omitted scan pages as page diagnostics, including scan-only PDFs.
+CLI diagnostics say how many pages were not indexed and give the reason,
+separately from skipped resources.
+
+The PDF descriptor includes renderer policy/version and text/image capabilities.
+Only PDF freshness checks change; the model profile and non-PDF input goldens
+stay identical. Image input hashes cover precisely the encoded PNG bytes sent
+to the model and share the ordinary image-input identity. Cache schema stays v5.
+No raster, source text or OCR output is persisted in the cache.
+
+Each PDF is parsed and processed separately. At most
+`min(configured_batch_size, 4)` page model inputs are retained in a batch.
+Completed batches retain only locators and transient lexical text. Embedding
+calls, including single-item retries, use `checked_embed_batch`, which checks
+vector count and dimension before writes. Resource bindings are committed once,
+after required jobs succeed; a later failure keeps the old resource binding.
+Successfully computed vectors may remain reusable until ordinary orphan pruning.
+These limits bound queued rasters, not hostile decoder allocation or CPU time.
+
+### Deliberately not implemented
+
+OCR is deferred to [Solo todo 4378](solo://proj/73/todo/4378). The compatibility
+spike found that paddle-ocr-rs 0.6.1 does not compile with the pinned single
+ORT rc.13 runtime, and model conversion provenance was incomplete. No OCR code,
+weights, download command, fork, MSRV increase or alternate inference runtime is
+included. Search and extraction remain separate: a relevant page can be found
+without readable text being available.
+
+### Learned and limitations
+
+Hayro omits pages with absent `/Contents`. The adapter therefore supplies an
+in-memory serialization of the already strictly validated document with empty
+streams normalized, preserving physical page numbering. Original provider bytes
+and their content hash never change. All page content streams still undergo
+whole-resource resolution, decompression and full-consumption validation before
+any page is accepted.
+
+Hayro can silently omit undecodable image data without notifying its warning
+callback. To avoid blank scan hits, the adapter inspects image XObjects,
+including inherited and nested form resources. A resulting near-uniform raster
+gets the page diagnostic "scanned page could not be rendered" and no embedding.
+The guard treats RGB ranges <=8, or <=0.01% pixels more than 8 below white, as
+near-uniform. Unknown/cyclic resource references are conservative; nested
+inspection stops at depth 16. These choices are encoded in the renderer policy
+and can be retried after a descriptor change. Very faint or nearly blank scans
+may be rejected. Partial image omissions on otherwise nonblank pages remain a
+recall limitation, not an assertion of document fidelity.
+
+No logger is installed. Library applications with logging must filter
+`pdf_extract`, `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off because
+upstream diagnostics can contain source data. Renderer loading and rendering
+catch unwinding panics into sanitized errors; the CLI's existing payload-free
+panic hook runs first. Core installs no panic hook, and catch_unwind does not
+contain aborts, OOM or hangs. Tests exercise an unwind inside Hayro through a
+panicking font callback and real CLI output capture for hidden-marker render
+fixtures, in addition to the parser leak regressions.
+
+The committed synthetic scan evaluation has 20 image-only pages and 14 fixed
+queries (semantic, identifier and title queries), default 256-dimensional q8
+Gemma image embeddings, numeric filenames and semantic-only ranking. It gates
+Recall@5 at 80%; it represents clean, short, single-column printed pages, not
+arbitrary dense, damaged or multilingual scans. Render tests freeze encoded PNG
+hashes, crop/rotation placement and opaque white pixels. Core tests cover mixed
+PDFs, vision-off diagnostics, cache capabilities, image omission and malformed
+model outputs with prior resource bindings preserved.
+
+### Next
+
+Complete the compatible single-ORT OCR adapter and model-provenance work in todo
+4378 before adding scan text extraction. Process isolation remains separate.
+During the Actions billing block the full local macOS merge gate supplies
+implementation verification; Linux/Windows and all release targets must be
+rerun under [Solo todo 4381](solo://proj/73/todo/4381). The earlier four-target
+compatibility spike established renderer build/hash/link feasibility, but does
+not replace verification of this implementation. Platform-sensitive areas are
+floating-point raster/PNG determinism, filesystem behavior and dependency
+linking; production rendering adds no platform-specific branches. The optional
+evaluation RSS measurement uses getrusage (bytes on macOS, KiB on other Unix;
+unavailable on Windows).

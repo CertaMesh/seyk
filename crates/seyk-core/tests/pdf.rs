@@ -113,7 +113,8 @@ fn errors_and_limits_do_not_stop_the_rest_of_the_corpus() {
         .paths([dir.path()])
         .execute()
         .unwrap();
-    assert_eq!(result.stats.sync.skipped.len(), 5);
+    assert_eq!(result.stats.sync.skipped.len(), 4);
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
     assert_eq!(result.hits.len(), 1);
     assert!(
         result
