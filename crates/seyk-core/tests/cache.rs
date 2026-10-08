@@ -454,6 +454,160 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
 }
 
 #[test]
+fn characterize_cross_profile_bm25_score_and_top_k_contamination() {
+    use seyk_core::cache::LexicalHit;
+    use seyk_core::lexical::LexicalQuery;
+
+    // F-S04-2 / Solo #4390 (P10): characterize the existing defect, not a desired
+    // scoring contract. P11 should replace the contaminated expectations with
+    // profile isolation. No production ranking or schema change belongs here.
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("cache.sqlite3");
+    let mut sqlite = SqliteCache::open(&database).unwrap();
+    let mut memory = MemoryCache::new();
+    let ids: Vec<ResourceId> = (0..18)
+        .map(|i| format!("mem://corpus/d{i:02}").parse().unwrap())
+        .collect();
+    let wanted: HashSet<_> = ids[..12].iter().cloned().collect();
+    let query = LexicalQuery::new(["quartz amber"]);
+    let mut bodies = vec![
+        "quartz ".repeat(6) + "amber",
+        "quartz amber amber amber".into(),
+    ];
+    bodies.extend((1..=10).map(|n| "neutral ".repeat(n)));
+    // Both query terms occur in 2/12 documents initially. Six long quartz-only
+    // B documents make that 8/18 vs 2/18: neither IDF hits the floor. URI labels
+    // have equal token lengths and contain neither query term on any platform.
+    let value = resource(&["synthetic"]);
+    for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
+        for p in ["a", "b"] {
+            cache.register_profile(p, &profile(p)).unwrap();
+        }
+        for (id, body) in ids.iter().zip(&bodies) {
+            cache.put_resource("a", id, &write(&value, body)).unwrap();
+        }
+    }
+    let measure = |cache: &dyn EmbeddingCache| {
+        let hits = cache.lexical_search("a", &query, &wanted, 12).unwrap();
+        assert_eq!(hits.len(), 2);
+        for k in [1, 2] {
+            assert_eq!(
+                cache.lexical_search("a", &query, &wanted, k).unwrap(),
+                hits[..k]
+            );
+        }
+        assert!(
+            hits.iter()
+                .all(|hit| wanted.contains(&hit.resource) && hit.ordinal == 0)
+        );
+        hits
+    };
+    let same_scores_and_order = |left: &[LexicalHit], right: &[LexicalHit]| {
+        assert_eq!(left.len(), right.len());
+        for (l, r) in left.iter().zip(right) {
+            assert_eq!((&l.resource, l.ordinal), (&r.resource, r.ordinal));
+            assert!((l.score - r.score).abs() < 1e-6, "{l:?} != {r:?}");
+        }
+    };
+    let alone = measure(&sqlite);
+    let memory_alone = measure(&memory);
+    same_scores_and_order(&alone, &memory_alone);
+    assert_eq!(alone[0].resource, ids[0]);
+    assert_eq!(alone[1].resource, ids[1]);
+    assert!(alone[0].score > alone[1].score);
+
+    for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
+        for (i, id) in ids[12..].iter().enumerate() {
+            cache
+                .put_resource("b", id, &write(&value, &"quartz ".repeat(40 + i)))
+                .unwrap();
+        }
+    }
+    let contaminated = measure(&sqlite);
+    same_scores_and_order(&memory_alone, &measure(&memory));
+    assert_eq!(contaminated[0].resource, ids[1]);
+    assert_eq!(contaminated[1].resource, ids[0]);
+    assert!(contaminated[0].score > contaminated[1].score);
+    for original in &alone {
+        let changed = contaminated
+            .iter()
+            .find(|h| h.resource == original.resource)
+            .unwrap();
+        let delta = changed.score - original.score;
+        assert!(
+            delta.abs() > 0.1,
+            "expected measurable movement for {original:?}"
+        );
+        println!(
+            "P10 {}: A alone / MemoryCache={:.6}, with B={:.6}, delta={delta:+.6} ({:+.2}%)",
+            original.resource,
+            original.score,
+            changed.score,
+            100.0 * delta / original.score,
+        );
+    }
+
+    // Read the existing contentless index through its supported vocabulary API.
+    // Per-instance postings retain the profile join, frequencies and lengths
+    // needed to investigate P11 without re-reading source bodies. This only
+    // measures the index; it neither migrates nor changes the scoring path.
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE temp.p10_vocab USING fts5vocab(main, segments_fts, instance);",
+    )
+    .unwrap();
+    let counts = || -> Vec<(String, i64, i64, i64)> {
+        conn.prepare(
+            "SELECT s.profile, count(DISTINCT s.rowid), count(*),
+                count(DISTINCT CASE WHEN v.term = 'quartz' THEN s.rowid END)
+         FROM p10_vocab v JOIN segments s ON s.rowid = v.doc
+         GROUP BY s.profile ORDER BY s.profile",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    };
+    assert_eq!(
+        counts(),
+        [("a".into(), 12, 114, 2), ("b".into(), 6, 279, 6)]
+    );
+
+    for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
+        cache.remove_resources("b", &ids[12..]).unwrap();
+        assert!(cache.resource_index("b").unwrap().is_empty());
+        // A's complete stored resources stayed fixed throughout the experiment.
+        for id in &ids[..12] {
+            assert_eq!(cache.resource("a", id).unwrap().unwrap(), value);
+        }
+    }
+    let removed = measure(&sqlite);
+    assert_eq!(counts(), [("a".into(), 12, 114, 2)]);
+    // Bundled SQLite 3.53.2's contentless-delete path adds tombstones without
+    // decrementing the stored row/token totals used by BM25. Live term matches
+    // exclude B, but those totals still include it: deleting B restores the order,
+    // NOT the scores, even after reopening. P11 must account for this lifecycle
+    // effect instead of assuming profile deletion restores shared statistics.
+    for (original, deleted) in alone.iter().zip(&removed) {
+        assert_eq!(original.resource, deleted.resource);
+        let delta = deleted.score - original.score;
+        assert!(delta > 1.0);
+        println!(
+            "P10 {}: after deleting B={:.6}, delta from A alone={delta:+.6} ({:+.2}%)",
+            deleted.resource,
+            deleted.score,
+            100.0 * delta / original.score,
+        );
+    }
+    same_scores_and_order(&removed, &measure(&SqliteCache::open(&database).unwrap()));
+    same_scores_and_order(&memory_alone, &measure(&memory));
+    println!(
+        "P10 top-1: d00 -> d01 -> d00; top-2 order reverses with B; deletion does not restore scores"
+    );
+}
+
+#[test]
 fn lexical_ties_use_path_bytes_then_ordinal_before_limit_in_both_caches() {
     let names = [
         "/notes/zulu.md",
