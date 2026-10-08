@@ -645,14 +645,33 @@ mod hydration {
     use seyk_core::lexical::LexicalQuery;
     use seyk_core::{ResourceId, ResourceMetadata, ResourceVersion, Result};
     use std::collections::{HashMap, HashSet};
+    use std::sync::{Mutex, atomic::AtomicBool};
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum Readback {
+        #[default]
+        Normal,
+        MissingResource,
+        MissingOrdinals,
+        ErrorOnce,
+        ReplacementEvidence,
+    }
 
     #[derive(Default)]
     struct Reads {
         count: AtomicUsize,
-        // 0 = normal, 1 = missing resource, 2 = missing ordinals, 3 = error once,
-        // 4 = replacement evidence observed after vectors were read.
-        fault: AtomicUsize,
-        partial_vectors: AtomicUsize,
+        readback: Mutex<Readback>,
+        partial_vectors: AtomicBool,
+    }
+    impl Reads {
+        fn next_readback(&self) -> Readback {
+            let mut state = self.readback.lock().unwrap();
+            let current = *state;
+            if current == Readback::ErrorOnce {
+                *state = Readback::Normal;
+            }
+            current
+        }
     }
     struct CountCache {
         inner: Box<dyn EmbeddingCache>,
@@ -667,19 +686,16 @@ mod hydration {
         }
         fn resource(&self, p: &str, r: &ResourceId) -> Result<Option<CachedResource>> {
             self.reads.count.fetch_add(1, Ordering::SeqCst);
-            match self.reads.fault.load(Ordering::SeqCst) {
-                1 => Ok(None),
-                2 => Ok(self.inner.resource(p, r)?.map(|mut r| {
+            match self.reads.next_readback() {
+                Readback::MissingResource => Ok(None),
+                Readback::MissingOrdinals => Ok(self.inner.resource(p, r)?.map(|mut r| {
                     r.segments.truncate(1);
                     r
                 })),
-                3 => {
-                    self.reads.fault.store(0, Ordering::SeqCst);
-                    Err(seyk_core::Error::Config(
-                        "injected resource read failure".into(),
-                    ))
-                }
-                4 => Ok(self.inner.resource(p, r)?.map(|mut r| {
+                Readback::ErrorOnce => Err(seyk_core::Error::Config(
+                    "injected resource read failure".into(),
+                )),
+                Readback::ReplacementEvidence => Ok(self.inner.resource(p, r)?.map(|mut r| {
                     for segment in &mut r.segments {
                         segment.locator =
                             if r.metadata.media_type.as_deref() == Some("application/pdf") {
@@ -696,7 +712,7 @@ mod hydration {
                     }
                     r
                 })),
-                _ => self.inner.resource(p, r),
+                Readback::Normal => self.inner.resource(p, r),
             }
         }
         fn put_resource(&mut self, p: &str, r: &ResourceId, v: &ResourceWrite<'_>) -> Result<()> {
@@ -722,7 +738,7 @@ mod hydration {
         }
         fn vectors_for(&self, p: &str, r: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
             let mut rows = self.inner.vectors_for(p, r)?;
-            if self.reads.partial_vectors.load(Ordering::SeqCst) != 0 {
+            if self.reads.partial_vectors.load(Ordering::SeqCst) {
                 rows.retain(|v| v.ordinal == 0);
             }
             Ok(rows)
@@ -822,7 +838,7 @@ mod hydration {
             .unwrap();
             let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
             e.index().paths([&path]).execute().unwrap();
-            reads.partial_vectors.store(1, Ordering::SeqCst);
+            reads.partial_vectors.store(true, Ordering::SeqCst);
             for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
                 for q in ["basil", "garden.md"] {
                     reads.count.store(0, Ordering::SeqCst);
@@ -850,14 +866,17 @@ mod hydration {
             .unwrap();
             let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
             e.index().paths([&path]).execute().unwrap();
-            for (fault, expected) in [(1, 0), (2, 1)] {
-                reads.fault.store(fault, Ordering::SeqCst);
+            for (readback, expected) in [
+                (Readback::MissingResource, 0),
+                (Readback::MissingOrdinals, 1),
+            ] {
+                *reads.readback.lock().unwrap() = readback;
                 reads.count.store(0, Ordering::SeqCst);
                 let result = query(&e, &path, "basil", SearchMode::Lexical).unwrap();
                 assert_eq!(result.hits.len(), expected);
                 assert_eq!(reads.count.load(Ordering::SeqCst), 1);
             }
-            reads.fault.store(3, Ordering::SeqCst);
+            *reads.readback.lock().unwrap() = Readback::ErrorOnce;
             assert!(
                 query(&e, &path, "basil", SearchMode::Lexical)
                     .unwrap_err()
@@ -874,7 +893,7 @@ mod hydration {
         }
     }
 
-    fn preserves_scored_rows_after_complete_lookup(fault: usize) {
+    fn preserves_scored_rows_after_complete_lookup(readback: Readback) {
         for sqlite in [false, true] {
             let dir = TempDir::new().unwrap();
             let path = dir.path().join("garden.md");
@@ -889,14 +908,18 @@ mod hydration {
             assert_eq!(before.hits.len(), 3);
             // All vector rows remain available, while the later resource read
             // observes a concurrent indexer's removal, truncation or replacement.
-            reads.fault.store(fault, Ordering::SeqCst);
+            *reads.readback.lock().unwrap() = readback;
             reads.count.store(0, Ordering::SeqCst);
             let after = query(&e, &path, "garden.md", SearchMode::Hybrid).unwrap();
-            assert_eq!(after.hits.len(), 3, "sqlite={sqlite}, fault={fault}");
+            assert_eq!(
+                after.hits.len(),
+                3,
+                "sqlite={sqlite}, readback={readback:?}"
+            );
             assert_eq!(reads.count.load(Ordering::SeqCst), 1);
             assert_eq!(
                 after.hits.iter().filter(|h| h.signals.filename).count(),
-                usize::from(fault != 1)
+                usize::from(readback != Readback::MissingResource)
             );
             for (old, new) in before.hits.iter().zip(&after.hits) {
                 assert_eq!(new.resource, old.resource);
@@ -910,17 +933,17 @@ mod hydration {
 
     #[test]
     fn hybrid_keeps_scored_rows_after_a_missing_resource_lookup() {
-        preserves_scored_rows_after_complete_lookup(1);
+        preserves_scored_rows_after_complete_lookup(Readback::MissingResource);
     }
 
     #[test]
     fn hybrid_keeps_scored_rows_after_a_truncated_resource_lookup() {
-        preserves_scored_rows_after_complete_lookup(2);
+        preserves_scored_rows_after_complete_lookup(Readback::MissingOrdinals);
     }
 
     #[test]
     fn hybrid_keeps_scored_rows_after_a_replacement_locator_lookup() {
-        preserves_scored_rows_after_complete_lookup(4);
+        preserves_scored_rows_after_complete_lookup(Readback::ReplacementEvidence);
     }
 
     #[cfg(feature = "pdf")]
@@ -935,7 +958,7 @@ mod hydration {
             e.index().paths([&path]).execute().unwrap();
             let before = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
             assert_eq!(before.hits.len(), 3);
-            reads.fault.store(4, Ordering::SeqCst);
+            *reads.readback.lock().unwrap() = Readback::ReplacementEvidence;
             reads.count.store(0, Ordering::SeqCst);
             let after = query(&e, &path, "garden.pdf", SearchMode::Hybrid).unwrap();
             assert_eq!(after.hits.len(), 3);
