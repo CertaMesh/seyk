@@ -927,16 +927,19 @@ not a claim about noisy, multilingual or real-world speech.
 
 | Set | Dimensions | Recall@5 | MRR@20 | Boundary Recall@5 / MRR@20 | Index s/audio-minute |
 |---|---:|---:|---:|---:|---:|
-| Spike | 256 | 1.000 | 0.9750 | 1.000 / 0.950 | 6.667 |
-| Spike | 768 | 1.000 | 0.9875 | 1.000 / 0.975 | 6.677 |
-| Held-out | 256 | 1.000 | 0.9875 | 1.000 / 1.000 | 6.820 |
-| Held-out | 768 | 1.000 | 0.9875 | 1.000 / 1.000 | 6.754 |
+| Spike | 256 | 1.000 | 0.9750 | 1.000 / 0.950 | 20.173 |
+| Spike | 768 | 1.000 | 0.9875 | 1.000 / 0.975 | 17.089 |
+| Held-out | 256 | 1.000 | 0.9875 | 1.000 / 1.000 | 16.600 |
+| Held-out | 768 | 1.000 | 0.9875 | 1.000 / 1.000 | 15.838 |
 
 Every format has Recall@5 1.0. Spike per-format MRR at 256/768: WAV 1/1,
 FLAC .95/1, AAC 1/1, MP3 .95/.95 (10 queries each). Held-out per-format MRR is
 identical at both widths: WAV/FLAC/AAC/ALAC 1.0, MP3 .9375 (8 queries each).
 Elapsed measurements include decoding/resampling and run on a shared machine;
-they are not isolated comparative dimension benchmarks.
+they are not isolated comparative dimension benchmarks. These post-fix timings
+were collected under heavy host contention (observed load averages 32–52);
+comparison with the earlier roughly 6.7 s/audio-minute run does not isolate
+the code change.
 
 A one-second Rust-generated chirp plus tones supplies the committed parity
 signal. Pinned local Transformers 5.19.0 / Torch 2.14.1 FP32 generated the feature,
@@ -947,7 +950,9 @@ are recorded in `crates/seyk-embeddinggemma/tests/fixtures/audio/reference.json`
 Additional goldens repeat the same Rust signal to 16,001 samples (partial-frame
 padding, 100 frames / 25 tokens) and 160,000 samples (full window, 999 frames /
 250 tokens). Both features/masks and 768-dimensional embeddings use the same
-pinned reference and parity gates. No additional source audio is committed.
+pinned reference and parity gates. Their feature maximum errors are both
+4.7683716e-7; embedding cosines are 0.9999343 and 0.9997173 respectively.
+No additional source audio is committed.
 
 Ten generated timing fixtures have zero cross-correlation lag and exact output
 lengths at 16 kHz: WAV, FLAC, ALAC, FFmpeg AAC (1024 priming samples), Apple AAC
@@ -958,17 +963,19 @@ so no hidden constant is used to guess missing encoder delay. HE-AAC and
 multiple-track fixtures produce typed rejections.
 
 The largest allowed WAV is exactly **33,554,432 bytes**, representing
-1,048.574625 seconds. It indexed 132 windows in **114.458 seconds**
-(**6.549 s/audio-minute**); `/usr/bin/time -l` measured peak RSS
-**1,218,609,152 bytes (1.135 GiB)** for the process, including ONNX Runtime.
+1,048.574625 seconds. It indexed 131 windows in **302.202 seconds**
+(**17.292 s/audio-minute**); `/usr/bin/time -l` measured peak RSS
+**1,257,816,064 bytes (1.171 GiB)** for the process, including ONNX Runtime.
 
-Stripped (`-x`) Rust 1.99.0 release binaries: default **34,908,624 bytes**, `--features audio` **36,368,400 bytes**; delta **1,459,776 bytes (1.392 MiB, 4.18%)**. No probe harness is included. Default dependency-tree verification contains no Symphonia.
+Stripped (`-x`) Rust 1.99.0 release binaries: default **34,908,632 bytes**, `--features audio` **36,368,200 bytes**; delta **1,459,568 bytes (1.392 MiB, 4.18%)**. No probe harness is included. Default dependency-tree verification contains no Symphonia.
 
 The local merge gate passed: default/audio workspace tests and clippy, core
 feature matrix, ignored cache/PDF/audio goldens, timing fixtures, standalone
 checks, Rust 1.89 checks and builds with/without audio, release smoke, licenses
 (default/all features) and dependency boundaries. The fractional-duration fix
-was followed by the affected audio gates again. Linux and Windows validation
+was followed by the affected audio gates again. The ALAC/panic-containment
+and tail-window fixes passed the full local gate, including the expanded
+feature/embedding goldens and the ten timing fixtures. Linux and Windows validation
 remains for the CI matrix; this report covers macOS ARM64 only.
 
 Reproduce (local weights only; ignored tests never provision models):
