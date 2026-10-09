@@ -12,6 +12,7 @@ use std::{
 const CHUNK: usize = 1024 * 1024;
 const CACHE_CHUNKS: usize = 2;
 
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VerificationStats {
     pub hash_bytes: u64,
@@ -86,6 +87,7 @@ impl VerifiedReader {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    #[doc(hidden)]
     pub fn stats(&self) -> VerificationStats {
         self.stats
     }
@@ -111,14 +113,18 @@ impl Read for VerifiedReader {
             let offset = chunk * CHUNK as u64;
             let n = (self.len - offset).min(CHUNK as u64) as usize;
             let mut buf = vec![0; n];
-            let read = (|| {
-                if self.source.seek(SeekFrom::End(0))? != self.len {
-                    return Err(io::Error::other("length changed"));
-                }
-                self.source.seek(SeekFrom::Start(offset))?;
-                self.source.read_exact(&mut buf)
-            })();
-            if read.is_err() || blake3::hash(&buf) != self.hashes[chunk as usize] {
+            if self.source.seek(SeekFrom::End(0))? != self.len {
+                return Err(self.changed());
+            }
+            self.source.seek(SeekFrom::Start(offset))?;
+            if let Err(error) = self.source.read_exact(&mut buf) {
+                return Err(if error.kind() == io::ErrorKind::UnexpectedEof {
+                    self.changed()
+                } else {
+                    error
+                });
+            }
+            if blake3::hash(&buf) != self.hashes[chunk as usize] {
                 return Err(self.changed());
             }
             self.stats.verified_bytes += n as u64;
@@ -161,6 +167,50 @@ impl symphonia::core::io::MediaSource for VerifiedReader {
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn refetch_io_failure_is_not_a_content_change() {
+        struct Faulty {
+            cursor: io::Cursor<Vec<u8>>,
+            fail: Arc<AtomicBool>,
+        }
+        impl Read for Faulty {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                if self.fail.load(Ordering::Relaxed) {
+                    return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+                }
+                self.cursor.read(out)
+            }
+        }
+        impl Seek for Faulty {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.cursor.seek(pos)
+            }
+        }
+        let fail = Arc::new(AtomicBool::new(false));
+        let source = Faulty {
+            cursor: io::Cursor::new(vec![7; CHUNK * 3]),
+            fail: fail.clone(),
+        };
+        let id = "mem://verified/io-failure".parse().unwrap();
+        let mut r = VerifiedReader::new(Box::new(source), &id, u64::MAX).unwrap();
+        let mut b = [0; 1];
+        for at in [0, CHUNK, CHUNK * 2] {
+            r.seek(SeekFrom::Start(at as u64)).unwrap();
+            r.read_exact(&mut b).unwrap();
+        }
+        r.rewind().unwrap();
+        fail.store(true, Ordering::Relaxed);
+        b[0] = 42;
+        assert_eq!(
+            r.read(&mut b).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(b, [42]);
+        assert!(!r.changed_flag().load(Ordering::Relaxed));
+        fail.store(false, Ordering::Relaxed);
+        r.read_exact(&mut b).unwrap();
+        assert_eq!(b, [7]);
+    }
     #[test]
     fn changed_chunks_never_reach_callers_including_after_seek() {
         let mut file = tempfile::NamedTempFile::new().unwrap();

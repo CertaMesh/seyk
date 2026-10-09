@@ -2,6 +2,7 @@
 use seyk_core::{ResourceId, audio};
 
 /// Baseline captured at 7cab7ee before changing preparation, with the same files.
+/// See audio_input_capture.rs for a helper and command usable on clean 7cab7ee.
 /// Source hashes distinguish a decoder change from a regenerated fixture change.
 #[test]
 #[ignore = "requires scripts/audio/timing.py fixtures from the recorded baseline"]
@@ -50,8 +51,13 @@ fn input_hashes_remain_identical() {
         );
     }
     let actual = serde_json::to_value(rows).unwrap();
-    let expected: serde_json::Value =
-        serde_json::from_slice(include_bytes!("fixtures/audio-input-hashes.json")).unwrap();
+    // Encoders (notably CoreAudio AAC) can vary the actual compressed audio
+    // between generations. For fresh fixtures, explicitly supply a capture from
+    // clean 7cab7ee using these SAME files; never bless the current implementation.
+    let baseline = std::env::var_os("SEYK_AUDIO_BASELINE")
+        .map(|path| std::fs::read(path).unwrap())
+        .unwrap_or_else(|| include_bytes!("fixtures/audio-input-hashes.json").to_vec());
+    let expected: serde_json::Value = serde_json::from_slice(&baseline).unwrap();
     assert_eq!(
         actual.as_object().unwrap().len(),
         expected.as_object().unwrap().len()

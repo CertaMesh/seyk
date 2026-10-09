@@ -1145,23 +1145,45 @@ ABA writes. This is a commitment to the first pass's byte sequence, not a claim
 that a mutable file was atomically snapshotted at a single instant. Unconsumed
 changes need not be detected; they cannot introduce different decoder input.
 Mismatch/truncation poisons the reader and becomes `ChangedWhileReading`, even
-if an upstream parser translates the I/O error. No source snapshot is written.
+if an upstream parser translates the I/O error. Other refetch failures return
+an ordinary I/O error from `Read` without setting the content-change poison flag.
+No source snapshot is written.
 
-MP4 inspection traverses checked, parent-bounded ranges, skips `mdat`, and handles
-`moov` after media, extended sizes and size-zero boxes. The original edit-list,
-nearest-sample conversion, mdhd-end clamp and iTunSMPB precedence are retained.
+MP4 is admitted only with `ftyp` at offset 4. Preflight and the directly
+constructed isomp4 reader both start at byte zero; the non-MP4 probes never
+register isomp4, including the second pass after a duration scan. Prefixed MP4
+is rejected. MP3 ID3 prefixes are skipped by checked extents without allocating
+or interpreting their payload, so embedded tag bytes cannot select a probe origin.
+Inspection traverses checked, parent-bounded ranges, skips `mdat`,
+and handles `moov` after media and extended sizes. Size-zero is accepted for
+opaque media/padding only; parsed metadata with that encoding is rejected
+because Symphonia gives it a zero data length. Original edit-list conversion,
+mdhd-end clamping and iTunSMPB precedence are retained.
+
 Before demux construction, stsz/stts/stsc/stco/co64 counts are checked against
 box payload lengths and an aggregate **64 MiB live parsed-table allocation**
-budget; stsc entries are charged at their larger in-memory size. A separate
-64 MiB cumulative top-level metadata-byte limit bounds other MP4 metadata
-(excluding media and free padding). Fragmented MP4 (moof/mvex) is rejected:
-its sample-run allocations are outside this sample-table contract. These limits
-do not scale with recording duration. Existing codec, packet, sample-rate/channel and ALAC-cookie
-checks remain.
+budget; stsc entries are charged at their larger in-memory size. Every constant
+and variable stsz sample size is bounded to the **1 MiB packet limit**, including
+before the demux-only duration pass. A fixed scratch buffer scans variable sizes.
+A separate 64 MiB cumulative top-level metadata-byte limit bounds metadata
+(excluding media and free padding). Parent bounds are checked throughout metadata
+containers, every ilst item (including cover art and unknown tags), sample
+entries and wave codec containers. Parsed leaves/items are capped at **64 KiB**;
+minimum prefixes prevent upstream length subtraction from underflowing. ESDS
+nested descriptor lengths are checked against their enclosing bytes as well.
+Unsupported sample entries, ES optional flags and fragmented MP4 structures
+(moof/mvex/sidx/mfra) are rejected before upstream construction. These limits do
+not scale with duration. AAC/ALAC sample entries retain their existing codec,
+packet, sample-rate/channel and ALAC-cookie checks.
 
 PCM remains a bounded packet, resampler history, rolling 10 s window and at most
 four pending windows. The chunk hash table costs 32 bytes per MiB (64 KiB for
-2 GiB). Compact locators grow with the configured duration: exactly two hours
+2 GiB). At the default 44,303,908,864-byte ceiling, the table has at most
+42,252 entries / 1,352,064 hash bytes (about 1.29 MiB, excluding Vec capacity).
+The first pass hashes the full admitted byte extent **before** checking duration;
+a source near that byte ceiling is fully read even if its duration is then
+rejected. The small measured over-cap fixtures do not represent that worst-case
+rejection cost. Compact locators grow with the configured duration: exactly two hours
 produce 899 full windows and one 8 s tail, 900 windows total. Source hashing and
 verification add I/O; unknown-length files additionally require demux traversal.
 No PCM, readable content or chunk commitments are persisted in the cache.
@@ -1200,6 +1222,18 @@ run `audio_timing` and `audio_input_parity` with `SEYK_AUDIO_TIMING` pointing th
 The fixture source hashes retain baseline provenance. The gate compares model
 inputs and locators, allowing container creation timestamps to change on
 regeneration; different codec tooling can still change the canonical PCM.
+`audio_input_capture.rs` is a standalone ignored capture helper using only APIs
+available at `7cab7ee`; its header gives the command for a clean historical
+checkout. Use the same generated files for historical and current captures to
+compare complete JSON. CoreAudio AAC encoding can change the actual audio
+between fixture generations, not just timestamps. For regenerated fixtures,
+pass `SEYK_AUDIO_BASELINE=/path/to/7cab7ee-capture.json` to `audio_input_parity`;
+the default remains the committed capture. Do not capture that override with the
+implementation under test. This review's same-file control using unmodified
+`7cab7ee` audio modules produced identical complete JSON for all 18 files and
+20 windows; only the regenerated Apple AAC differed from the older capture.
+The legacy `windows(Vec<u8>)` helper always uses the default duration; configured
+callers use `windows_verified` or the engine builder instead.
 
 Measurements use `scripts/audio/long.py tmp/long` and the release
 `bench_audio` example, separately per source and mode. The generator streams
@@ -1213,9 +1247,12 @@ fixtures live under ignored `tmp` and are deleted after verification.
 
 ### Phase 5b-1 measured evidence
 
+The cost and held-out recall observations below were collected at `c969667`,
+before review hardening; they were not remeasured in the fix round.
+
 Measured on Apple M5 Max, 64 GiB, macOS 26.5, Rust 1.99.0 release. Indexing uses CPU/q8, 256 dimensions, one ORT thread, a fresh model/process and empty in-memory cache per file. OS caches were not flushed. Up to two indexing measurements ran concurrently; other host work also ran. Load columns show **(1, 5, 15 minute averages), before → after**, not a run average. The host one-minute load was also observed above 82 during the long runs; these are shared-host costs, not isolated performance comparisons.
 
-### Preparation (no embedding model)
+#### Preparation (no embedding model)
 
 Decode time includes verified reads and, where required, the demux duration pass. RSS is the per-process peak, including libraries. The hash and complete verified-read stages are measured separately. MB/s uses decimal MB; RSS uses MiB.
 
@@ -1232,7 +1269,7 @@ Decode time includes verified reads and, where required, the demux duration pass
 
 Over-cap preparation timings are **rejection latency**, not successful decode throughput; both emitted zero windows. Durations: 10 min = 600 s; old cap = 1,048.576 s; 2 h = 7,200 s; over cap = 7,260 s. Here old cap means the prior decoded-duration ceiling; the WAV header puts that synthetic source slightly above the former encoded-byte ceiling.
 
-### Full indexing
+#### Full indexing
 
 Index time excludes initial text-model construction but includes lazy audio-model load, source verification, decoding, embedding and resource binding. Embedding throughput includes the first lazy audio load. Total s also includes initial model construction; it starts inside the benchmark process.
 
@@ -1249,7 +1286,7 @@ Index time excludes initial text-model construction but includes lazy audio-mode
 
 Over-cap index timings are rejection latency. The harness asserts zero embedder calls for both over-cap sources. The two-hour admitted cases each embedded 900 windows; source windows contain 8,998 audio seconds including overlap. No STT runs in any measurement. Over-cap RSS excludes the lazy audio model because embedding is never attempted. Admitted-case RSS stays in a narrow band across durations. The ten-minute MP3 observation is much slower than the other admitted cases; these unisolated runs do not establish a codec performance difference.
 
-### Retrieval compatibility
+#### Retrieval compatibility
 
 The frozen held-out synthetic corpus retains its earlier results at both widths. Load is the whole recall gate’s before/after (1, 5, 15 minute) averages, including compilation; it is not a per-width average. The two widths ran sequentially while host contention changed, so their elapsed costs are not a dimension comparison.
 
@@ -1267,4 +1304,9 @@ retrieval recall; and Rust 1.89.0 default/audio all-target workspace checks.
 All-feature license validation passes. The complete cargo-deny audit reports
 pre-existing unmaintained packages number_prefix 0.4.0 (RUSTSEC-2025-0119),
 paste 1.0.15 (RUSTSEC-2024-0436), and ttf-parser 0.25.1 (RUSTSEC-2026-0192).
-Dependency manifests, the lockfile and advisory policy are unchanged.
+Dependency versions, the lockfile and advisory policy are unchanged.
+
+The review round reran formatting, default/audio workspace Clippy with warnings
+denied, both workspace test configurations, audio goldens, generated timing
+fixtures, same-file historical input-hash/slice parity, and both Rust 1.89
+all-target checks; all passed. The benchmark usage-error smoke check passed.

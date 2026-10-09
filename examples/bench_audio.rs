@@ -29,10 +29,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    const LIMIT_SECS: u64 = 7200;
     let args: Vec<_> = std::env::args().collect();
+    if args.len() != 4 || !matches!(args[1].as_str(), "prepare" | "index") {
+        return Err("usage: bench_audio <prepare|index> <audio-file> <duration-seconds>".into());
+    }
     let mode = &args[1];
     let path = std::fs::canonicalize(&args[2])?;
-    let duration: f64 = args[3].parse()?;
+    let duration: f64 = args[3]
+        .parse()
+        .map_err(|_| "usage: bench_audio <prepare|index> <audio-file> <duration-seconds>")?;
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err(
+            "usage: bench_audio <prepare|index> <audio-file> <positive-duration-seconds>".into(),
+        );
+    }
     let id = ResourceId::from_path(&path)?;
     let before = load();
     let started = Instant::now();
@@ -40,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut source = audio::VerifiedReader::new(
             Box::new(std::fs::File::open(&path)?),
             &id,
-            seyk::discovery::audio_byte_limit(7200)?,
+            seyk::discovery::audio_byte_limit(LIMIT_SECS)?,
         )?;
         let hash = source.stats();
         std::io::copy(&mut source, &mut std::io::sink())?;
@@ -48,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source.rewind()?;
         let decode = Instant::now();
         let mut windows = 0;
-        let result = audio::windows_verified(source, &id, 7200, |_, _| {
+        let result = audio::windows_verified(source, &id, LIMIT_SECS, |_, _| {
             windows += 1;
             Ok(())
         });
@@ -92,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .threads(1)
             .build()?;
         let engine = SearchEngine::builder()
+            .max_audio_duration_secs(LIMIT_SECS)
             .embedder(Timed {
                 model,
                 timing: timing.clone(),
@@ -105,10 +117,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "{}",
             serde_json::json!({"mode":mode,"file":path.file_name(),"duration_s":duration,"index_s":elapsed,"embedding_s":embed,"embedded_windows":n,"embedding_windows_s":n as f64/embed,"index_windows_s":n as f64/elapsed,"seconds_per_audio_minute":elapsed*60.0/duration,"peak_rss_bytes":rss(),"load_before":before,"load_after":load(),"total_with_load_s":started.elapsed().as_secs_f64(),"skipped":report.sync.skipped})
         );
-        if duration <= 7200.0 && !report.sync.skipped.is_empty() {
+        if duration <= LIMIT_SECS as f64 && !report.sync.skipped.is_empty() {
             return Err("unexpected benchmark rejection".into());
         }
-        if duration > 7200.0 {
+        if duration > LIMIT_SECS as f64 {
             assert_eq!(n, 0);
             assert_eq!(report.sync.skipped.len(), 1);
         }

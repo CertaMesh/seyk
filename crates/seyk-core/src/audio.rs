@@ -12,9 +12,9 @@ use symphonia::core::{
     audio::SampleBuffer,
     codecs::{CodecParameters, Decoder, DecoderOptions},
     formats::{FormatOptions, FormatReader},
-    io::MediaSourceStream,
+    io::{MediaSource, MediaSourceStream},
     meta::MetadataOptions,
-    probe::Hint,
+    probe::{Hint, Probe},
 };
 mod aac;
 mod alac;
@@ -59,6 +59,8 @@ pub fn media_type(bytes: &[u8]) -> &'static str {
 
 /// Calls `emit` with one owned window at a time. No decoded file is retained.
 /// Endpoints describe the post-edit presentation timeline, with outward rounding.
+/// This legacy convenience API always uses the default 7,200-second limit.
+/// Use `windows_verified` or the engine builder for a configured duration policy.
 pub fn windows(
     bytes: Vec<u8>,
     id: &ResourceId,
@@ -140,6 +142,99 @@ fn windows_inner(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum Container {
+    Wav,
+    Flac,
+    Mp3,
+    Mp4,
+}
+impl Container {
+    fn sniff(header: &[u8], id: &ResourceId) -> Result<Self> {
+        if header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WAVE") {
+            Ok(Self::Wav)
+        } else if header.starts_with(b"fLaC") {
+            Ok(Self::Flac)
+        } else if header.get(4..8) == Some(b"ftyp") {
+            Ok(Self::Mp4)
+        } else if header.starts_with(b"ID3")
+            || (header.len() >= 2 && header[0] == 0xff && header[1] & 0xe0 == 0xe0)
+        {
+            Ok(Self::Mp3)
+        } else {
+            Err(unsupported(
+                id,
+                "unrecognized audio header at canonical origin",
+            ))
+        }
+    }
+
+    fn open(self, mut stream: MediaSourceStream, id: &ResourceId) -> Result<Box<dyn FormatReader>> {
+        use symphonia::default::formats::{FlacReader, IsoMp4Reader, MpaReader, WavReader};
+        let options = FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        };
+        guarded(id, || {
+            if matches!(self, Self::Mp4) {
+                // IsoMp4Reader expects the cursor at the ftyp marker and rewinds
+                // four buffered bytes. No scanning: this is exactly origin zero,
+                // whose entire atom tree passed preflight before this call.
+                let mut size = [0; 4];
+                stream
+                    .read_exact(&mut size)
+                    .map_err(|_| unsupported(id, "MP4 header read failed"))?;
+                return IsoMp4Reader::try_new(stream, &options)
+                    .map(|r| Box::new(r) as Box<dyn FormatReader>)
+                    .map_err(|_| unsupported(id, "invalid MP4 container"));
+            }
+            if matches!(self, Self::Mp3) {
+                skip_id3(&mut stream, id)?;
+            }
+            // Never register IsoMp4Reader on the fallback path. Even an ftyp
+            // hidden in a tag, prefix, or other format cannot select that reader.
+            let mut probe = Probe::default();
+            match self {
+                Self::Wav => probe.register_all::<WavReader>(),
+                Self::Flac => probe.register_all::<FlacReader>(),
+                Self::Mp3 => probe.register_all::<MpaReader>(),
+                Self::Mp4 => unreachable!(),
+            }
+            probe
+                .format(&Hint::new(), stream, &options, &MetadataOptions::default())
+                .map(|p| p.format)
+                .map_err(|_| unsupported(id, "unrecognized or corrupt audio container"))
+        })
+    }
+}
+
+// Skip ID3 using checked extents, without allocating or parsing its payload.
+// Otherwise an MPEG sync word embedded in tag artwork could change probe origin.
+fn skip_id3(stream: &mut MediaSourceStream, id: &ResourceId) -> Result<()> {
+    let invalid = || unsupported(id, "invalid or excessive ID3 prefix");
+    let len = stream.byte_len().ok_or_else(invalid)?;
+    let mut at = 0u64;
+    for _ in 0..16 {
+        let mut header = [0; 10];
+        stream.read_exact(&mut header).map_err(|_| invalid())?;
+        if !header.starts_with(b"ID3") {
+            stream.seek(SeekFrom::Start(at)).map_err(|_| invalid())?;
+            return Ok(());
+        }
+        if !(2..=4).contains(&header[3]) || header[6..10].iter().any(|b| b & 0x80 != 0) {
+            return Err(invalid());
+        }
+        let body = header[6..10].iter().fold(0u64, |n, b| (n << 7) | *b as u64);
+        let footer = u64::from(header[3] == 4 && header[5] & 0x10 != 0) * 10;
+        at = at
+            .checked_add(10 + body + footer)
+            .filter(|n| *n < len)
+            .ok_or_else(invalid)?;
+        stream.seek(SeekFrom::Start(at)).map_err(|_| invalid())?;
+    }
+    Err(invalid())
+}
+
 struct Reader {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
@@ -166,26 +261,18 @@ impl Reader {
         let n = source
             .read(&mut header)
             .map_err(|_| unsupported(id, "audio source read failed"))?;
-        let reliable_length = matches!(media_type(&header[..n]), "audio/wav" | "audio/flac");
-        let timing = mp4::timing(&mut source).map_err(|reason| unsupported(id, reason))?;
+        let container = Container::sniff(&header[..n], id)?;
+        let reliable_length = matches!(container, Container::Wav | Container::Flac);
+        let timing = if matches!(container, Container::Mp4) {
+            mp4::timing(&mut source).map_err(|reason| unsupported(id, reason))?
+        } else {
+            mp4::Timing::default()
+        };
         source
             .seek(SeekFrom::Start(0))
             .map_err(|_| unsupported(id, "audio source seek failed"))?;
         let stream = MediaSourceStream::new(Box::new(source), Default::default());
-        let mut format = guarded(id, || {
-            symphonia::default::get_probe()
-                .format(
-                    &Hint::new(),
-                    stream,
-                    &FormatOptions {
-                        enable_gapless: true,
-                        ..Default::default()
-                    },
-                    &MetadataOptions::default(),
-                )
-                .map_err(|_| unsupported(id, "unrecognized or corrupt audio container"))
-        })?
-        .format;
+        let mut format = container.open(stream, id)?;
         if format.tracks().len() != 1 {
             return Err(unsupported(id, "multiple audio tracks are unsupported"));
         }
@@ -285,20 +372,7 @@ impl Reader {
             stream
                 .seek(SeekFrom::Start(0))
                 .map_err(|_| unsupported(id, "audio rewind failed"))?;
-            format = guarded(id, || {
-                symphonia::default::get_probe()
-                    .format(
-                        &Hint::new(),
-                        stream,
-                        &FormatOptions {
-                            enable_gapless: true,
-                            ..Default::default()
-                        },
-                        &MetadataOptions::default(),
-                    )
-                    .map(|p| p.format)
-                    .map_err(|_| unsupported(id, "audio reprobe failed"))
-            })?;
+            format = container.open(stream, id)?;
         }
         Ok(Self {
             format,
@@ -564,6 +638,30 @@ pub fn slice_verified(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id3_payload_is_skipped_without_scanning_embedded_markers() {
+        // Defensive parser test: small byte vectors, including a fake MPEG sync
+        // word inside a tag and a footer. No payload reaches a format probe.
+        let id = "mem://audio/id3".parse().unwrap();
+        let mut bytes = vec![b'I', b'D', b'3', 4, 0, 0x10, 0, 0, 0, 4];
+        bytes.extend([0xff, 0xfb, 0, 0]);
+        bytes.extend([0; 10]);
+        bytes.extend([7; 12]);
+        let source = VerifiedReader::new(Box::new(Cursor::new(bytes)), &id, 100).unwrap();
+        let mut stream = MediaSourceStream::new(Box::new(source), Default::default());
+        skip_id3(&mut stream, &id).unwrap();
+        assert_eq!(stream.stream_position().unwrap(), 24);
+        let bytes = vec![b'I', b'D', b'3', 4, 0, 0, 0x7f, 0x7f, 0x7f, 0x7f];
+        let source = VerifiedReader::new(Box::new(Cursor::new(bytes)), &id, 100).unwrap();
+        assert!(
+            skip_id3(
+                &mut MediaSourceStream::new(Box::new(source), Default::default()),
+                &id
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn dependency_panic_becomes_payload_free_audio_error() {
