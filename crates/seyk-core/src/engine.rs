@@ -351,6 +351,22 @@ impl SearchEngine {
         )
     }
 
+    /// Sync and cached-only search must agree on the prepared audio identity.
+    fn audio_descriptor_hash(&self, resource: &ProvidedResource) -> String {
+        #[cfg(feature = "audio")]
+        {
+            input_hash(&[
+                &resource.fingerprint(),
+                crate::audio::PREPARATION,
+                self.embedder.input_identity(crate::Modality::Audio),
+            ])
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            resource.fingerprint()
+        }
+    }
+
     fn audio_eligible(&self, id: &ResourceId) -> Result<bool> {
         let limit = self.max_audio_duration_secs * 1000;
         self.with_cache(|c| {
@@ -459,18 +475,10 @@ impl SearchEngine {
                 {
                     r.fingerprint()
                 }
+            } else if r.kind == ResourceKind::Audio {
+                self.audio_descriptor_hash(r)
             } else {
                 r.fingerprint()
-            };
-            #[cfg(feature = "audio")]
-            let descriptor_hash = if r.kind == ResourceKind::Audio {
-                input_hash(&[
-                    &descriptor_hash,
-                    crate::audio::PREPARATION,
-                    self.embedder.input_identity(crate::Modality::Audio),
-                ])
-            } else {
-                descriptor_hash
             };
             let cached = known.get(&r.id);
             // Listing already supplies a freshness token; only stat again before a read.
@@ -1463,20 +1471,7 @@ impl<'e> SearchRequest<'e> {
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
         for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
             let failed = sync.skipped.iter().any(|s| s.resource == r.id);
-            let descriptor = {
-                #[cfg(feature = "audio")]
-                {
-                    input_hash(&[
-                        &r.fingerprint(),
-                        crate::audio::PREPARATION,
-                        engine.embedder.input_identity(crate::Modality::Audio),
-                    ])
-                }
-                #[cfg(not(feature = "audio"))]
-                {
-                    r.fingerprint()
-                }
-            };
+            let descriptor = engine.audio_descriptor_hash(r);
             let current = metadata.get(&r.id).is_some_and(|m| {
                 // Unknown/changed cached sources cannot establish eligibility in cached-only search.
                 (self.sync || m.version.matches(&r.version))
