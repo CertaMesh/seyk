@@ -615,6 +615,35 @@ Everything runs locally.
 
 See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to reproduce them.
 
+
+## CPU throughput controls
+
+Defaults remain one CPU session, ONNX Runtime's automatic intra-op thread count,
+16 inputs per batch and q8 weights. For measured tuning, the CLI accepts:
+
+```bash
+seyk index --text-only --sessions 2 --threads 4 --batch-size 16 --embedding-window 32 ./notes
+```
+
+`--threads` is per session. `--batch-size` limits one model call;
+`--embedding-window` controls how many inputs the engine sends at once and defaults
+to `sessions × batch-size`. A window no larger than one batch cannot use two
+sessions concurrently; use at least two full batches to keep both busy. Each
+additional text session has its own weights/allocator arena (budget roughly 3 GiB
+at batch 16, then measure). Avoid automatic thread counts
+in a multi-session experiment: several full-machine thread teams can be slower.
+Larger windows also increase the work repeated after an interruption or batch
+failure; the engine still writes cache/progress updates serially.
+Image and audio requests remain serial. The same controls work with search and MCP,
+and nondefault controls select a separate daemon endpoint, not a new vector cache.
+
+Library callers use `EmbeddingGemma2::builder().sessions(n).threads(m).batch_size(b)`
+and `SearchEngine::builder().batch_size(window)`. These scheduling controls preserve
+existing CPU cache identities; q8 and fp32 continue to have distinct identities.
+Use the [paired benchmark protocol](docs/benchmarks.md#paired-cpu-throughput-harness)
+to choose settings for your own machine. The busy-machine evidence is indicative;
+it does not establish a faster default.
+
 ## Known limitations
 
 - **Literal matches still pull.** A passage that *shows* a theme without naming it

@@ -3129,6 +3129,7 @@ dependencies = [
  "fast_image_resize",
  "image",
  "ort",
+ "rayon",
  "rustfft",
  "serde",
  "serde_json",
