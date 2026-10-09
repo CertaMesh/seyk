@@ -1084,6 +1084,20 @@ fn arbitrary_profiles_lifecycle_missing_tables_and_path_subset() {
         .unwrap();
     conn.execute_batch("DROP TABLE segments_fts_p_61").unwrap();
     assert!(cache.lexical_search("a", &query, &wanted, 1).is_err());
+    drop(cache);
+    let mut cache = SqliteCache::open(&database).unwrap();
+    let error = cache.register_profile("a", &profile("a")).unwrap_err();
+    assert!(error.to_string().contains("corrupt cache"));
+    assert_eq!(cache.resource_index("a").unwrap().len(), 2);
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'segments_fts_p_61'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
     conn.execute_batch("CREATE VIRTUAL TABLE segments_fts_p_deadbeef USING fts5(body)")
         .unwrap();
     cache.clear().unwrap();
@@ -1257,7 +1271,13 @@ fn migration_failure_and_unsupported_metadata_preserve_the_database() {
             (schema, vector, common::legacy::postings(&conn))
         };
         let before = snapshot();
-        assert!(SqliteCache::open(&database).is_err(), "{failure}");
+        let error = SqliteCache::open(&database).err().expect(failure);
+        if matches!(failure, "future" | "unknown") {
+            let version = if failure == "future" { "7" } else { "garbage" };
+            assert!(error.to_string().contains(&format!(
+                "cache schema {version} is newer than this binary supports; use a newer seyk or a separate --cache-path"
+            )));
+        }
         assert_eq!(snapshot(), before, "{failure}");
     }
 }

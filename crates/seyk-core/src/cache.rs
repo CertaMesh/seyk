@@ -619,7 +619,7 @@ impl SqliteCache {
         if let Some(version) = &version {
             if !matches!(version.as_str(), "1" | "2" | "3" | "4" | "5") {
                 return Err(Error::Config(format!(
-                    "unsupported cache schema version: {version}"
+                    "cache schema {version} is newer than this binary supports; use a newer seyk or a separate --cache-path"
                 )));
             }
         } else {
@@ -854,7 +854,7 @@ fn json_err(e: serde_json::Error) -> Error {
 impl EmbeddingCache for SqliteCache {
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute(
+        let inserted = tx.execute(
             "INSERT OR IGNORE INTO profiles (id, profile, dimension) VALUES (?1, ?2, ?3)",
             params![
                 id,
@@ -862,7 +862,20 @@ impl EmbeddingCache for SqliteCache {
                 profile.model.dimension.get() as i64
             ],
         )?;
-        create_profile_fts(&tx, id)?;
+        if inserted == 0 {
+            let table_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [fts_table(id).trim_matches('"')],
+                |r| r.get(0),
+            )?;
+            if !table_exists {
+                return Err(Error::Config(
+                    "corrupt cache: registered profile is missing its keyword table".into(),
+                ));
+            }
+        } else {
+            create_profile_fts(&tx, id)?;
+        }
         tx.commit()?;
         Ok(())
     }

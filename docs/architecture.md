@@ -998,7 +998,6 @@ cargo test --release --features audio --test audio_eval largest_allowed_file -- 
 
 Next: Phase 5b requires a separate STT/extraction decision and a user decision
 before changing the 32 MiB input-size policy.
-||||||| parent of 6bf0018 (fix(cache): isolate BM25 by profile and maintain live corpus statistics)
 
 ## P11 report: per-profile BM25 and live deletion statistics
 
@@ -1059,7 +1058,12 @@ Public synthetic release-mode benchmark on macOS ARM with bundled SQLite 3.53.2:
 32 profiles, 20,031 documents and 4,046,200 postings (20,000 documents in the
 largest profile). `dbstat` allocated keyword pages grew from 22,441,984 to
 68,923,392 bytes, **3.071×** on this corpus; this is larger than the design's
-approximate 2× estimate and depends on token distribution. These are active
+approximate 2× estimate. Every synthetic document has the identical 200-token
+body: postings compress especially well while the stored content repeats those
+tokens in each row, making this corpus near worst case for the ratio. On a fresh
+copy of the local default cache, migration grew allocated keyword pages from
+16,384 to 20,480 bytes, **1.250×**. The ratio depends on token distribution and
+corpus size; neither measurement is a general storage bound. These are active
 keyword pages, excluding relational tables, freed pages and WAL.
 
 In the final run, single-document replacement p50/p95 was 0.607/1.613 ms;
@@ -1082,7 +1086,7 @@ deletion, pruning and reopen. Previously, B reversed A's top two results and its
 deletion left inflated scores. Additional bundled-SQLite tests cover 24 edit/delete
 steps against fresh SQLite and MemoryCache, content integrity checks, Unicode and
 duplicate postings, empty-token documents, sparse IDs across VACUUM, transactional
-rollback, real v1–v5 layouts, warm v5 reuse with a provider that forbids reads,
+rollback, reconstructed v1–v5 layouts, warm v5 reuse with a provider that forbids reads,
 unknown schemas, arbitrary profile IDs, and sorted persisted fields.
 
 The existing eight-target evaluation was run with main and P11 release binaries
