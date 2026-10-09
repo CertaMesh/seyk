@@ -629,8 +629,8 @@ seyk index --text-only --sessions 2 --threads 4 --batch-size 16 --embedding-wind
 `--embedding-window` controls how many inputs the engine sends at once and defaults
 to `sessions × batch-size`. A window no larger than one batch cannot use two
 sessions concurrently; use at least two full batches to keep both busy. Each
-additional text session has its own weights/allocator arena (budget roughly 3 GiB
-at batch 16, then measure). Avoid automatic thread counts
+additional text session has its own weights/allocator arena (several GiB each;
+measure memory use). Avoid automatic thread counts
 in a multi-session experiment: several full-machine thread teams can be slower.
 Larger windows also increase the work repeated after an interruption or batch
 failure; the engine still writes cache/progress updates serially.
@@ -640,6 +640,9 @@ and nondefault controls select a separate daemon endpoint, not a new vector cach
 Library callers use `EmbeddingGemma2::builder().sessions(n).threads(m).batch_size(b)`
 and `SearchEngine::builder().batch_size(window)`. These scheduling controls preserve
 existing CPU cache identities; q8 and fp32 continue to have distinct identities.
+The pool bounds concurrent inference, not total queued memory across concurrent
+library callers. Each caller prepares its inputs before entering the pool, so
+callers must limit their own concurrency and input window sizes.
 Use the [paired benchmark protocol](docs/benchmarks.md#paired-cpu-throughput-harness)
 to choose settings for your own machine. The busy-machine evidence is indicative;
 it does not establish a faster default.

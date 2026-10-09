@@ -137,12 +137,14 @@ pub struct GemmaConfig {
     pub vision: bool,
     /// Enable audio inputs; missing weights fail individual audio requests.
     pub audio: bool,
-    /// ONNX Runtime intra-op threads. `None` lets ONNX Runtime decide.
+    /// ONNX Runtime intra-op threads (1..=i32::MAX). `None` lets ONNX Runtime decide.
     pub threads: Option<usize>,
     /// Inputs per model call.
     pub batch_size: usize,
     /// Independent CPU text sessions. Each owns an allocator arena and thread team.
     /// Defaults to one; choose explicit intra-op threads when using several.
+    /// Bounds concurrent inference, not queued memory across callers. Callers must
+    /// limit their own concurrency and input window sizes.
     pub sessions: usize,
 }
 
@@ -395,6 +397,9 @@ impl EmbeddingGemma2 {
                 "max_tokens, batch_size, sessions and threads must be nonzero".into(),
             ));
         }
+        if config.threads.is_some_and(|n| n > i32::MAX as usize) {
+            return Err(Error::Config("threads must not exceed i32::MAX".into()));
+        }
         if config.audio && !cfg!(feature = "audio") {
             return Err(Error::UnsupportedModality {
                 modality: Modality::Audio,
@@ -434,7 +439,7 @@ impl EmbeddingGemma2 {
                     .num_threads(config.sessions)
                     .thread_name(|i| format!("seyk-text-{i}"))
                     .build()
-                    .map_err(ort_err)?,
+                    .map_err(|e| Error::Config(format!("building CPU text pool: {e}")))?,
             )
         } else {
             None
@@ -572,47 +577,23 @@ impl EmbeddingGemma2 {
             .iter()
             .map(|e| e.get_ids().iter().map(|&i| i as i64).collect())
             .collect();
-        let mut metrics = TextBatchMetrics {
-            tokenize: elapsed(start),
-            tokens: ids.iter().map(Vec::len).sum(),
-            ..Default::default()
-        };
-        // Preserve the existing stable length sort and original output positions.
-        let mut order: Vec<usize> = (0..ids.len()).collect();
-        order.sort_by_key(|&i| ids[i].len());
-        let run = |chunk: &[usize]| {
-            let batch: Vec<&[i64]> = chunk.iter().map(|&i| ids[i].as_slice()).collect();
+        let tokenize = elapsed(start);
+        let run = |batch: &[&[i64]]| {
             let index = self
                 .text_workers
                 .as_ref()
                 .and_then(rayon::ThreadPool::current_thread_index)
                 .unwrap_or(0);
-            self.run_text_on(index, &batch, None, None, measure)
+            self.run_text_on(index, batch, None, None, measure)
         };
-        // Indexed collection is in chunk order, regardless of completion order.
-        // One dedicated worker per session bounds inference across concurrent callers.
-        let results: Vec<_> = if let Some(workers) = &self.text_workers {
-            workers.install(|| order.par_chunks(self.config.batch_size).map(run).collect())
-        } else {
-            order.chunks(self.config.batch_size).map(run).collect()
-        };
-        let mut out: Vec<Option<Embedding>> = vec![None; ids.len()];
-        for (chunk, result) in order.chunks(self.config.batch_size).zip(results) {
-            let (vectors, timing) = result?;
-            metrics.padding += timing.padding;
-            metrics.inference += timing.inference;
-            metrics.normalize += timing.normalize;
-            metrics.padded_tokens += timing.padded_tokens;
-            for (&i, v) in chunk.iter().zip(vectors) {
-                out[i] = Some(v);
-            }
-        }
-        Ok((
-            out.into_iter()
-                .map(|v| v.expect("every input embedded"))
-                .collect(),
-            metrics,
-        ))
+        let (vectors, mut metrics) = embed_token_ids(
+            &ids,
+            self.config.batch_size,
+            self.text_workers.as_ref(),
+            run,
+        )?;
+        metrics.tokenize = tokenize;
+        Ok((vectors, metrics))
     }
 
     /// Run the text model on padded token ids, optionally with media features.
@@ -782,6 +763,58 @@ fn onnx_files_without_symlinks(
         }
     }
     Ok(dst)
+}
+
+// Private scheduling seam: tests inject model-free inference, while production
+// uses the same ordering, short-circuit collection and output restoration.
+fn embed_token_ids(
+    ids: &[Vec<i64>],
+    batch_size: usize,
+    workers: Option<&rayon::ThreadPool>,
+    run: impl Fn(&[&[i64]]) -> Result<(Vec<Embedding>, TextBatchMetrics)> + Sync,
+) -> Result<(Vec<Embedding>, TextBatchMetrics)> {
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by_key(|&i| ids[i].len());
+    let run_chunk = |chunk: &[usize]| {
+        let batch: Vec<&[i64]> = chunk.iter().map(|&i| ids[i].as_slice()).collect();
+        run(&batch)
+    };
+    // Result collection discards successes on error and short-circuits admission.
+    // Rayon joins already-running work before returning; simultaneous failures
+    // may return either error. Successful results retain indexed chunk order.
+    let results = if let Some(workers) = workers {
+        workers.install(|| {
+            order
+                .par_chunks(batch_size)
+                .map(run_chunk)
+                .collect::<Result<Vec<_>>>()
+        })
+    } else {
+        order
+            .chunks(batch_size)
+            .map(run_chunk)
+            .collect::<Result<Vec<_>>>()
+    }?;
+    let mut metrics = TextBatchMetrics {
+        tokens: ids.iter().map(Vec::len).sum(),
+        ..Default::default()
+    };
+    let mut out: Vec<Option<Embedding>> = vec![None; ids.len()];
+    for (chunk, (vectors, timing)) in order.chunks(batch_size).zip(results) {
+        metrics.padding += timing.padding;
+        metrics.inference += timing.inference;
+        metrics.normalize += timing.normalize;
+        metrics.padded_tokens += timing.padded_tokens;
+        for (&i, v) in chunk.iter().zip(vectors) {
+            out[i] = Some(v);
+        }
+    }
+    Ok((
+        out.into_iter()
+            .map(|v| v.expect("every input embedded"))
+            .collect(),
+        metrics,
+    ))
 }
 
 fn session(path: &Path, threads: Option<usize>) -> Result<Session> {
@@ -1012,6 +1045,126 @@ pub mod vision {
 }
 
 #[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Barrier, mpsc};
+
+    fn success(batch: &[&[i64]]) -> Result<(Vec<Embedding>, TextBatchMetrics)> {
+        let vectors = batch
+            .iter()
+            .map(|ids| {
+                let mut vector = vec![0.0; 128];
+                vector[ids[0] as usize] = 1.0;
+                Embedding::from_raw(vector, Dimension::D128)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((vectors, TextBatchMetrics::default()))
+    }
+
+    #[test]
+    fn serial_and_pool_stop_after_first_failure() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let ids = vec![vec![0]; 32];
+        for workers in [None, Some(&pool)] {
+            let calls = AtomicUsize::new(0);
+            let result = embed_token_ids(&ids, 1, workers, |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Embedding("injected failure".into()))
+            });
+            assert!(
+                matches!(result, Err(Error::Embedding(message)) if message == "injected failure")
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn reversed_completion_restores_order_and_discards_successes_on_failure() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        // Stable length sort produces chunks [1, 2] then [0, 3].
+        let ids = vec![vec![0; 3], vec![1], vec![2; 2], vec![3; 4]];
+        for fail_earlier in [false, true] {
+            let (send, recv) = mpsc::channel();
+            let recv = Mutex::new(recv);
+            let completed = Mutex::new(Vec::new());
+            let result = embed_token_ids(&ids, 2, Some(&pool), |batch| {
+                let first = batch[0][0];
+                if first == 1 {
+                    recv.lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                    completed.lock().unwrap().push(first);
+                    if fail_earlier {
+                        return Err(Error::Embedding("earlier chunk failed".into()));
+                    }
+                    success(batch)
+                } else {
+                    let vectors = success(batch)?;
+                    completed.lock().unwrap().push(first);
+                    send.send(()).unwrap();
+                    Ok(vectors)
+                }
+            });
+            assert_eq!(*completed.lock().unwrap(), vec![0, 1]);
+            if fail_earlier {
+                // The sole public outcome is Err: no successful partial vector list.
+                assert!(
+                    matches!(result, Err(Error::Embedding(message)) if message == "earlier chunk failed")
+                );
+            } else {
+                let expected = success(&ids.iter().map(Vec::as_slice).collect::<Vec<_>>())
+                    .unwrap()
+                    .0;
+                assert_eq!(result.unwrap().0, expected);
+            }
+        }
+        // The same scheduler remains usable after a failed window, including retries.
+        for id in &ids {
+            let result =
+                embed_token_ids(std::slice::from_ref(id), 1, Some(&pool), success).unwrap();
+            assert_eq!(result.0, success(&[id]).unwrap().0);
+        }
+    }
+
+    #[test]
+    fn failure_joins_already_running_chunks() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let entered = Barrier::new(2);
+        let (send, recv) = mpsc::channel();
+        let recv = Mutex::new(recv);
+        let finished = AtomicBool::new(false);
+        let result = embed_token_ids(&[vec![0], vec![1]], 1, Some(&pool), |batch| {
+            entered.wait();
+            if batch[0][0] == 0 {
+                send.send(()).unwrap();
+                Err(Error::Embedding("injected failure".into()))
+            } else {
+                recv.lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                let vectors = success(batch)?;
+                finished.store(true, Ordering::SeqCst);
+                Ok(vectors)
+            }
+        });
+        assert!(result.is_err());
+        assert!(finished.load(Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
 mod resolution_tests {
     use super::*;
 
@@ -1058,6 +1211,33 @@ mod resolution_tests {
             EmbeddingGemma2::load(config),
             Err(Error::Config(_))
         ));
+    }
+
+    #[test]
+    fn thread_range_is_checked_before_model_loading() {
+        let missing = tempfile::tempdir().unwrap();
+        for threads in [0, i32::MAX as usize + 1, usize::MAX] {
+            let config = GemmaConfig {
+                source: ModelSource::Directory(missing.path().into()),
+                threads: Some(threads),
+                ..GemmaConfig::default()
+            };
+            assert!(matches!(
+                EmbeddingGemma2::load(config),
+                Err(Error::Config(_))
+            ));
+        }
+        for threads in [1, i32::MAX as usize] {
+            let config = GemmaConfig {
+                source: ModelSource::Directory(missing.path().into()),
+                threads: Some(threads),
+                ..GemmaConfig::default()
+            };
+            assert!(matches!(
+                EmbeddingGemma2::load(config),
+                Err(Error::ModelNotFound(_))
+            ));
+        }
     }
 
     #[test]

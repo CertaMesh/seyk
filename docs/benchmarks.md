@@ -142,6 +142,9 @@ compare quiet results with the old busy baseline to claim an optimization ratio.
 
 CPU defaults and all cache/profile fields remain unchanged. Optional tuning is
 for explicit experiments; selecting q8 versus fp32 still uses separate profiles.
+The pool bounds concurrent inference only. It does not bound total queued memory
+across library callers, which prepare inputs before entering the pool. Callers
+must limit their own concurrency and input window sizes.
 
 ### Busy-machine CPU controls measurement
 
@@ -164,6 +167,12 @@ around timed embedding; JSONL emitted by the harness records all 1/5/15 values.
 | batch: `q8:1:8:16:32` → `q8:1:8:32:32` | 1.125× [0.387–1.621] | 3.74 / 2.92 | 2397 / 4280 | 57.6–96.6 / 56.6–111.2 |
 | precision: `q8:1:8:16:32` → `fp32:1:8:16:32` | 1.074× [0.767–1.854] | 2.63 / 3.75 | 2398 / 2691 | 41.2–81.6 / 51.4–72.5 |
 | window: `q8:1:8:4:4` → `q8:1:8:4:16` | 2.296× [1.316–3.915] | 1.11 / 2.49 | 2514 / 1466 | 48.6–68.5 / 42.2–72.0 |
+
+The batch row's paired ratio points up while its aggregate median throughput
+points down; the precision row's aggregate medians point up. These directional
+disagreements under changing load are why neither summary should select a
+default. The precision row's paired and aggregate summaries agree in direction,
+but their magnitudes also differ substantially.
 
 The first three rows use `--pairs 5 --segments 32` (about 278 tokens/input).
 The window row uses `--pairs 5 --segments 16 --mixed` and microbatch 4 to bound
@@ -198,11 +207,12 @@ lever retained; the existing sort itself is unchanged.
 
 A separate same-run pair used `--pairs 1 --segments 32 --corpus 16 --queries 20`.
 This is a diagnostic sample, not a latency guarantee. Query samples follow one
-warm query; query shape warmup is not pinned to every pool session. Document
-embedding overlaps the contention samples. Cold search includes indexing the
+warm query; query shape warmup is not pinned to every pool session. These are
+**queries during a workload started concurrently**: document embedding may finish
+before all query samples, and per-sample overlap was not recorded. Cold search includes indexing the
 16 generated files; cached search reuses the same in-memory engine.
 
-| Configuration | Idle query p50/p95 | 1-min load | Concurrent query p50/p95 | 1-min load |
+| Configuration | Idle query p50/p95 | 1-min load | Queries during a workload started concurrently, p50/p95 | 1-min load |
 |---|---:|---|---:|---|
 | q8:1:8:16:32 | 257 / 700 ms | 68.9–71.1 | 599 / 10,412 ms | 71.1–84.9 |
 | q8:2:4:16:32 | 437 / 1,203 ms | 81.1–81.8 | 630 / 1,542 ms | 80.5–83.7 |

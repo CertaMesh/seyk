@@ -61,12 +61,12 @@ struct ModelArgs {
     #[arg(long, default_value = "q8", global = true)]
     precision: Precision,
 
-    /// Independent CPU text sessions (roughly 3 GiB each at batch 16).
+    /// Independent CPU text sessions (several GiB each; measure memory use).
     #[arg(long, default_value_t = 1, value_parser = positive_count, global = true)]
     sessions: usize,
 
     /// Intra-op threads per session; omitted lets ONNX Runtime decide.
-    #[arg(long, value_parser = positive_count, global = true)]
+    #[arg(long, value_parser = thread_count, global = true)]
     threads: Option<usize>,
 
     /// Text inputs per model call, independently of the engine window.
@@ -283,6 +283,21 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    let model = match &cli.command {
+        Command::Search { model, .. }
+        | Command::Index { model, .. }
+        | Command::Model { model, .. } => Some(model),
+        #[cfg(feature = "mcp")]
+        Command::Mcp { model, .. } => Some(model),
+        #[cfg(all(feature = "mcp", unix))]
+        Command::Daemon { model, .. } => Some(model),
+        _ => None,
+    };
+    if model.is_some_and(|m| m.sessions > 1 && m.threads.is_none()) {
+        eprintln!(
+            "warning: multiple CPU sessions with automatic threads may oversubscribe the machine; set --threads per session"
+        );
+    }
     match cli.command {
         Command::Search {
             query,
@@ -556,6 +571,14 @@ fn positive_count(value: &str) -> std::result::Result<usize, String> {
         .ok()
         .filter(|&n| n > 0)
         .ok_or_else(|| "must be a positive integer".to_string())
+}
+
+fn thread_count(value: &str) -> std::result::Result<usize, String> {
+    positive_count(value).and_then(|n| {
+        (n <= i32::MAX as usize)
+            .then_some(n)
+            .ok_or_else(|| "threads must not exceed i32::MAX".into())
+    })
 }
 
 impl ModelArgs {
@@ -1049,6 +1072,20 @@ mod tests {
                 ),
             ],
             stats: SearchStats::default(),
+        }
+    }
+
+    #[test]
+    fn threads_reject_out_of_range_counts() {
+        for value in ["1".to_string(), i32::MAX.to_string()] {
+            assert!(Cli::try_parse_from(["seyk", "search", "test", "--threads", &value]).is_ok());
+        }
+        for value in [
+            "0".to_string(),
+            (i32::MAX as usize + 1).to_string(),
+            usize::MAX.to_string(),
+        ] {
+            assert!(Cli::try_parse_from(["seyk", "search", "test", "--threads", &value]).is_err());
         }
     }
 

@@ -42,7 +42,11 @@ fn config(s: &str) -> Result<Config> {
         threads: if parts[2] == "auto" {
             None
         } else {
-            Some(positive(parts[2])?)
+            let threads = positive(parts[2])?;
+            if threads > i32::MAX as usize {
+                return Err("threads must not exceed i32::MAX".into());
+            }
+            Some(threads)
         },
         batch: positive(parts[3])?,
         window: positive(parts[4])?,
@@ -340,9 +344,14 @@ fn child(a: &Args, label: &str) -> Result<Cell> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn percentile(values: &mut [f64], q: f64) -> f64 {
+fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
-    values[((values.len() - 1) as f64 * q).round() as usize]
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    }
 }
 
 fn main() -> Result<()> {
@@ -390,7 +399,7 @@ fn main() -> Result<()> {
             candidate.warmed.load_after
         );
     }
-    let median = percentile(&mut ratios, 0.5);
+    let median = median(&mut ratios);
     println!(
         "{}",
         serde_json::json!({"kind":"summary", "candidate_over_baseline_median":median, "min":ratios[0], "max":ratios[ratios.len()-1], "ratios":ratios})
@@ -401,6 +410,24 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn medians_handle_odd_even_and_single_pairs() {
+        assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), 2.5);
+        assert_eq!(median(&mut [4.0, 1.0]), 2.5);
+        assert_eq!(median(&mut [2.0]), 2.0);
+    }
+
+    #[test]
+    fn thread_count_respects_ort_range() {
+        for threads in [1, i32::MAX as usize] {
+            assert!(config(&format!("q8:2:{threads}:16:32")).is_ok());
+        }
+        for threads in [0, i32::MAX as usize + 1, usize::MAX] {
+            assert!(config(&format!("q8:2:{threads}:16:32")).is_err());
+        }
+    }
+
     #[test]
     fn configurations_validate_every_count() {
         assert!(config("q8:2:4:16:32").is_ok());
