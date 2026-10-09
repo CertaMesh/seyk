@@ -167,6 +167,8 @@ pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
 pub struct SearchEngineBuilder {
     provider: Arc<dyn ResourceProvider>,
     extractors: Vec<Arc<dyn Extractor>>,
+    #[cfg(feature = "audio")]
+    audio_extractor: Option<crate::audio::AudioExtractor>,
     embedder: Option<Arc<dyn Embedder>>,
     cache: Option<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
@@ -175,6 +177,13 @@ pub struct SearchEngineBuilder {
 }
 
 impl SearchEngineBuilder {
+    /// Explicit audio extraction only; never registered with preview dispatch.
+    #[cfg(feature = "audio")]
+    pub fn audio_extractor(mut self, extractor: crate::audio::AudioExtractor) -> Self {
+        self.audio_extractor = Some(extractor);
+        self
+    }
+
     /// Register an extractor before the built-in text fallback. Custom
     /// extractors are tried in registration order; errors never fall through.
     pub fn extractor(mut self, extractor: impl Extractor + 'static) -> Self {
@@ -247,6 +256,8 @@ impl SearchEngineBuilder {
         Ok(SearchEngine {
             provider: self.provider,
             extractors: self.extractors,
+            #[cfg(feature = "audio")]
+            audio_extractor: self.audio_extractor,
             embedder,
             cache: Mutex::new(cache),
             indexing: Mutex::new(()),
@@ -268,6 +279,8 @@ impl SearchEngineBuilder {
 pub struct SearchEngine {
     provider: Arc<dyn ResourceProvider>,
     extractors: Vec<Arc<dyn Extractor>>,
+    #[cfg(feature = "audio")]
+    audio_extractor: Option<crate::audio::AudioExtractor>,
     embedder: Arc<dyn Embedder>,
     cache: Mutex<Box<dyn EmbeddingCache>>,
     /// Acquire before `cache`, never while holding it. Covers pending vectors
@@ -285,6 +298,8 @@ impl SearchEngine {
         SearchEngineBuilder {
             provider: Arc::new(FsProvider),
             extractors: Vec::new(),
+            #[cfg(feature = "audio")]
+            audio_extractor: None,
             embedder: None,
             cache: None,
             segmenter: TextSegmenter::default(),
@@ -294,11 +309,19 @@ impl SearchEngine {
     }
 
     /// Extract readable evidence from a hit, verifying its full-resource hash
-    /// before any extractor receives bytes. No indexing or model calls occur.
+    /// before any extractor receives bytes. Only explicit audio extraction may run STT.
     pub fn extract(&self, hit: &SearchHit) -> Result<ExtractedContent> {
         #[cfg(feature = "audio")]
         if hit.metadata.modality == crate::Modality::Audio {
-            // Validate the configured policy even while readable STT is unavailable.
+            if let Some(extractor) = &self.audio_extractor {
+                return extractor.extract(
+                    self.provider.as_ref(),
+                    &hit.resource,
+                    &hit.locator,
+                    &hit.metadata,
+                    self.max_audio_duration_secs,
+                );
+            }
             self.extract_audio_samples(hit)?;
             return Err(unsupported(&hit.resource, &hit.locator, &hit.metadata));
         }

@@ -1310,3 +1310,245 @@ The review round reran formatting, default/audio workspace Clippy with warnings
 denied, both workspace test configurations, audio goldens, generated timing
 fixtures, same-file historical input-hash/slice parity, and both Rust 1.89
 all-target checks; all passed. The benchmark usage-error smoke check passed.
+
+## Phase 5b-2: on-demand speech-to-text extraction
+
+The optional root `audio-stt` feature implies `audio` and adds `seyk-stt`, the
+only production implementation of the core `audio::SpeechToText` trait.
+`seyk-core`, including its audio feature, has no ORT, tokenizer or download
+dependency. Default facade builds do not enable STT. The embedding input
+identity, profile and vector cache are unchanged.
+
+`AudioExtractor` is a separate provider-backed extractor, deliberately absent
+from byte-extractor/preview dispatch. An explicitly selected audio hit passes
+through 5b-1's full-source BLAKE3 check and chunk-verified slice before calling
+STT or loading its model. Half-open millisecond bounds select canonical samples
+`[16*start_ms, min(16*end_ms, N))`; only rounded EOF is clamped. This retains
+sequential decoding from the presentation origin and its exact resampler phase;
+it adds no fast seek. Requests longer than 30 seconds return the typed
+`AudioIntervalTooLong` error. Each request is independent; there is no prior
+transcript conditioning, stitching, transcript cache, or content logging.
+Indexing, search (including previews) and model info never load Whisper.
+
+CLI extraction uses `seyk extract --from-json hits.json --hit 0`, optionally
+`--stt-model-dir DIR` (or `SEYK_STT_MODEL_DIR`) and `--stt-language en`.
+Omitting the language requests detection from that interval alone. Both STT
+options are rejected on `model download`; they configure extraction, not provisioning. The same
+settings configure audio transcription in the explicitly invoked MCP `extract`
+tool. Text/PDF extraction is available in MCP without STT. MCP hits now carry locator and metadata; extraction confines the
+local path to the session roots independently of the caller's supplied hash.
+CLI/MCP JSON output advances to schema 4; CLI input accepts search schemas
+2, 3 and 4. Raw text and PDF extraction retain their existing behavior.
+
+Human audio output starts with **Machine transcript (may contain errors)**.
+JSON provenance records `method=speech_to_text`, `implementation`,
+`fidelity=machine_transcription`, requested locator, effective canonical sample
+bounds/rate, manifest SHA-256, requested/detected language and `no_speech`.
+These are input bounds, not word timestamps or a claim of verbatim accuracy.
+`no_speech` returns empty text and no detected language, even for a requested
+language. `ExtractedContent` Debug redacts text. Error messages contain no
+PCM, token IDs, transcripts or underlying inference diagnostics.
+
+### Provisioning and offline runtime
+
+The artifact is `Xenova/whisper-tiny` at
+`5332fcc35e32a33b86612b9a57a89be7906102b1`: separate FP32 encoder, decoder and
+decoder-with-past graphs. The compiled
+[`manifest.json`](../crates/seyk-stt/assets/manifest.json) pins every asset's
+length and SHA-256, complete graph input/output contracts, decoding policy,
+mel filters and notices. Its compact JSON has SHA-256
+`3cefb2a90f9cee1983933dcaee20a25689c8b35a3c9bedfd94ae3c38ffb1a254`;
+a unit test pins those bytes. Reformatting changes the STT installation directory
+and provenance identity, but neither model semantics nor existing audio vectors.
+The graphs use opset 11, IR 6, no external data, and
+no separate attention-mask or position inputs. `ort =2.0.0-rc.13` uses CPU
+sessions with one intra/inter thread by default.
+
+`seyk model download --stt` is the sole network boundary. It downloads only
+this immutable manifest through HF Hub, copies bounded assets to a sibling
+staging directory, verifies the complete tree and publishes it by directory
+rename. An install lock serializes writers; failed staging never publishes
+partial files. Valid installations are reused; an installation carrying our
+manifest marker can be repaired with backup/restore on publication failure.
+Unmanaged destinations are preserved. A crash can leave a staging directory
+or lock requiring operator cleanup. Model storage is the platform cache under
+`seyk/stt/<manifest SHA-256>`, independent of Gemma's model/cache identity.
+
+Runtime uses only local files. User directories receive the same exact asset
+and layout checks; extra files and directory symlinks are rejected. Each graph
+is loaded from the same bytes just length/hash-verified, avoiding a second
+open between verification and ORT parsing. File symlinks do not bypass that
+check. Assets and marker files must resolve to regular files before opening;
+Unix opens also use `O_NONBLOCK` and recheck the opened descriptor, so a FIFO
+substitution cannot hang verification. Direct FIFOs and symlinks to FIFOs have a
+two-second regression deadline and fail with the typed model error.
+Missing/corrupt/tampered assets return `SttModel` with
+`seyk model download --stt` in the error. Sessions retain verified weights in
+memory, so later disk changes affect the next session load, not already loaded
+weights. No inference path invokes HF Hub or repairs an installation.
+
+Weights are downloaded by the operator, not bundled. The pinned Xenova card
+states Apache-2.0 and links Transformers.js; that exact tree has no LICENSE or
+NOTICE file. The original OpenAI weights and reference mel implementation are
+MIT. The card, Apache text, OpenAI MIT notice and derived pinned mel bank are
+retained under `crates/seyk-stt/assets`; see `THIRD_PARTY.md`. Cargo-deny checks
+Rust dependency licences separately from these pinned model notices.
+
+### Mel and decoding contract
+
+Canonical mono 16 kHz input is zero-padded to 30 seconds. Rust computes the
+periodic-Hann STFT (400 samples, hop 160, reflected center padding), power,
+pinned 80-band Slaney mel projection, log clamp and normalization, yielding
+`[1,80,3000]`. The independent pinned OpenAI/PyTorch fixture compares every
+value with maximum absolute tolerance `1e-4`, including reflected edges and
+the padded tail. Its regeneration command and source hashes are in
+`scripts/audio/stt_fixture.py` and the fixture provenance JSON.
+
+The encoder returns only `last_hidden_state [1,1500,384]`. An initial SOT
+`50258` pass requests only raw logits (no returned KV tensors); `p_no_speech = softmax(raw)[50362]` before
+suppression (`50362` is `<|nocaptions|>` in this export). Automatic language
+selection takes the largest language-token logit (lowest ID wins ties), or
+uses the validated explicit language. A fresh initial decoder pass uses
+`[50258, language, 50359, 50363]` (transcribe, no timestamps). Greedy decoding
+then feeds one token with all four layers' cached self/cross key/value tensors.
+Self KV grows; encoder KV is reused. Each step fetches only logits and required
+`present.*`; **attention outputs are never requested** from any graph.
+
+The pinned 88-token always-suppress list applies throughout; IDs above EOT
+`50257` are suppressed after the prefix. Blank `220` and EOT are additionally
+suppressed at the first generation step only. The total context is capped at
+448 tokens, including the four-token prefix; exhaustion returns a typed
+inference error rather than a silently truncated transcript. Average log
+probability sums generated tokens including EOT and divides by generated
+count plus one. `p_no_speech > 0.6 && avg_logprob <= -1.0` returns `no_speech`.
+Exact-zero PCM short-circuits to `no_speech` after validating/loading the model;
+it never invents a language. Tiny Whisper may still hallucinate on noise or
+misrecognize speech; the transcript label is mandatory, not a confidence claim.
+
+### Validation and reproduction
+
+Ordinary tests cover full-tensor mel parity, token suppression, missing,
+corrupt and equal-length tampering, failed installation, the 30-second cap,
+hash mismatch before STT, no STT during indexing/search/preview, provenance
+bounds, redacted Debug and no transcript bytes in SQLite. Tests also pin bundled
+notice/mel hashes and policy constants against the compiled manifest, and reject
+extraction-only options on `model download`. Ordinary CLI tests generate a Rust
+chirp WAV at runtime; they require no speech recording. MCP tests exercise
+explicit extraction, stale hashes and session-root confinement. Dependency
+checks enforce no ORT in standalone core (with and without audio).
+
+The local model-backed gate exercises 10/30-second English text/token goldens,
+cached-versus-uncached logits at every 30-second decode step (maximum absolute
+tolerance `1e-4` and identical allowed argmax), silence without detected
+language, installation/repair, missing graphs, equal-length graph tampering
+and unexpected files. It copies only manifest assets into temporary storage;
+it never edits the supplied model source or downloads anything:
+
+Generate speech locally first (macOS `say`, FFmpeg and the pinned OpenAI reference
+files are required). **System Voice output must never be committed or
+redistributed**. All speech WAVs are generated under ignored `tmp/`; only the
+public text, token goldens and mathematical chirp/mel fixtures are committed.
+The generator also rebuilds `mel-80.f32le` from the pinned reference bank and
+asserts its manifest SHA-256. Voice/OS changes may change exact speech goldens.
+
+```sh
+uv run --no-project --with numpy==2.5.3 --with torch==2.14.1 python scripts/audio/stt_fixture.py /path/to/pinned/reference
+SEYK_STT_SPEECH_WAV=$PWD/tmp/stt-speech.wav SEYK_STT_MODEL_DIR=/path/to/pinned/assets cargo test -p seyk-stt --release -- --include-ignored
+SEYK_STT_SPEECH_WAV=$PWD/tmp/stt-speech.wav SEYK_STT_MODEL_DIR=/path/to/pinned/assets cargo test --features audio-stt --test stt_cli -- --include-ignored
+```
+
+These gates are ignored by default and read the local speech path from
+`SEYK_STT_SPEECH_WAV`. CI runs non-model tests and warning-denied Clippy with
+`audio-stt`, along with the Rust 1.89 all-target check and existing licence checks.
+
+For cost measurements, generate the public 10/30-second WAVs with the fixture
+script, then run each in a fresh release process:
+
+```sh
+cargo run --release --no-default-features --features audio-stt --example bench_stt -- /path/to/exact/model-dir tmp/stt-10.wav 10
+cargo run --release --no-default-features --features audio-stt --example bench_stt -- /path/to/exact/model-dir tmp/stt-30.wav 30
+```
+
+This reports full manifest-verified cold session load, first extraction, warm
+nearest-rank p50/p95 across 20 extractions, cost per audio minute, process peak
+RSS and before/after load averages. Warm measurements include source hashing,
+verified decoding/slicing, mel, encoder, greedy decode and provenance, but not
+model load. Cold means fresh sessions/process, not a purged OS file cache.
+
+### Local measurements (shared host)
+
+Measured on 2026-10-09 with Rust 1.99.0 release, native ORT 1.28.0,
+macOS 26.5, Apple M5 Max (18 logical CPUs, 64 GiB RAM), CPU provider with
+one intra/inter thread. Each short duration ran in a fresh process, followed by one
+first extraction and 20 measured warm requests. The first extraction is excluded
+from warm percentiles. This was a busy shared host; every measured value below
+carries its load range and is an observation, not a quiet-host capacity claim.
+
+| Selected interval | Measurement | Result | Load before → after (1 / 5 / 15 min) |
+|---|---|---:|---|
+| 10 s | Cold verified session load | 0.934 s | 6.85 / 8.31 / 13.02 → 6.85 / 8.31 / 13.02 |
+| 10 s | Warm p50 extraction | 0.254 s | 6.85 / 8.31 / 13.02 → 6.54 / 8.22 / 12.96 |
+| 10 s | Warm p95 extraction | 0.255 s | 6.85 / 8.31 / 13.02 → 6.54 / 8.22 / 12.96 |
+| 10 s | Warm p50 cost per audio minute | 1.525 s | 6.85 / 8.31 / 13.02 → 6.54 / 8.22 / 12.96 |
+| 10 s | Peak process RSS | 1127.41 MiB | 6.85 / 8.31 / 13.02 → 6.54 / 8.22 / 12.96 |
+| 30 s | Cold verified session load | 0.924 s | 6.54 / 8.22 / 12.96 → 6.26 / 8.14 / 12.90 |
+| 30 s | Warm p50 extraction | 0.397 s | 6.26 / 8.14 / 12.90 → 6.32 / 8.12 / 12.86 |
+| 30 s | Warm p95 extraction | 0.410 s | 6.26 / 8.14 / 12.90 → 6.32 / 8.12 / 12.86 |
+| 30 s | Warm p50 cost per audio minute | 0.794 s | 6.26 / 8.14 / 12.90 → 6.32 / 8.12 / 12.86 |
+| 30 s | Peak process RSS | 1131.83 MiB | 6.26 / 8.14 / 12.90 → 6.32 / 8.12 / 12.86 |
+| [7190,7200) s in 2 h WAV | Cold verified session load | 0.942 s | 6.32 / 8.12 / 12.86 → 6.21 / 8.07 / 12.82 |
+| [7190,7200) s in 2 h WAV | End-to-end first extraction | 1.998 s | 6.21 / 8.07 / 12.82 → 6.21 / 8.07 / 12.82 |
+| [7190,7200) s in 2 h WAV | Peak process RSS | 1121.83 MiB | 6.21 / 8.07 / 12.82 → 6.21 / 8.07 / 12.82 |
+
+The short WAVs begin at zero. The late-hit measurement selects the final ten
+seconds of a generated two-hour, 230,400,044-byte mono PCM16 WAV: streamed
+silence followed by the local ten-second speech golden. Its end-to-end time
+includes full-source hash verification, sequential decode to the interval,
+verified slicing, mel, encoder, greedy decode and provenance; session load is
+reported separately. Fixture metadata hashing runs before timing, warming the
+OS file cache, but extraction still rehashes the whole source. This is one
+late-hit observation, not a percentile or a seek-speed claim. Peak RSS is the
+Rust process high-water mark including native ORT and all three FP32 sessions.
+The release binaries ran successfully; the host emitted a rust-objcopy/libLLVM
+strip warning.
+
+#### Small local accuracy evaluation
+
+The generator creates 24 public-text clips at test time only: eight authored
+English texts in both Karen (en_AU) and Samantha (en_US), plus eight German
+texts in Anna (de_DE), using `say -r 150`. Audio remains in ignored `tmp/` and
+must not be redistributed. The Rust evaluation uses the same verified
+`AudioExtractor` with automatic language detection and emits only aggregate
+scores, never transcripts. It lowercases Unicode, replaces non-alphanumeric
+characters with spaces, and collapses whitespace; WER is total word edit
+distance divided by reference words, and CER is total Unicode-character edit
+distance divided by reference characters (including normalized spaces).
+
+| Language / voices | Clips | WER (errors / words) | CER (errors / characters) | Load before → after (1 / 5 / 15 min) |
+|---|---:|---:|---:|---|
+| English / Karen + Samantha | 16 | 3.48% (11 / 316) | 0.76% (13 / 1716) | 7.36 / 8.46 / 13.12 → 6.85 / 8.31 / 13.02 |
+| German / Anna | 8 | 14.38% (23 / 160) | 2.53% (25 / 989) | 7.36 / 8.46 / 13.12 → 6.85 / 8.31 / 13.02 |
+
+Every clip selected the expected language and none returned `no_speech`
+(load 7.36 / 8.46 / 13.12 → 6.85 / 8.31 / 13.02). This small clean synthetic
+sample is a local smoke evaluation, not evidence of general transcription
+quality. **Noise, music and broader multilingual quality remain an open
+pre-release gate**, including evaluation on real recordings and selected hits.
+
+```sh
+python3 scripts/audio/stt_eval_fixture.py
+cargo run --release --no-default-features --features audio-stt --example eval_stt -- /path/to/exact/model-dir tmp/stt-eval/manifest.json
+cargo run --release --no-default-features --features audio-stt --example bench_stt -- /path/to/exact/model-dir tmp/stt-two-hours.wav 10 7190 0
+# After gates and measurements, remove generated System Voice output:
+rm -f tmp/stt-speech.wav tmp/stt-10.wav tmp/stt-30.wav tmp/stt-two-hours.wav tmp/stt-eval/*.wav
+```
+
+Local checks passed: default/audio/audio-stt workspace tests and warning-denied
+Clippy, the standalone dependency boundaries, the release model gate and
+real-binary CLI gate, regenerated audio timing fixtures, existing audio
+feature/embedding goldens, and Rust 1.89 default/audio/audio-stt all-target checks.
+Both default and all-feature cargo-deny audits pass licenses, bans and sources;
+the advisory check retains the three pre-existing unmaintained findings:
+number_prefix 0.4.0 (RUSTSEC-2025-0119), paste 1.0.15 (RUSTSEC-2024-0436), and
+ttf-parser 0.25.1 (RUSTSEC-2026-0192). No external dependency version or advisory
+exception changed. Linux/Windows execution remains the CI matrix's responsibility.

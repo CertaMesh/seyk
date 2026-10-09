@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/seyk-embed", "crates/seyk-embeddinggemma", "crates/seyk-core"]
+members = [".", "crates/seyk-embed", "crates/seyk-embeddinggemma", "crates/seyk-core", "crates/seyk-stt"]
 default-members = ["."]
 resolver = "3"
 
@@ -24,6 +24,7 @@ categories = ["command-line-utilities", "text-processing"]
 default = ["onnx", "image", "cli", "mcp", "watch", "pdf-render"]
 onnx = ["dep:seyk-embeddinggemma", "dep:hf-hub"]
 image = ["seyk-embeddinggemma?/image"]
+audio-stt = ["audio", "dep:seyk-stt", "dep:hf-hub"]
 audio = ["seyk-core/audio", "seyk-embeddinggemma?/audio"]
 cli = ["onnx", "dep:clap", "dep:anyhow"]
 mcp = ["cli", "watch", "dep:rmcp", "dep:tokio", "dep:schemars"]
@@ -33,6 +34,7 @@ pdf = ["seyk-core/pdf"]
 pdf-render = ["pdf", "image", "seyk-core/pdf-render"]
 
 [dependencies]
+seyk-stt = { path = "crates/seyk-stt", version = "0.1.0", optional = true }
 seyk-core = { path = "crates/seyk-core", version = "0.1.0" }
 seyk-embed = { path = "crates/seyk-embed", version = "0.1.0" }
 seyk-embeddinggemma = { path = "crates/seyk-embeddinggemma", version = "0.1.0", optional = true }
@@ -56,7 +58,7 @@ assert_cmd = "2"
 predicates = "3"
 
 [target.'cfg(unix)'.dev-dependencies]
-# Peak RSS and load average in examples/bench_model.rs and examples/bench_audio.rs.
+# Peak RSS and load average in the model, audio retrieval and STT benchmarks.
 libc = "0.2"
 
 [[bin]]
@@ -83,3 +85,11 @@ required-features = ["onnx"]
 [[example]]
 name = "bench_retrieval"
 required-features = ["cli"]
+
+[[example]]
+name = "bench_stt"
+required-features = ["audio-stt"]
+
+[[example]]
+name = "eval_stt"
+required-features = ["audio-stt"]

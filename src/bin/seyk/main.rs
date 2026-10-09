@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 3;
+const JSON_SCHEMA_VERSION: u32 = 4;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -49,6 +49,15 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct ModelArgs {
+    /// Local pinned Whisper directory; defaults to the verified STT installation.
+    #[cfg(feature = "audio-stt")]
+    #[arg(long, env = "SEYK_STT_MODEL_DIR", global = true)]
+    stt_model_dir: Option<PathBuf>,
+    /// Transcription language code; omitted detects language from the chosen hit.
+    #[cfg(feature = "audio-stt")]
+    #[arg(long, global = true)]
+    stt_language: Option<String>,
+
     /// Maximum audio presentation duration in seconds (inclusive).
     #[arg(long, default_value_t = 7200, value_parser = audio_duration, global = true)]
     max_audio_duration_secs: u64,
@@ -154,8 +163,16 @@ enum Command {
         #[command(flatten)]
         model: ModelArgs,
     },
-    /// Extract exact text from one hit in a search JSON document; no model needed.
+    /// Extract readable evidence from one selected hit (audio uses optional local STT).
     Extract {
+        /// Local pinned Whisper directory; defaults to the verified STT installation.
+        #[cfg(feature = "audio-stt")]
+        #[arg(long, env = "SEYK_STT_MODEL_DIR")]
+        stt_model_dir: Option<PathBuf>,
+        /// Transcription language code; omitted detects language from the chosen hit.
+        #[cfg(feature = "audio-stt")]
+        #[arg(long)]
+        stt_language: Option<String>,
         /// Search JSON file, or - to read standard input.
         #[arg(long, value_name = "FILE|-")]
         from_json: PathBuf,
@@ -261,6 +278,9 @@ enum ModelAction {
         /// Provision only the pinned q8 audio encoder (requires feature `audio`).
         #[arg(long)]
         audio: bool,
+        /// Provision only the pinned Whisper STT manifest (feature `audio-stt`).
+        #[arg(long, conflicts_with = "audio")]
+        stt: bool,
     },
     /// Show where the model files are and whether they are present.
     Info,
@@ -358,6 +378,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Extract {
+            #[cfg(feature = "audio-stt")]
+            stt_model_dir,
+            #[cfg(feature = "audio-stt")]
+            stt_language,
             from_json,
             hit,
             json,
@@ -380,36 +404,57 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 } else {
                     extractor
                 };
-            #[cfg(feature = "audio")]
-            if selected.metadata.modality == seyk::Modality::Audio {
-                seyk::audio::extract_samples(
+            let extracted = if selected.metadata.modality == seyk::Modality::Audio {
+                #[cfg(feature = "audio-stt")]
+                {
+                    audio_extractor(stt_model_dir.as_deref(), stt_language.as_deref()).extract(
+                        &seyk::FsProvider,
+                        &selected.resource,
+                        &selected.locator,
+                        &selected.metadata,
+                        max_audio_duration_secs,
+                    )?
+                }
+                #[cfg(not(feature = "audio-stt"))]
+                {
+                    #[cfg(feature = "audio")]
+                    seyk::audio::extract_samples(
+                        &seyk::FsProvider,
+                        &selected.resource,
+                        &selected.locator,
+                        &selected.metadata,
+                        max_audio_duration_secs,
+                    )?;
+                    #[cfg(not(feature = "audio"))]
+                    let _ = max_audio_duration_secs;
+                    return Err(seyk::Error::UnsupportedExtraction {
+                        resource: selected.resource,
+                        modality: seyk::Modality::Audio,
+                        locator: selected.locator,
+                    }
+                    .into());
+                }
+            } else {
+                seyk::extract_resource(
                     &seyk::FsProvider,
+                    extractor,
                     &selected.resource,
                     &selected.locator,
                     &selected.metadata,
-                    max_audio_duration_secs,
-                )?;
-                return Err(seyk::Error::UnsupportedExtraction {
-                    resource: selected.resource,
-                    modality: seyk::Modality::Audio,
-                    locator: selected.locator,
-                }
-                .into());
-            }
-            #[cfg(not(feature = "audio"))]
-            let _ = max_audio_duration_secs;
-            let extracted = seyk::extract_resource(
-                &seyk::FsProvider,
-                extractor,
-                &selected.resource,
-                &selected.locator,
-                &selected.metadata,
-            )?;
+                )?
+            };
             let mut out = std::io::stdout().lock();
             if json {
                 serde_json::to_writer_pretty(&mut out, &json_output(&extracted))?;
                 writeln!(out)?;
             } else {
+                if extracted
+                    .provenance
+                    .as_ref()
+                    .is_some_and(|p| p.speech.is_some())
+                {
+                    writeln!(out, "Machine transcript (may contain errors)")?;
+                }
                 out.write_all(extracted.text.as_bytes())?;
             }
             Ok(ExitCode::SUCCESS)
@@ -509,8 +554,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Model { action, model } => {
             let config = gemma_config(&model)?;
             match action {
-                ModelAction::Download { audio } => {
-                    let dir = if audio {
+                ModelAction::Download { audio, stt } => {
+                    #[cfg(feature = "audio-stt")]
+                    if model.stt_model_dir.is_some() || model.stt_language.is_some() {
+                        anyhow::bail!(
+                            "--stt-model-dir and --stt-language configure extraction, not model download"
+                        );
+                    }
+                    let dir = if stt {
+                        #[cfg(feature = "audio-stt")]
+                        {
+                            seyk::stt::download()?
+                        }
+                        #[cfg(not(feature = "audio-stt"))]
+                        {
+                            anyhow::bail!("STT support is not compiled in (feature `audio-stt`)")
+                        }
+                    } else if audio {
                         #[cfg(feature = "audio")]
                         {
                             gemma::download_audio()?
@@ -663,6 +723,20 @@ impl ModelArgs {
             };
             a.extend(["--model".to_string(), m]);
         }
+        #[cfg(feature = "audio-stt")]
+        {
+            if let Some(dir) = &self.stt_model_dir {
+                a.extend([
+                    "--stt-model-dir".to_string(),
+                    std::path::absolute(expand_tilde(dir))?
+                        .display()
+                        .to_string(),
+                ]);
+            }
+            if let Some(language) = &self.stt_language {
+                a.extend(["--stt-language".to_string(), language.clone()]);
+            }
+        }
         if self.text_only {
             a.push("--text-only".to_string());
         }
@@ -698,9 +772,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2 | 3)
+        Some(2..=4)
     ) {
-        bail!("expected search JSON schema_version 2 or 3");
+        bail!("expected search JSON schema_version 2, 3 or 4");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -754,12 +828,32 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
         .embedder(embedder)
         .batch_size(window)
         .max_audio_duration_secs(args.max_audio_duration_secs);
+    #[cfg(feature = "audio-stt")]
+    let builder = builder.audio_extractor(audio_extractor(
+        args.stt_model_dir.as_deref(),
+        args.stt_language.as_deref(),
+    ));
     let builder = if ephemeral {
         builder.cache(MemoryCache::new())
     } else {
         builder.cache(open_cache(args.cache_path.as_deref())?)
     };
     Ok(builder.build()?)
+}
+
+#[cfg(feature = "audio-stt")]
+fn audio_extractor(
+    directory: Option<&Path>,
+    language: Option<&str>,
+) -> seyk::audio::AudioExtractor {
+    let speech = directory
+        .map(|p| seyk::stt::Whisper::new(expand_tilde(p)))
+        .unwrap_or_else(seyk::stt::Whisper::installed);
+    let extractor = seyk::audio::AudioExtractor::new(speech);
+    match language {
+        Some(code) => extractor.language(code),
+        None => extractor,
+    }
 }
 
 fn open_cache(path: Option<&Path>) -> Result<SqliteCache> {
@@ -1240,7 +1334,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 3);
+        assert_eq!(v["schema_version"], 4);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1260,12 +1354,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            3
+            4
         );
     }
 
@@ -1296,7 +1390,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert!(
             value["hits"]
                 .as_array()

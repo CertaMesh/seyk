@@ -1,0 +1,24 @@
+[package]
+name = "seyk-stt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Offline, on-demand Whisper transcription for Seyk"
+
+[dependencies]
+seyk-core = { path = "../seyk-core", version = "0.1.0", features = ["audio"] }
+ort = "=2.0.0-rc.13"
+rustfft = "=6.4.1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+dirs = "6"
+tempfile = "3"
+
+[dev-dependencies]
+flate2 = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

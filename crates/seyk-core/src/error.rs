@@ -6,6 +6,13 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("STT model {reason}; run `seyk model download --stt`")]
+    SttModel { reason: &'static str },
+    #[error("speech-to-text failed: {reason}")]
+    SpeechToText { reason: &'static str },
+    #[error("audio extraction interval exceeds the 30-second request limit")]
+    AudioIntervalTooLong,
+
     #[error("resource changed while reading: {resource}")]
     ChangedWhileReading { resource: crate::ResourceId },
     #[error("unsupported audio for {resource}: {reason}")]
@@ -64,7 +71,7 @@ pub enum Error {
         actual: String,
     },
 
-    #[error("extraction is unsupported for {modality} resource {resource} at {locator:?}{note}", note = if *modality == crate::Modality::Audio { "; STT not available until 5b" } else { "" })]
+    #[error("extraction is unsupported for {modality} resource {resource} at {locator:?}{note}", note = if *modality == crate::Modality::Audio { "; configure an audio extractor (feature `audio-stt`)" } else { "" })]
     UnsupportedExtraction {
         resource: crate::ResourceId,
         modality: crate::Modality,

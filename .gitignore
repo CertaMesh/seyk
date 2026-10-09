@@ -3,3 +3,6 @@
 
 /tmp/
 .anvil.local
+
+# System Voice speech is generated locally in tmp/, never distributed.
+/crates/seyk-stt/tests/fixtures/*.wav

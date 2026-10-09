@@ -1,0 +1,138 @@
+{
+  "repo": "Xenova/whisper-tiny",
+  "revision": "5332fcc35e32a33b86612b9a57a89be7906102b1",
+  "implementation": "seyk-whisper-onnx-v1",
+  "precision": "fp32",
+  "ort": "2.0.0-rc.13",
+  "files": [
+    {"path": "onnx/encoder_model.onnx", "bytes": 32909539, "sha256": "39e81b6c86a5b2b4beda1bb3145486a769d594801f780a66cad1ae72c7ad2c5e"},
+    {"path": "onnx/decoder_model.onnx", "bytes": 118406656, "sha256": "d7668e6e5d90c757759d2a29c918f5f24f6eef073fc5a17c5b86c1a68a17555f"},
+    {"path": "onnx/decoder_with_past_model.onnx", "bytes": 113654551, "sha256": "25efcc2a9319b897bc0c3b6b2cd1f8ab8a25ebff6da4be828e4766f4a597d5f6"},
+    {"path": "config.json", "bytes": 2248, "sha256": "2b2e4e519084e0ea028b19b153f95202735a971870d6844aa26e559edd292e94"},
+    {"path": "generation_config.json", "bytes": 3716, "sha256": "68ac791fcb4999461a313472125042934656240ba1cba7d1c2627fcbb19ac24c"},
+    {"path": "preprocessor_config.json", "bytes": 339, "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d"},
+    {"path": "tokenizer.json", "bytes": 2480466, "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566"},
+    {"path": "tokenizer_config.json", "bytes": 282683, "sha256": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce"},
+    {"path": "special_tokens_map.json", "bytes": 2194, "sha256": "e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691"},
+    {"path": "README.md", "bytes": 1160, "sha256": "cdd395427d195f122aee69c00e34183f2fadd8bc217aef35ca7c43395b96d29d"}
+  ],
+  "graphs": [
+    {
+      "file": "onnx/encoder_model.onnx",
+      "ir": 6,
+      "opset": 11,
+      "external_data": [],
+      "inputs": [
+        {"name": "input_features", "dtype": "FLOAT", "shape": ["batch_size", "feature_size", "encoder_sequence_length"]}
+      ],
+      "outputs": [
+        {"name": "last_hidden_state", "dtype": "FLOAT", "shape": ["batch_size", "encoder_sequence_length / 2", 384]},
+        {"name": "encoder_attentions.0", "dtype": "FLOAT", "shape": ["batch_size", 6, 1500, 1500]},
+        {"name": "encoder_attentions.1", "dtype": "FLOAT", "shape": ["batch_size", 6, 1500, 1500]},
+        {"name": "encoder_attentions.2", "dtype": "FLOAT", "shape": ["batch_size", 6, 1500, 1500]},
+        {"name": "encoder_attentions.3", "dtype": "FLOAT", "shape": ["batch_size", 6, 1500, 1500]}
+      ]
+    },
+    {
+      "file": "onnx/decoder_model.onnx",
+      "ir": 6,
+      "opset": 11,
+      "external_data": [],
+      "inputs": [
+        {"name": "input_ids", "dtype": "INT64", "shape": ["batch_size", "decoder_sequence_length"]},
+        {"name": "encoder_hidden_states", "dtype": "FLOAT", "shape": ["batch_size", "encoder_sequence_length / 2", 384]}
+      ],
+      "outputs": [
+        {"name": "logits", "dtype": "FLOAT", "shape": ["batch_size", "decoder_sequence_length", 51865]},
+        {"name": "present.0.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.0.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.0.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.0.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.1.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.1.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.1.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.1.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.2.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.2.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.2.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.2.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.3.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.3.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.3.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "present.3.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "decoder_attentions.0", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.1", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.2", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.3", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "cross_attentions.0", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.1", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.2", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.3", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]}
+      ]
+    },
+    {
+      "file": "onnx/decoder_with_past_model.onnx",
+      "ir": 6,
+      "opset": 11,
+      "external_data": [],
+      "inputs": [
+        {"name": "input_ids", "dtype": "INT64", "shape": ["batch_size", 1]},
+        {"name": "past_key_values.0.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.0.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.0.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.0.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.1.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.1.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.1.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.1.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.2.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.2.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.2.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.2.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.3.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.3.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length", 64]},
+        {"name": "past_key_values.3.encoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]},
+        {"name": "past_key_values.3.encoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "encoder_sequence_length_out", 64]}
+      ],
+      "outputs": [
+        {"name": "logits", "dtype": "FLOAT", "shape": ["batch_size", "1", 51865]},
+        {"name": "present.0.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.0.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.1.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.1.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.2.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.2.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.3.decoder.key", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "present.3.decoder.value", "dtype": "FLOAT", "shape": ["batch_size", 6, "past_decoder_sequence_length + 1", 64]},
+        {"name": "decoder_attentions.0", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.1", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.2", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "decoder_attentions.3", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "past_decoder_sequence_length + 1"]},
+        {"name": "cross_attentions.0", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.1", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.2", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]},
+        {"name": "cross_attentions.3", "dtype": "FLOAT", "shape": ["batch_size", 6, "decoder_sequence_length", "encoder_sequence_length_out"]}
+      ]
+    }
+  ],
+  "mel": {"file": "mel-80.f32le", "bytes": 64320, "sha256": "4f2701b1d287d74a0dc9871026e9519d98cb76426615f2539b0d151a0ae4ec2e", "source_commit": "86098128c0b4f24f0e2aa2994de830614b474227"},
+  "policy": {
+    "preprocessing": "whisper-mel80-hann400-hop160-reflect-pad30-v1",
+    "decoding": "greedy-no-timestamps-448-including-prefix-v1",
+    "no_speech": "raw-sot-50362>0.6 AND generated-including-eot-logprob/(count+1)<=-1.0;zero-pcm-shortcut-v1",
+    "sot": 50258,
+    "eot": 50257,
+    "transcribe": 50359,
+    "no_timestamps": 50363,
+    "no_speech_token": 50362,
+    "begin_suppress": [220, 50257],
+    "suppress_above_eot": true,
+    "suppress_tokens": [1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 359, 503, 522, 542, 873, 893, 902, 918, 922, 931, 1350, 1853, 1982, 2460, 2627, 3246, 3253, 3268, 3536, 3846, 3961, 4183, 4667, 6585, 6647, 7273, 9061, 9383, 10428, 10929, 11938, 12033, 12331, 12562, 13793, 14157, 14635, 15265, 15618, 16553, 16604, 18362, 18956, 20075, 21675, 22520, 26130, 26161, 26435, 28279, 29464, 31650, 32302, 32470, 36865, 42863, 47425, 49870, 50254, 50258, 50358, 50359, 50360, 50361, 50362],
+    "lang_to_id": {"<|af|>": 50327, "<|am|>": 50334, "<|ar|>": 50272, "<|as|>": 50350, "<|az|>": 50304, "<|ba|>": 50355, "<|be|>": 50330, "<|bg|>": 50292, "<|bn|>": 50302, "<|bo|>": 50347, "<|br|>": 50309, "<|bs|>": 50315, "<|ca|>": 50270, "<|cs|>": 50283, "<|cy|>": 50297, "<|da|>": 50285, "<|de|>": 50261, "<|el|>": 50281, "<|en|>": 50259, "<|es|>": 50262, "<|et|>": 50307, "<|eu|>": 50310, "<|fa|>": 50300, "<|fi|>": 50277, "<|fo|>": 50338, "<|fr|>": 50265, "<|gl|>": 50319, "<|gu|>": 50333, "<|haw|>": 50352, "<|ha|>": 50354, "<|he|>": 50279, "<|hi|>": 50276, "<|hr|>": 50291, "<|ht|>": 50339, "<|hu|>": 50286, "<|hy|>": 50312, "<|id|>": 50275, "<|is|>": 50311, "<|it|>": 50274, "<|ja|>": 50266, "<|jw|>": 50356, "<|ka|>": 50329, "<|kk|>": 50316, "<|km|>": 50323, "<|kn|>": 50306, "<|ko|>": 50264, "<|la|>": 50294, "<|lb|>": 50345, "<|ln|>": 50353, "<|lo|>": 50336, "<|lt|>": 50293, "<|lv|>": 50301, "<|mg|>": 50349, "<|mi|>": 50295, "<|mk|>": 50308, "<|ml|>": 50296, "<|mn|>": 50314, "<|mr|>": 50320, "<|ms|>": 50282, "<|mt|>": 50343, "<|my|>": 50346, "<|ne|>": 50313, "<|nl|>": 50271, "<|nn|>": 50342, "<|no|>": 50288, "<|oc|>": 50328, "<|pa|>": 50321, "<|pl|>": 50269, "<|ps|>": 50340, "<|pt|>": 50267, "<|ro|>": 50284, "<|ru|>": 50263, "<|sa|>": 50344, "<|sd|>": 50332, "<|si|>": 50322, "<|sk|>": 50298, "<|sl|>": 50305, "<|sn|>": 50324, "<|so|>": 50326, "<|sq|>": 50317, "<|sr|>": 50303, "<|su|>": 50357, "<|sv|>": 50273, "<|sw|>": 50318, "<|ta|>": 50287, "<|te|>": 50299, "<|tg|>": 50331, "<|th|>": 50289, "<|tk|>": 50341, "<|tl|>": 50348, "<|tr|>": 50268, "<|tt|>": 50351, "<|uk|>": 50280, "<|ur|>": 50290, "<|uz|>": 50337, "<|vi|>": 50278, "<|yi|>": 50335, "<|yo|>": 50325, "<|zh|>": 50260}
+  },
+  "notices": [
+    {"file": "OPENAI-MIT.txt", "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"},
+    {"file": "APACHE-2.0.txt", "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+    {"file": "XENOVA-CARD.md", "sha256": "cdd395427d195f122aee69c00e34183f2fadd8bc217aef35ca7c43395b96d29d"}
+  ]
+}
