@@ -1,0 +1,81 @@
+# Pinned public inputs; hashes are SHA-256 of downloaded bytes.
+
+[scifact]
+kind = "beir"
+revision = "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+license = "Upstream claims CC-BY-4.0; abstracts ODC-By-1.0; HF cards differ"
+documents = 5183
+queries = 300
+
+[[scifact.files]]
+name = "scifact.zip"
+url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+sha256 = "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+
+[nfcorpus]
+kind = "beir"
+revision = "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+license = "CC-BY-SA-4.0"
+documents = 3633
+queries = 323
+
+[[nfcorpus.files]]
+name = "nfcorpus.zip"
+url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+sha256 = "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+
+[nanoscifact]
+kind = "nano"
+revision = "309f1d1ae3ae2e092444a8a0c25bed59b82318bc"
+license = "HF card CC-BY-4.0; upstream abstracts ODC-By-1.0"
+documents = 2919
+queries = 50
+
+[[nanoscifact.files]]
+name = "corpus.parquet"
+url = "https://huggingface.co/datasets/zeta-alpha-ai/NanoSciFact/resolve/309f1d1ae3ae2e092444a8a0c25bed59b82318bc/corpus/train-00000-of-00001.parquet"
+sha256 = "87a40077e7b19ded49aa582fcc7c936dabd982adc6e4f562a36ec9c08ce6909c"
+
+[[nanoscifact.files]]
+name = "qrels.parquet"
+url = "https://huggingface.co/datasets/zeta-alpha-ai/NanoSciFact/resolve/309f1d1ae3ae2e092444a8a0c25bed59b82318bc/qrels/train-00000-of-00001.parquet"
+sha256 = "e8cd78d051a6a261af067153635e95540642c8bf990767955f4f504d92a7a89d"
+
+[[nanoscifact.files]]
+name = "queries.parquet"
+url = "https://huggingface.co/datasets/zeta-alpha-ai/NanoSciFact/resolve/309f1d1ae3ae2e092444a8a0c25bed59b82318bc/queries/train-00000-of-00001.parquet"
+sha256 = "85861ef816cafe12520d2aa264a530b187b0a372862005da93baed31bcd7fb44"
+
+[irpapers]
+kind = "irpapers"
+revision = "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
+license = "MIT dataset; source paper rights retained"
+documents = 3230
+queries = 180
+
+[[irpapers.files]]
+name = "docs.csv"
+url = "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-docs.csv"
+sha256 = "8fe316290b55c71bd1641603b5feb02117672028f7d1af45bcad1c111c53611b"
+
+[[irpapers.files]]
+name = "queries.csv"
+url = "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+sha256 = "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3"
+
+[irpapers-pdf]
+kind = "irpapers-pdf"
+revision = "7fce2967a94ade0e62c4efee9376d58164cf32f8"
+license = "MIT repository; source paper rights retained"
+documents = 166
+queries = 180
+
+[[irpapers-pdf.files]]
+name = "source.zip"
+url = "https://codeload.github.com/weaviate/IRPAPERS/zip/7fce2967a94ade0e62c4efee9376d58164cf32f8"
+sha256 = "e60b6211fca496584280865620c519012f951303d09ec45f1a85da5edc1f3acd"
+
+[[irpapers-pdf.files]]
+name = "queries.csv"
+url = "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+sha256 = "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3"

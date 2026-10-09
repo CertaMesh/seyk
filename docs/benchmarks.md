@@ -224,3 +224,143 @@ before all query samples, and per-sample overlap was not recorded. Cold search i
 
 Queries can still queue behind document batches. Do not infer a pool throughput
 or tail-latency guarantee from this single, heavily contended pair.
+
+## Public retrieval harness
+
+This is evaluation tooling, with no ranking, segmentation, cache-schema or public
+API changes. Dataset contents, document maps, runs and per-query diagnostics stay
+under `~/.cache/seyk-bench`. Do not commit or paste them into issues or PRs. Only
+aggregate metrics and provenance belong in a later results PR. NanoSciFact is a
+pipeline **smoke** check, not evidence of general retrieval quality.
+
+The inputs are pinned in `scripts/bench/datasets.toml` by URL, revision and SHA-256.
+The fetch command verifies every file, including existing downloads. Materialization
+writes opaque `blake3(doc_id)[:16].txt` names to avoid ID-based filename matches;
+BEIR and IRPAPERS text use `title\n\nbody`. NanoSciFact supplies only `text`, which
+is preserved. Document IDs and qrels live outside the indexed corpus. Materialized
+files and metadata have integrity hashes, checked before indexing and scoring.
+Repeat materialization preserves unchanged file mtimes. Unexpected stale files,
+duplicate IDs, missing qrels targets and incomplete runs fail explicitly.
+
+### Sources and tracks
+
+| Dataset | Pinned split | Resources / queries | Licence / source |
+|---|---|---:|---|
+| NanoSciFact | train (the published 50-query subset) | 2,919 / 50 | [HF card](https://huggingface.co/datasets/zeta-alpha-ai/NanoSciFact/blob/309f1d1ae3ae2e092444a8a0c25bed59b82318bc/README.md) says CC BY 4.0; upstream abstracts are ODC-By 1.0 |
+| SciFact | BEIR test | 5,183 / 300 | [Upstream](https://github.com/allenai/scifact/blob/master/LICENSE.md): claims CC BY 4.0, abstracts ODC-By 1.0 |
+| NFCorpus | BEIR test, graded qrels | 3,633 / 323 | CC BY-SA 4.0 per [BEIR card](https://huggingface.co/datasets/BeIR/nfcorpus) |
+| IRPAPERS text | original 180 questions | 3,230 pages / 180 | [MIT dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md); source-paper rights remain with their authors |
+| IRPAPERS PDF | same questions | 166 PDFs / 180 | [Upstream PDFs and MIT repository licence](https://github.com/weaviate/IRPAPERS/tree/7fce2967a94ade0e62c4efee9376d58164cf32f8/data/PDFs); source-paper rights remain with their authors |
+
+SciFact licence labels conflict across Hugging Face cards (CC BY-NC 2.0,
+CC BY-SA 4.0, and NanoSciFact CC BY 4.0). The table records the upstream
+component licences instead of treating a mirror card as permission to redistribute
+the corpus. This harness stores data locally and publishes only aggregates.
+
+IRPAPERS was inspected at the pinned sources. The document CSV uses `pdf_id_x`,
+`page_number`, `pdf_title`, and `transcription`; `pdf_id_y` is an optional OCR join
+field. The query CSV uses `dataset_id`, `pdf_id`, `page_number`, `question`, and
+`answer`. `dataset_id` identifies a page and is not unique across questions
+(179 IDs for 180 rows), so query IDs append the stable source row number. Page
+numbers are one-based physical pages, as in the upstream PDF conversion notebook.
+Text resources hash `paper_id#page`; PDF resources hash the numbered PDF's paper ID.
+The text adapter streams the 3.78 GB CSV and discards base64 image fields. It never
+decodes images. The PDF adapter reads only numbered PDFs from the pinned
+source archive (318 MB of uncompressed PDFs). PDF inference disables vision and audio and records omitted-page
+diagnostics; it measures embedded PDF text, not the OCR text track. The image
+track is deferred.
+
+### Run and score
+
+Use Python 3.11–3.13 and uv. Rust uses the repository's pinned 1.99.0 toolchain.
+Keep a single Cargo target directory when disk is tight. Model weights must be
+provisioned inside the benchmark root too; the runner refuses the default HF
+cache, symlink escapes and arbitrary corpus paths. It never downloads weights.
+
+```bash
+export PATH="$HOME/.rustup/toolchains/1.99.0-aarch64-apple-darwin/bin:$PATH" # macOS ARM
+export UV_CACHE_DIR="$HOME/.cache/seyk-bench/uv"
+export HF_HOME="$HOME/.cache/seyk-bench/huggingface"
+# Explicit, optional model provisioning (once per precision):
+cargo run --release -- model download --precision q8 --text-only
+
+uv run --python 3.12 scripts/bench/bench.py fetch nanoscifact
+uv run --python 3.12 scripts/bench/bench.py materialize nanoscifact
+cargo run --release --example bench_retrieval -- \
+  --dataset-dir "$HOME/.cache/seyk-bench" --ds nanoscifact \
+  --dimension 256 --precision q8 --threads 2 \
+  --modes hybrid,semantic,lexical --depth 200 --label smoke
+```
+
+The runner opens `cache/<dataset>/<profile-id>.sqlite`, indexes once and runs every
+query with previews disabled. Progress reports segments needing embedding before
+inference. Model weights, precision, dimension, prompts and segmentation determine
+the engine's profile; a different dimension uses a separate cache. Environment
+rows record the commit, dirty flag, profile, model revision, thread count, platform,
+CPU count, Rust version, load averages, index timing and cache statistics before
+and after indexing. Completion rows record query counts and final load. A run is
+written to `.partial` until complete; a repeated label cannot overwrite a run.
+
+```bash
+# Use the exact three filenames printed by the runner; do not mix labels/profiles.
+uv run scripts/bench/bench.py score nanoscifact \
+  ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-hybrid.jsonl \
+  ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-semantic.jsonl \
+  ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-lexical.jsonl
+uv run scripts/bench/bench.py report ~/.cache/seyk-bench/results/nanoscifact/*-smoke.json
+```
+
+Scoring uses pinned `ir_measures` with nDCG@10 (graded, linear gain), MRR@10 and
+Recall@1/5/10/20/100. Each query contributes, including empty rankings. Segments
+collapse to the first occurrence of each resource, preserving engine tie order;
+scoring uses strictly descending rank-derived scores instead of re-sorting raw
+fusion scores. The PDF track also collapses `(resource, PageText.page)` separately:
+its `page` metrics measure locator correctness and its `resource` metrics measure
+paper retrieval. Neither is substituted for the other.
+
+Depth is a **segment** budget. Two hundred segments do not guarantee 100 distinct
+resources; results report the number of queries with fewer than 100 resources.
+Recall@100 is recall within that returned budget, and a deeper run is a separate
+configuration. Per-query local logs join every positive gold document's rank in
+each mode, top-1 keys and non-relevance flags. “Top-result false-evidence rate”
+means top-1 absent from positive qrels, not proof that the retrieved text is false;
+unjudged hits count as non-relevant. Its denominator is queries with a result;
+empty-result counts are reported separately.
+
+### Harness checks and later full runs
+
+```bash
+uv run --python 3.12 scripts/bench/bench.py test
+cargo test --example bench_retrieval --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked --no-fail-fast
+```
+
+The Python tests check hand-computed graded nDCG, MRR, recall, empty rankings,
+ID/page mapping and rejection paths. Rust tests check duplicate collapse and
+byte-identical rankings across a reopened warm dedicated SQLite cache with a
+deterministic test embedder. For a real-model determinism check, repeat the runner
+with a new `--label warm` and compare each mode's original and warm file:
+
+```bash
+uv run scripts/bench/bench.py determinism ORIGINAL.jsonl WARM.jsonl
+```
+
+This compares ranked keys, ranks and locators, excluding timing/environment noise.
+Run paths must remain inside the benchmark root.
+
+After full runs are authorized, use `scifact`, `nfcorpus`, `irpapers`, or
+`irpapers-pdf` in the same pipeline. Run 768 dimensions on SciFact separately.
+`--lexical-weight FLOAT` is an explicit diagnostic override recorded in provenance,
+not a proposed default. On full SciFact scoring, lexical nDCG@10 outside [.60,.68]
+is an error requiring investigation before any ranking conclusion. This band is
+not applied to NanoSciFact. Full SciFact execution is deferred when only smoke
+runs are authorized; the checked band is not a claim that Seyk meets it yet.
+
+Published comparison points: SciFact BM25/TAS-B nDCG@10 .665/.643 and NFCorpus
+.325/.319 ([BEIR baselines](https://github.com/beir-cellar/beir/wiki/Results));
+IRPAPERS text hybrid Recall@1/5/20 .46/.78/.91
+([original dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md)).
+Report aggregate results with the dataset/model revisions, commit, machine and
+load context. Schedule full runs separately from the harness PR.

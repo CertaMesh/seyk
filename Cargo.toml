@@ -79,3 +79,7 @@ codegen-units = 1
 [[example]]
 name = "bench_cpu_pool"
 required-features = ["onnx"]
+
+[[example]]
+name = "bench_retrieval"
+required-features = ["cli"]
