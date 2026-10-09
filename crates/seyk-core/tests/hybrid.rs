@@ -234,11 +234,23 @@ fn persisted_positions_are_sorted_in_every_field() {
     let (engine, _) = engine(SqliteCache::open(&cache_file).unwrap());
     engine.index().paths([&file]).execute().unwrap();
     let conn = rusqlite::Connection::open(cache_file).unwrap();
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE temp.vocab USING fts5vocab(main, segments_fts, instance);",
-    )
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE temp.vocab USING fts5vocab(main, {}, instance);",
+        common::legacy::table(engine.profile_id())
+    ))
     .unwrap();
     for field in ["name", "path", "heading", "body"] {
+        let table = common::legacy::table(engine.profile_id());
+        let stored = conn
+            .prepare(&format!("SELECT {field} FROM {table}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for text in stored {
+            assert_eq!(text, seyk_core::lexical::order_free_text(&text));
+        }
         let mut stmt = conn
             .prepare("SELECT doc, term FROM temp.vocab WHERE col=?1 ORDER BY doc, offset")
             .unwrap();
@@ -276,15 +288,19 @@ fn upgrading_v2_keeps_embeddings_across_partial_root_rebuilds() {
 /// contentless table only tombstones rows, so queries miss the token while its
 /// bytes stay in `segments_fts_data`.
 fn fts_data_contains(conn: &rusqlite::Connection, token: &str) -> bool {
-    let mut stmt = conn.prepare("SELECT block FROM segments_fts_data").unwrap();
-    let blocks = stmt
-        .query_map([], |r| r.get::<_, Vec<u8>>(0))
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap();
-    blocks
-        .iter()
-        .any(|b| b.windows(token.len()).any(|w| w == token.as_bytes()))
+    let tables = conn.prepare("SELECT name FROM sqlite_master WHERE name='segments_fts_data' OR name GLOB 'segments_fts_p_*_data'").unwrap()
+        .query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    tables.iter().any(|table| {
+        conn.prepare(&format!("SELECT block FROM {table}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))
+            .unwrap()
+            .any(|b| {
+                b.unwrap()
+                    .windows(token.len())
+                    .any(|w| w == token.as_bytes())
+            })
+    })
 }
 
 #[test]
@@ -322,15 +338,8 @@ fn check_partial_root_migration(version: &str) {
         assert_eq!(stats.sync.segments_embedded, 2);
     }
     let conn = rusqlite::Connection::open(&file).unwrap();
-    conn.execute(
-        "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-        [version],
-    )
-    .unwrap();
-    if version == "1" {
-        // v1 has the same resource/segment columns as v3, but no FTS table.
-        conn.execute_batch("DROP TABLE segments_fts;").unwrap();
-    } else {
+    common::legacy::downgrade(&conn, version);
+    if version == "2" {
         // Include an orphan row to prove migration clears the entire old index.
         conn.execute(
             "INSERT INTO segments_fts(rowid,body) VALUES(99999,'obsolete ordered words')",
@@ -354,7 +363,11 @@ fn check_partial_root_migration(version: &str) {
     drop(SqliteCache::open(&file).unwrap());
     assert_eq!(count("SELECT count(*) FROM resources"), 2);
     assert_eq!(count("SELECT count(*) FROM segments"), 2);
-    assert_eq!(count("SELECT count(*) FROM segments_fts"), 0);
+    let profile: String = conn
+        .query_row("SELECT id FROM profiles", [], |r| r.get(0))
+        .unwrap();
+    let table = common::legacy::table(&profile);
+    assert_eq!(count(&format!("SELECT count(*) FROM {table}")), 0);
     assert!(!fts_data_contains(&conn, "obsolete"));
     assert_eq!(
         count("SELECT count(*) FROM resources WHERE modified_ns IS NULL AND content_hash = ''"),
@@ -368,7 +381,7 @@ fn check_partial_root_migration(version: &str) {
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "5"
+        "6"
     );
 
     let assert_unsynced_search = |engine: &SearchEngine| {
@@ -428,7 +441,9 @@ fn check_partial_root_migration(version: &str) {
             0
         );
         assert_eq!(
-            count("SELECT count(*) FROM segments_fts WHERE segments_fts MATCH 'obsolete'"),
+            count(&format!(
+                "SELECT count(*) FROM {table} WHERE {table} MATCH 'obsolete'"
+            )),
             0
         );
     }

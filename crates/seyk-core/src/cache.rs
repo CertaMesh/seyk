@@ -444,7 +444,110 @@ fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalD
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
+
+/// Injective for arbitrary UTF-8 IDs, including empty IDs. Hex contains no `_`,
+/// so another profile's name cannot collide with an FTS shadow-table suffix.
+fn fts_table(profile: &str) -> String {
+    let hex: String = profile
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("\"segments_fts_p_{hex}\"")
+}
+
+fn create_profile_fts(tx: &rusqlite::Transaction<'_>, profile: &str) -> Result<()> {
+    tx.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS {} USING fts5(
+            name, path, heading, body, detail=full, columnsize=1,
+            tokenize='unicode61 remove_diacritics 2');",
+        fts_table(profile)
+    ))?;
+    Ok(())
+}
+
+/// Reconstruct only live, already order-free fields. No provider reads, vector
+/// writes are needed during the upgrade.
+fn migrate_shared_fts(tx: &rusqlite::Transaction<'_>, profiles: &[String]) -> Result<()> {
+    let missing: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM segments s JOIN resources r
+         ON r.profile=s.profile AND r.path=s.path
+         WHERE s.rowid NOT IN (SELECT rowid FROM segments_fts)
+         AND NOT (r.content_hash='' AND r.modified_ns IS NULL
+                  AND (r.version IS NULL OR r.version='null') AND r.descriptor_hash IS NULL))",
+        [],
+        |r| r.get(0),
+    )?;
+    if missing {
+        return Err(Error::Config(
+            "cache migration: live segment is missing its keyword row".into(),
+        ));
+    }
+    tx.execute_batch(
+        "CREATE VIRTUAL TABLE temp.migration_vocab USING fts5vocab(main, segments_fts, instance);",
+    )?;
+    let mut docs: HashMap<i64, (String, [Vec<String>; 4])> = tx
+        .prepare("SELECT s.rowid,s.profile FROM segments s JOIN segments_fts f ON f.rowid=s.rowid")?
+        .query_map([], |r| {
+            Ok((r.get(0)?, (r.get(1)?, std::array::from_fn(|_| Vec::new()))))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    {
+        let mut stmt = tx.prepare("SELECT term,doc,col FROM temp.migration_vocab")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let doc = row.get::<_, i64>(1)?;
+            let Some((_, fields)) = docs.get_mut(&doc) else {
+                continue;
+            };
+            let col: String = row.get(2)?;
+            let index = ["name", "path", "heading", "body"]
+                .iter()
+                .position(|f| *f == col)
+                .ok_or_else(|| Error::Config("cache migration: invalid keyword field".into()))?;
+            fields[index].push(row.get(0)?);
+        }
+    }
+    for (rowid, (profile, fields)) in &mut docs {
+        let fields = fields.each_mut().map(|terms| {
+            terms.sort();
+            terms.join(" ")
+        });
+        tx.prepare_cached(&format!(
+            "INSERT INTO {}(rowid,name,path,heading,body) VALUES(?1,?2,?3,?4,?5)",
+            fts_table(profile)
+        ))?
+        .execute(params![rowid, fields[0], fields[1], fields[2], fields[3]])?;
+    }
+    // Verify every occurrence (including duplicate tokens and sorted positions)
+    // before removing the shared index. Any failure rolls back the whole upgrade.
+    for profile in profiles {
+        let table = fts_table(profile);
+        tx.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE temp.migration_new USING fts5vocab(main, {table}, instance);"
+        ))?;
+        let different: bool = tx.query_row(
+            "WITH old AS (SELECT term,doc,col,offset FROM temp.migration_vocab
+                JOIN segments s ON s.rowid=doc WHERE s.profile=?1),
+             missing AS (SELECT * FROM old EXCEPT SELECT * FROM temp.migration_new),
+             added AS (SELECT * FROM temp.migration_new EXCEPT SELECT * FROM old)
+             SELECT EXISTS(SELECT 1 FROM missing UNION ALL SELECT 1 FROM added)",
+            [profile],
+            |r| r.get(0),
+        )?;
+        let count: i64 =
+            tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
+        if different || count != docs.values().filter(|(p, _)| p == profile).count() as i64 {
+            return Err(Error::Config(
+                "cache migration: keyword round trip failed".into(),
+            ));
+        }
+        tx.execute_batch("DROP TABLE temp.migration_new;")?;
+    }
+    tx.execute_batch("DROP TABLE temp.migration_vocab; DROP TABLE segments_fts;")?;
+    Ok(())
+}
 
 /// Persistent cache in a single SQLite file.
 pub struct SqliteCache {
@@ -491,46 +594,49 @@ impl SqliteCache {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )?;
-        let version: Option<String> = self
+        // Inspect before writing: an unversioned nonempty database is not a new cache.
+        let tx = self
             .conn
-            .query_row(
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let has_meta: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'meta')",
+            [],
+            |r| r.get(0),
+        )?;
+        let version: Option<String> = if has_meta {
+            tx.query_row(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
                 [],
                 |r| r.get(0),
             )
-            .optional()?;
-        let tx = self.conn.transaction()?;
-        if matches!(version.as_deref(), Some("1" | "2")) {
-            // v3 removes source word order. Keep segment references so orphan
-            // pruning cannot remove vectors for roots that have not synced yet.
-            // v1 already has the same resource/segment columns, but no FTS table.
-            let has_fts: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'segments_fts')",
+            .optional()?
+        } else {
+            None
+        };
+        if version.as_deref() == Some(SCHEMA_VERSION) {
+            return Ok(());
+        }
+        if let Some(version) = &version {
+            if !matches!(version.as_str(), "1" | "2" | "3" | "4" | "5") {
+                return Err(Error::Config(format!(
+                    "cache schema {version} is newer than this binary supports; use a newer seyk or a separate --cache-path"
+                )));
+            }
+        } else {
+            let nonempty: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%')",
                 [],
                 |r| r.get(0),
             )?;
-            if has_fts {
-                // A plain DELETE only tombstones contentless rows: the old
-                // tokens and positions stay in segments_fts_data. delete-all
-                // rebuilds the index empty.
-                tx.execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all');")?;
+            if nonempty {
+                return Err(Error::Config(
+                    "nonempty cache is missing schema_version metadata".into(),
+                ));
             }
-            // Invalidate both fast paths: every resource must be re-read and
-            // re-segmented, reusing its vectors, on its next normal sync.
-            tx.execute_batch("UPDATE resources SET modified_ns = NULL, content_hash = '';")?;
-        } else if !matches!(version.as_deref(), Some("3" | "4") | Some(SCHEMA_VERSION)) {
-            // It is a cache: on any other schema change, start over.
-            tx.execute_batch(
-                "DROP TABLE IF EXISTS segments_fts;
-                 DROP TABLE IF EXISTS embeddings;
-                 DROP TABLE IF EXISTS segments;
-                 DROP TABLE IF EXISTS resources;
-                 DROP TABLE IF EXISTS profiles;",
-            )?;
         }
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS profiles (
                  id TEXT PRIMARY KEY,
@@ -548,13 +654,14 @@ impl SqliteCache {
                  PRIMARY KEY (profile, path)
              );
              CREATE TABLE IF NOT EXISTS segments (
+                 id INTEGER PRIMARY KEY,
                  profile TEXT NOT NULL,
                  path BLOB NOT NULL,
                  ordinal INTEGER NOT NULL,
                  locator TEXT NOT NULL,
                  heading TEXT,
                  input_hash TEXT NOT NULL,
-                 PRIMARY KEY (profile, path, ordinal),
+                 UNIQUE (profile, path, ordinal),
                  FOREIGN KEY (profile, path) REFERENCES resources(profile, path) ON DELETE CASCADE
              );
              CREATE INDEX IF NOT EXISTS segments_by_input ON segments(profile, input_hash);
@@ -564,14 +671,7 @@ impl SqliteCache {
                  vector BLOB NOT NULL,
                  PRIMARY KEY (profile, input_hash)
              );
-             -- Sorted input: full detail preserves frequencies, not source order.
-             -- Contentless: stores the words' index, not the text. Row ids are
-             -- segments.rowid, so rows are deleted explicitly with their segments.
-             CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
-                 name, path, heading, body,
-                 content = '', contentless_delete = 1,
-                 tokenize = 'unicode61 remove_diacritics 2'
-             );",
+             ",
         )?;
         let has_media_type: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'media_type')",
@@ -605,6 +705,39 @@ impl SqliteCache {
                 THEN '"fs:' || size_bytes || ':' || modified_ns || '"'
                 ELSE 'null' END;"#,
             )?;
+        }
+        if version.is_some() {
+            // Pin the legacy implicit rowid before any future VACUUM can renumber it.
+            tx.execute_batch(
+                "CREATE TABLE segments_v6 (
+                    id INTEGER PRIMARY KEY,
+                    profile TEXT NOT NULL, path BLOB NOT NULL, ordinal INTEGER NOT NULL,
+                    locator TEXT NOT NULL, heading TEXT, input_hash TEXT NOT NULL,
+                    UNIQUE(profile, path, ordinal),
+                    FOREIGN KEY(profile, path) REFERENCES resources(profile, path) ON DELETE CASCADE
+                 );
+                 INSERT INTO segments_v6 SELECT rowid, profile, path, ordinal, locator, heading, input_hash FROM segments;
+                 DROP TABLE segments;
+                 ALTER TABLE segments_v6 RENAME TO segments;
+                 CREATE INDEX segments_by_input ON segments(profile, input_hash);",
+            )?;
+        }
+        let profiles = tx
+            .prepare("SELECT id FROM profiles")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for profile in &profiles {
+            create_profile_fts(&tx, profile)?;
+        }
+        if matches!(version.as_deref(), Some("1" | "2")) {
+            // Remove source-order postings and invalidate both metadata and provider fast paths.
+            // Keep segment references, including unsynced roots, so vectors cannot be pruned.
+            tx.execute_batch(
+                "DROP TABLE IF EXISTS segments_fts;
+                 UPDATE resources SET modified_ns = NULL, content_hash = '', version = 'null', descriptor_hash = NULL;",
+            )?;
+        } else if version.is_some() {
+            migrate_shared_fts(&tx, &profiles)?;
         }
         tx.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
@@ -698,14 +831,15 @@ fn restrict_permissions(p: &Path, mode: u32) {
 #[cfg(not(unix))]
 fn restrict_permissions(_: &Path, _: u32) {}
 
-/// Remove a resource's keyword rows. Contentless FTS rows are not covered by
+/// Remove a resource's keyword rows. FTS rows are not covered by
 /// the foreign-key cascade, so they go first, while their segment rows exist.
 fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Result<()> {
-    tx.execute(
-        "DELETE FROM segments_fts WHERE rowid IN
+    tx.prepare_cached(&format!(
+        "DELETE FROM {} WHERE rowid IN
              (SELECT rowid FROM segments WHERE profile = ?1 AND path = ?2)",
-        params![profile, key],
-    )?;
+        fts_table(profile)
+    ))?
+    .execute(params![profile, key])?;
     Ok(())
 }
 
@@ -719,7 +853,8 @@ fn json_err(e: serde_json::Error) -> Error {
 
 impl EmbeddingCache for SqliteCache {
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.transaction()?;
+        let inserted = tx.execute(
             "INSERT OR IGNORE INTO profiles (id, profile, dimension) VALUES (?1, ?2, ?3)",
             params![
                 id,
@@ -727,6 +862,21 @@ impl EmbeddingCache for SqliteCache {
                 profile.model.dimension.get() as i64
             ],
         )?;
+        if inserted == 0 {
+            let table_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [fts_table(id).trim_matches('"')],
+                |r| r.get(0),
+            )?;
+            if !table_exists {
+                return Err(Error::Config(
+                    "corrupt cache: registered profile is missing its keyword table".into(),
+                ));
+            }
+        } else {
+            create_profile_fts(&tx, id)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -839,9 +989,10 @@ impl EmbeddingCache for SqliteCache {
                 "INSERT INTO segments (profile, path, ordinal, locator, heading, input_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
-            let mut fts = tx.prepare_cached(
-                "INSERT INTO segments_fts (rowid, name, path, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
+            let mut fts = tx.prepare_cached(&format!(
+                "INSERT INTO {} (rowid, name, path, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
+                fts_table(profile)
+            ))?;
             let (name, full) = path.labels();
             let name = order_free_text(&name);
             let full = order_free_text(&full);
@@ -883,6 +1034,13 @@ impl EmbeddingCache for SqliteCache {
 
     fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
         let tx = self.conn.transaction()?;
+        if !tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE id = ?1)",
+            [profile],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(());
+        }
         {
             let mut stmt =
                 tx.prepare_cached("DELETE FROM resources WHERE profile = ?1 AND path = ?2")?;
@@ -968,14 +1126,22 @@ impl EmbeddingCache for SqliteCache {
         let Some(expr) = query.fts5() else {
             return Ok(Vec::new());
         };
+        if !self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE id = ?1)",
+            [profile],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(Vec::new());
+        }
+        let table = fts_table(profile);
         let weights = FIELDS.map(|(_, w)| w.to_string()).join(", ");
         // bm25() is lower-is-better; ties use the stored path bytes and ordinal
         // before filtering requested paths and truncating the candidate list.
         let sql = format!(
-            "SELECT s.path, s.ordinal, -bm25(segments_fts, {weights})
-             FROM segments_fts JOIN segments s ON s.rowid = segments_fts.rowid
-             WHERE segments_fts MATCH ?1 AND s.profile = ?2
-             ORDER BY bm25(segments_fts, {weights}), s.path, s.ordinal"
+            "SELECT s.path, s.ordinal, -bm25({table}, {weights})
+             FROM {table} JOIN segments s ON s.rowid = {table}.rowid
+             WHERE {table} MATCH ?1 AND s.profile = ?2
+             ORDER BY bm25({table}, {weights}), s.path, s.ordinal"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut rows = stmt.query(params![expr, profile])?;
@@ -1036,8 +1202,18 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn clear(&mut self) -> Result<()> {
-        self.conn
-            .execute_batch("INSERT INTO segments_fts(segments_fts) VALUES ('delete-all'); DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+        self.conn.flush_prepared_statement_cache();
+        let tx = self.conn.transaction()?;
+        // Include orphan virtual tables, not just those still represented by profiles.
+        let tables = tx.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'segments_fts_p_*' AND sql LIKE 'CREATE VIRTUAL TABLE%'")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for table in tables {
+            tx.execute_batch(&format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")))?;
+        }
+        tx.execute_batch("DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+        tx.commit()?;
+        self.conn.flush_prepared_statement_cache();
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())

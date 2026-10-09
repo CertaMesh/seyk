@@ -998,3 +998,120 @@ cargo test --release --features audio --test audio_eval largest_allowed_file -- 
 
 Next: Phase 5b requires a separate STT/extraction decision and a user decision
 before changing the 32 MiB input-size policy.
+
+## P11 report: per-profile BM25 and live deletion statistics
+
+### Implemented
+
+Schema v6 gives every registered profile a regular FTS5 table named
+`segments_fts_p_<hex(profile UTF-8)>`. Its name, path, heading and body columns
+hold sorted normalized tokens, including duplicates, never source word order.
+This stores the same information recoverable from the old full-detail postings
+in a more directly readable form, with an additional copy on disk. The index
+and vectors remain sensitive; OS encryption remains the at-rest boundary.
+
+BM25 now uses only the selected profile's live indexed segments. Other profiles
+cannot affect its scores, order or top-k results. Ordinary FTS deletes let SQLite
+update document and token totals immediately, including replacement writes;
+results match a fresh surviving-document index without periodic rebuilds.
+The scoring corpus is still the whole profile, even when querying a path subset.
+Field weights, query construction, tie ordering, CLI JSON and MemoryCache stay
+unchanged.
+
+The v3/v4/v5 migration reconstructs sorted fields from live `fts5vocab(instance)`
+postings. It retains token multiplicities, field boundaries and zero-token rows,
+checks full occurrence equivalence, and ignores deleted/orphan rows. Known
+legacy-invalidated segments stay unindexed until their next sync. Unexpected
+missing keyword rows abort the migration. Embedding bytes, input hashes, resource
+state, profile IDs and segment rowids survive; no source reads or re-embedding
+are required for a valid v5 cache. The same transaction pins segment rowids as
+`id INTEGER PRIMARY KEY`. Any migration failure rolls back to the old schema.
+The v1/v2 privacy reset still keeps segment/vector references and marks resources
+stale, including their provider version and preparation descriptor.
+
+Registration creates its table transactionally. Unknown-profile searches return
+empty; a registered profile with a missing table produces an error. Clear drops
+all per-profile FTS virtual tables, including orphans, then retains the existing
+empty-cache checkpoint/VACUUM. Many profiles can exceed rusqlite's default
+statement-cache capacity; this affects preparation cost, not correctness.
+
+### Deliberately excluded
+
+No automatic migration VACUUM, secure deletion, vector pruning, new profile
+identity, or extraction change. Migration replaces the active index; it does not
+scrub freed pages, old WAL frames, backups or snapshots. Physical erasure remains
+separate work. Migration needs space for both indexes and the WAL, plus memory
+for reconstructed tokens and SQLite's verification queries.
+
+### Upgrading
+
+This is a **one-way cache upgrade**. Stop older Seyk processes before opening an
+existing cache with schema v6. Older binaries treat an unknown schema as disposable
+and **delete the cache, including embeddings**. Use separate `--cache-path` files
+when running mixed versions. New binaries reject unknown/future versions and
+nonempty databases missing version metadata without dropping their tables.
+The next release notes must repeat this warning; the crate version remains 0.1.0.
+
+### Measurements and checks
+
+Public synthetic release-mode benchmark on macOS ARM with bundled SQLite 3.53.2:
+32 profiles, 20,031 documents and 4,046,200 postings (20,000 documents in the
+largest profile). `dbstat` allocated keyword pages grew from 22,441,984 to
+68,923,392 bytes, **3.071×** on this corpus; this is larger than the design's
+approximate 2× estimate. Every synthetic document has the identical 200-token
+body: postings compress especially well while the stored content repeats those
+tokens in each row, making this corpus near worst case for the ratio. On a fresh
+copy of the local default cache, migration grew allocated keyword pages from
+16,384 to 20,480 bytes, **1.250×**. The ratio depends on token distribution and
+corpus size; neither measurement is a general storage bound. These are active
+keyword pages, excluding relational tables, freed pages and WAL.
+
+In the final run, single-document replacement p50/p95 was 0.607/1.613 ms;
+deletion was 0.180/0.717 ms; a 100-resource batch delete took 13.61 ms.
+Stored document/token totals and BM25 matched a fresh live index exactly after
+100 replacements and 200 deletions. Migration took 29.71 s with a 73,039,392-byte
+WAL; the full benchmark process peaked at 359,481,344 bytes RSS. Earlier runs
+on the same busy machine migrated in 50.94–99.04 s. The migration's occurrence
+verification scans the old vocabulary per profile, so this one-time cost grows
+with both postings and profile count. These are local observations, not latency
+bounds. Reproduce with:
+
+```sh
+cargo test -p seyk-core --release --locked --test cache measure_p11 -- --ignored --nocapture
+```
+
+The public asymmetric ranking regression keeps A's top two documents and scores
+(3.928078, 3.868289) unchanged across B registration, addition, replacement,
+deletion, pruning and reopen. Previously, B reversed A's top two results and its
+deletion left inflated scores. Additional bundled-SQLite tests cover 24 edit/delete
+steps against fresh SQLite and MemoryCache, content integrity checks, Unicode and
+duplicate postings, empty-token documents, sparse IDs across VACUUM, transactional
+rollback, reconstructed v1–v5 layouts, warm v5 reuse with a provider that forbids reads,
+unknown schemas, arbitrary profile IDs, and sorted persisted fields.
+
+The existing eight-target evaluation was run with main and P11 release binaries
+against separate copies of the same cache. All **40 ranks were unchanged** across
+semantic, hybrid weights 1.0/0.3/0.15, and default search. Default top-10 coverage
+remains **7/8**. Only anonymized ranks are reported:
+
+| Target | Default before → after | Semantic before → after |
+| --- | --- | --- |
+| Q1 | 1 → 1 | 9 → 9 |
+| Q2 | 7 → 7 | 1 → 1 |
+| Q3 | 1 → 1 | 1 → 1 |
+| Q4 | 2 → 2 | 1 → 1 |
+| Q5 | 1 → 1 | 1 → 1 |
+| Q6 | 2 → 2 | 18 → 18 |
+| Q7 | 25 → 25 | 19 → 19 |
+| Q8 | 7 → 7 | 7 → 7 |
+
+All 2,195 embedding blobs and all 2,195 segment rows (including rowids) were
+identical across the evaluated v5 and v6 copies. The evaluation harness decodes
+CLI resource URIs before matching the existing path-based targets; queries,
+paths and source text remain local.
+
+The local merge gate passed: pinned Rust 1.99 formatting and workspace Clippy
+with warnings denied; workspace, core minimal, PDF and PDF-render tests; both
+model-backed cache-profile and PDF CLI goldens; Rust 1.89 all-target checks;
+release CLI smoke; license checks; and embedding dependency boundaries. Linux
+and Windows execution still requires CI when GitHub Actions billing is restored.
