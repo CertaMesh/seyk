@@ -12,3 +12,8 @@ pub fn signal() -> Vec<f32> {
         })
         .collect()
 }
+
+/// Repeat the same deterministic source to exercise tail and full-window shapes.
+pub fn signal_len(samples: usize) -> Vec<f32> {
+    signal().into_iter().cycle().take(samples).collect()
+}

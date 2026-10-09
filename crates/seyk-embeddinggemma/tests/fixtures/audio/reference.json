@@ -1,6 +1,6 @@
 {
   "transformers_version": "5.19.0",
-  "torch_version": "2.14.0",
+  "torch_version": "2.14.1",
   "model_revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
   "onnx_revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
   "signal_sha256": "c8653fc59bae97a2be3707099e45c795af21b4c49d3f145b67f27c61e7cfe1a7",

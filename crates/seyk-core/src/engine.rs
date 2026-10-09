@@ -375,6 +375,8 @@ impl SearchEngine {
                     &r.id,
                     if r.kind == ResourceKind::Pdf && !cfg!(feature = "pdf") {
                         "PDF support is not compiled in (feature `pdf`)".into()
+                    } else if r.kind == ResourceKind::Audio && !cfg!(feature = "audio") {
+                        "audio support is not compiled in (feature `audio`)".into()
                     } else {
                         format!("{modality} search is not supported by this embedder")
                     },

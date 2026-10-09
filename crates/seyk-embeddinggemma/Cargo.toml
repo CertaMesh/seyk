@@ -12,7 +12,7 @@ audio = ["dep:rustfft"]
 image = ["dep:image", "dep:fast_image_resize"]
 
 [dependencies]
-rustfft = { version = "6", optional = true }
+rustfft = { version = "=6.4.1", optional = true }
 seyk-embed = { path = "../seyk-embed", version = "0.1.0" }
 ort = "=2.0.0-rc.13"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }

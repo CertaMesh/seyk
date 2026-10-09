@@ -841,17 +841,28 @@ Channels are averaged with f64 accumulation, then a versioned 64-tap Blackman
 windowed-sinc filter (0.94 Nyquist guard, zero-extended edges) produces mono
 16 kHz f32. Decoding never retains a full PCM file. The packet buffer, resampler
 history and 10-second rolling window are bounded independently of duration.
-Window starts advance by 8 seconds; the last short window is included. Tails
+Window starts advance by 8 seconds; the first short window ends the sequence,
+without emitting further windows contained in that tail. Tails
 shorter than 320 samples are zero-padded only for embedding. Time locators use
 floor(start sample × 1000 / 16000), ceil(end sample × 1000 / 16000), with the real
 post-trim end, never the padded end. Intervals are half-open and non-empty.
 
 The decoded cap is **16,777,216 samples at 16 kHz = 1,048.576 seconds**, derived
 from 32 MiB of 16-bit mono PCM. Known exact lengths can fail before decoding;
-the streaming counter also enforces it. This bounds work for highly compressed
+the streaming counter also enforces it. Recordings over about 17.5 minutes are
+skipped entirely, even if windows were processed before the limit was detected.
+This bounds work for highly compressed
 inputs while retaining the existing encoded-file policy. Supported source rates
 are 8–192 kHz, with up to eight channels (AAC-LC is mono/stereo); format changes,
 corrupt frames and unsupported profiles return `UnsupportedAudio`.
+
+ALAC cookies must contain 24 or 48 bytes, 1–16,384 samples per frame (four times
+Apple’s usual 4096), 1–8 channels and a supported 16/20/24/32-bit depth before
+decoder construction. This caps each ALAC output/tail buffer at 512 KiB.
+Symphonia probing, construction, packet reads and decoding use a shared
+`catch_unwind` boundary returning payload-free `UnsupportedAudio` errors.
+Library callers must also use a payload-free panic hook; aborts, OOM and hangs
+are not contained.
 
 ### Embedding, cache and failure boundaries
 
@@ -871,7 +882,9 @@ revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0`. Together they are
 weights fail individual audio files while text, image and PDF indexing proceeds.
 Inference has no download path.
 
-`Embedder::input_identity(Modality)` is a defaulted generic seam, forwarded by
+API changes: the opt-in `pub mod audio` exposes preparation helpers/constants;
+`ResourceKind::Audio` requires downstream exhaustive matches to add an arm.
+`Embedder::input_identity(Modality)` is a new defaulted generic seam, forwarded by
 Box/Arc. The backend's audio identity hashes both audio files and the feature
 policy. The core includes this identity, the preparation policy and exact f32
 sample bytes in **`audio-input-v1`**, and includes the policy/identity in the
@@ -900,7 +913,11 @@ CPU/q8, one ONNX thread. Evaluations use the production engine with fresh
 in-memory caches and semantic-only queries. A hit is correct only when the
 resource matches and its Time locator contains the **entire** annotated phrase.
 Each corpus has 20 × 21-second synthetic recordings and 40 queries; 20 phrases
-cross the first window boundary. No private corpus or recognizer is used.
+cross the first window boundary. The frozen manifests contain 1.87–3.43-second
+phrases placed fully inside at least one window. Phrases longer than the
+two-second overlap that straddle windows without fitting in either are
+unmeasured; the boundary subset does not test that case.
+No private corpus or recognizer is used.
 
 The original spike set uses Samantha/Daniel. The separately frozen held-out set
 uses new scripts and Karen, a voice unused by the spike. Its script SHA256 is
@@ -922,11 +939,15 @@ Elapsed measurements include decoding/resampling and run on a shared machine;
 they are not isolated comparative dimension benchmarks.
 
 A one-second Rust-generated chirp plus tones supplies the committed parity
-signal. Pinned local Transformers 5.19.0 / Torch 2.14.0 FP32 generated the feature,
+signal. Pinned local Transformers 5.19.0 / Torch 2.14.1 FP32 generated the feature,
 mask/token and 768-dimensional embedding goldens. Feature maximum absolute error
 is **4.7683716e-7** (normal test, gate 1e-5); embedding cosine is **0.9998887**
 (ignored model-backed test, gate .99). Exact reference revisions/source hashes
 are recorded in `crates/seyk-embeddinggemma/tests/fixtures/audio/reference.json`.
+Additional goldens repeat the same Rust signal to 16,001 samples (partial-frame
+padding, 100 frames / 25 tokens) and 160,000 samples (full window, 999 frames /
+250 tokens). Both features/masks and 768-dimensional embeddings use the same
+pinned reference and parity gates. No additional source audio is committed.
 
 Ten generated timing fixtures have zero cross-correlation lag and exact output
 lengths at 16 kHz: WAV, FLAC, ALAC, FFmpeg AAC (1024 priming samples), Apple AAC

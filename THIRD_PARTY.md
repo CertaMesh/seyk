@@ -4,8 +4,9 @@ Seyk is Apache-2.0. Dependency licence choices are checked by `cargo deny check
 licenses` against `deny.toml` and the locked graph. GPL, AGPL, LGPL and SSPL
 choices are not allowed. A permissive alternative in a dual-licence expression
 may be selected. MPL requires explicit review, including existing
-dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing transitive dependency of `dirs`; additional scoped exceptions for opt-in audio are listed below. Its unmodified source is available at
+dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing transitive dependency of `dirs`. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
+Additional scoped exceptions for opt-in audio are listed below.
 
 PDF text extraction uses pdf-extract 0.12.1 (MIT) and lopdf 0.42.0 (MIT), plus
 MIT-licensed Adobe CMap, Type 1 encoding and font parsers. See their packaged

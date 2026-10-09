@@ -116,15 +116,24 @@ fn window_tails_round_outward_and_corruption_is_typed() {
                     end_ms: 16001
                 },
                 128001
-            ),
-            (
-                ResourceLocator::Time {
-                    start_ms: 16000,
-                    end_ms: 16001
-                },
-                320
             )
         ]
+    );
+    let mut short = Vec::new();
+    audio::windows(wav(1, 16000), &id, |locator, pcm| {
+        short.push((locator, pcm.len()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        short,
+        vec![(
+            ResourceLocator::Time {
+                start_ms: 0,
+                end_ms: 1
+            },
+            320
+        )]
     );
     assert!(matches!(
         audio::windows(vec![0; 128], &id, |_, _| Ok(())),
@@ -152,7 +161,7 @@ fn bounded_batches_atomic_binding_and_no_audio_at_rest() {
         .execute()
         .unwrap();
     assert!(result.stats.sync.skipped.is_empty());
-    assert_eq!(result.hits.len(), 7);
+    assert_eq!(result.hits.len(), 6);
     assert!(
         result
             .hits
@@ -169,7 +178,7 @@ fn bounded_batches_atomic_binding_and_no_audio_at_rest() {
     ));
     assert!(error.to_string().contains("STT not available until 5b"));
     // Different file content: two successful windows then a failure. Binding
-    // must remain entirely the previous seven windows, never a partial version.
+    // must remain entirely the previous six windows, never a partial version.
     model
         .fail_after
         .store(model.calls.lock().unwrap().len() + 2, Ordering::Relaxed);

@@ -10,6 +10,7 @@ use symphonia::core::{
     probe::Hint,
 };
 mod aac;
+mod alac;
 mod mp4;
 
 pub const SAMPLE_RATE: usize = 16_000;
@@ -18,13 +19,20 @@ pub const STRIDE: usize = 8 * SAMPLE_RATE;
 /// The existing 32 MiB encoded limit, expressed as mono 16-bit PCM at 16 kHz.
 /// Also caps decoding work for highly compressed or malicious inputs: 1048.576 s.
 pub const MAX_SAMPLES: u64 = 32 * 1024 * 1024 / 2;
-pub const PREPARATION: &str = "audio-prep-v1;symphonia=0.5.5;gapless=true;elst-v1-single-edit-mdhd-end-itunsmpb-fallback-else-decoded-timeline;mean-channels-f64;sinc64-blackman-guard0.94-v1;zero-edges;16k-f32;window160000-stride128000;tail-pad320;cap16777216";
+pub const PREPARATION: &str = "audio-prep-v1;symphonia=0.5.5;gapless=true;elst-v1-single-edit-mdhd-end-itunsmpb-fallback-else-decoded-timeline;mean-channels-f64;sinc64-blackman-guard0.94-v1;zero-edges;16k-f32;window160000-stride128000;tail-pad320-stop-at-first-short-v2;alac-frame-cap16384;cap16777216";
 
 fn unsupported(id: &ResourceId, reason: &'static str) -> Error {
     Error::UnsupportedAudio {
         resource: id.clone(),
         reason,
     }
+}
+
+/// Contain upstream unwinding panics without exposing their payloads. As with
+/// PDF parsing, applications must install a payload-free panic hook.
+fn guarded<T>(id: &ResourceId, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err(unsupported(id, "audio decoder or parser panicked")))
 }
 
 pub fn media_type(bytes: &[u8]) -> &'static str {
@@ -80,7 +88,7 @@ pub fn windows(
         // only: a short tail's locator still ends at its real final sample.
         samples.resize(real_len.max(320), 0.0);
         emit(locator, samples)?;
-        if real_len <= STRIDE {
+        if real_len < WINDOW {
             break;
         }
         buf.drain(..STRIDE);
@@ -113,18 +121,20 @@ impl Reader {
         let reliable_length = matches!(media_type(&bytes), "audio/wav" | "audio/flac");
         let timing = mp4::timing(&bytes).map_err(|reason| unsupported(id, reason))?;
         let stream = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
-        let format = symphonia::default::get_probe()
-            .format(
-                &Hint::new(),
-                stream,
-                &FormatOptions {
-                    enable_gapless: true,
-                    ..Default::default()
-                },
-                &MetadataOptions::default(),
-            )
-            .map_err(|_| unsupported(id, "unrecognized or corrupt audio container"))?
-            .format;
+        let format = guarded(id, || {
+            symphonia::default::get_probe()
+                .format(
+                    &Hint::new(),
+                    stream,
+                    &FormatOptions {
+                        enable_gapless: true,
+                        ..Default::default()
+                    },
+                    &MetadataOptions::default(),
+                )
+                .map_err(|_| unsupported(id, "unrecognized or corrupt audio container"))
+        })?
+        .format;
         if format.tracks().len() != 1 {
             return Err(unsupported(id, "multiple audio tracks are unsupported"));
         }
@@ -163,11 +173,17 @@ impl Reader {
                 "decoded audio exceeds 1048.576 second duration cap",
             ));
         }
-        let decoder = symphonia::default::get_codecs()
-            .make(params, &DecoderOptions::default())
-            .map_err(|_| {
-                unsupported(id, "unsupported audio codec (HE-AAC/SBR is not supported)")
-            })?;
+        if params.codec == symphonia::core::codecs::CODEC_TYPE_ALAC {
+            alac::validate_cookie(params.extra_data.as_deref().unwrap_or_default())
+                .map_err(|reason| unsupported(id, reason))?;
+        }
+        let decoder = guarded(id, || {
+            symphonia::default::get_codecs()
+                .make(params, &DecoderOptions::default())
+                .map_err(|_| {
+                    unsupported(id, "unsupported audio codec (HE-AAC/SBR is not supported)")
+                })
+        })?;
         let track = track.id;
         Ok(Self {
             format,
@@ -202,7 +218,7 @@ impl Reader {
                 self.emitted += 1;
                 return Ok(Some(sample));
             }
-            let packet = match self.format.next_packet() {
+            let packet = match guarded(&self.id, || Ok(self.format.next_packet()))? {
                 Ok(packet) => packet,
                 Err(symphonia::core::errors::Error::IoError(e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
@@ -224,11 +240,13 @@ impl Reader {
                     "audio packet exceeds bounded decoder budget",
                 ));
             }
-            let decoded = self.decoder.decode(&packet).map_err(|_| {
-                unsupported(
-                    &self.id,
-                    "unsupported or corrupt audio frame (HE-AAC/SBR is not supported)",
-                )
+            let decoded = guarded(&self.id, || {
+                self.decoder.decode(&packet).map_err(|_| {
+                    unsupported(
+                        &self.id,
+                        "unsupported or corrupt audio frame (HE-AAC/SBR is not supported)",
+                    )
+                })
             })?;
             let channels = decoded.spec().channels.count();
             if self.channels == 0 {
@@ -326,5 +344,21 @@ impl Resampler {
             self.base += 1;
         }
         Ok(Some((value / norm) as f32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_panic_becomes_payload_free_audio_error() {
+        let id: ResourceId = "mem://audio/panic".parse().unwrap();
+        let result = guarded::<()>(&id, || panic!("private decoder payload"));
+        assert!(
+            matches!(result, Err(Error::UnsupportedAudio { resource, reason })
+            if resource == id && reason == "audio decoder or parser panicked")
+        );
+        assert_eq!(guarded(&id, || Ok(42)).unwrap(), 42);
     }
 }

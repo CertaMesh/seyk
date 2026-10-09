@@ -209,7 +209,9 @@ Missing audio weights skip individual audio files; text, images and PDFs still
 work. Search never downloads weights.
 
 The existing 32 MiB file limit still applies. Decoding also stops at 1,048.576
-seconds (the same byte budget as 16-bit mono PCM at 16 kHz). Complex MP4 edits,
+seconds (the same byte budget as 16-bit mono PCM at 16 kHz). Recordings over
+about 17.5 minutes are skipped entirely, including any windows already processed.
+Complex MP4 edits,
 multiple tracks, HE-AAC/SBR and changing sample formats are rejected. MP4 edit
 lists or iTunSMPB remove encoder priming/padding; files without timing metadata
 use their decoded-sample timeline. See the [audio report](docs/architecture.md#phase-5a-audio-retrieval)

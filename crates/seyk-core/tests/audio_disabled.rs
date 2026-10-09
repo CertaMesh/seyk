@@ -13,5 +13,12 @@ fn default_core_discovers_audio_but_does_not_decode_it() {
     let stats = engine.index().paths([path]).execute().unwrap().sync;
     assert_eq!(stats.resources_updated, 0);
     assert_eq!(stats.skipped.len(), 1);
-    assert!(stats.skipped[0].reason.contains("audio"));
+    assert_eq!(
+        stats.skipped[0].reason,
+        "audio support is not compiled in (feature `audio`)"
+    );
+    assert_eq!(
+        seyk_core::discovery::ResourceKind::from_path(std::path::Path::new("track.aac")),
+        None
+    );
 }

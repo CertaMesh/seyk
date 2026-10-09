@@ -12,43 +12,42 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
 }
 #[test]
 fn reference_features_and_token_mask() {
-    let samples = fixture::signal();
     assert_eq!(
-        samples,
+        fixture::signal(),
         floats(include_bytes!("fixtures/audio/audio_signal.f32"))
     );
-    let expected = floats(include_bytes!("fixtures/audio/features.f32"));
-    let reference: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/audio/reference.json")).unwrap();
-    let pre = audio::preprocess(&samples).unwrap();
-    assert_eq!(pre.values.len(), expected.len());
-    assert_eq!(
-        pre.mask,
-        serde_json::from_value::<Vec<bool>>(reference["mask"].clone()).unwrap()
-    );
-    assert_eq!(
-        pre.mask.len(),
-        reference["features_shape"][0].as_u64().unwrap() as usize
-    );
-    let max = pre
-        .values
-        .iter()
-        .zip(expected)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0f32, f32::max);
-    assert!(max <= 1e-5, "max_abs_diff={max}");
-    let tokens = reference["input_ids"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|v| v.as_u64() == Some(258881))
-        .count();
-    assert_eq!(pre.mask.iter().step_by(4).filter(|v| **v).count(), tokens);
-    println!(
-        "AUDIO_FEATURE_PARITY max_abs_diff={max} frames={} tokens={tokens}",
-        pre.mask.len()
-    );
+    for (name, samples, expected, reference) in cases() {
+        let pre = audio::preprocess(&samples).unwrap();
+        assert_eq!(pre.values.len(), expected.len());
+        assert_eq!(
+            pre.mask,
+            serde_json::from_value::<Vec<bool>>(reference["mask"].clone()).unwrap()
+        );
+        assert_eq!(
+            pre.mask.len(),
+            reference["features_shape"][0].as_u64().unwrap() as usize
+        );
+        let max = pre
+            .values
+            .iter()
+            .zip(expected)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max <= 1e-5, "max_abs_diff={max}");
+        let tokens = reference["input_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v.as_u64() == Some(258881))
+            .count();
+        assert_eq!(pre.mask.iter().step_by(4).filter(|v| **v).count(), tokens);
+        println!(
+            "AUDIO_FEATURE_PARITY case={name} max_abs_diff={max} frames={} tokens={tokens}",
+            pre.mask.len()
+        );
+    }
 }
+
 #[test]
 #[ignore = "requires pinned local q8 text/audio weights; no downloads"]
 fn reference_embedding_and_text_cache_identity() {
@@ -75,34 +74,34 @@ fn reference_embedding_and_text_cache_identity() {
         model.input_identity(Modality::Audio),
         text.input_identity(Modality::Audio)
     );
-    let reference: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/audio/reference.json")).unwrap();
-    let count = audio::preprocess(&fixture::signal())
-        .unwrap()
-        .mask
-        .iter()
-        .step_by(4)
-        .filter(|v| **v)
-        .count();
-    let ids = model
-        .token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(count)))
-        .unwrap();
-    assert_eq!(
-        ids,
-        serde_json::from_value::<Vec<u32>>(reference["input_ids"].clone()).unwrap()
-    );
-    let expected: Vec<f32> = serde_json::from_value(reference["embedding"].clone()).unwrap();
-    let embedding = model.embed_audio(&fixture::signal(), 16_000).unwrap();
-    let dot: f32 = embedding
-        .as_slice()
-        .iter()
-        .zip(&expected)
-        .map(|(a, b)| a * b)
-        .sum();
-    let norm = expected.iter().map(|v| v * v).sum::<f32>().sqrt();
-    let cosine = dot / norm;
-    println!("AUDIO_EMBEDDING_PARITY cosine={cosine}");
-    assert!(cosine >= 0.99);
+    for (name, samples, _, reference) in cases() {
+        let count = audio::preprocess(&samples)
+            .unwrap()
+            .mask
+            .iter()
+            .step_by(4)
+            .filter(|v| **v)
+            .count();
+        let ids = model
+            .token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(count)))
+            .unwrap();
+        assert_eq!(
+            ids,
+            serde_json::from_value::<Vec<u32>>(reference["input_ids"].clone()).unwrap()
+        );
+        let expected: Vec<f32> = serde_json::from_value(reference["embedding"].clone()).unwrap();
+        let embedding = model.embed_audio(&samples, 16_000).unwrap();
+        let dot: f32 = embedding
+            .as_slice()
+            .iter()
+            .zip(&expected)
+            .map(|(a, b)| a * b)
+            .sum();
+        let norm = expected.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let cosine = dot / norm;
+        println!("AUDIO_EMBEDDING_PARITY case={name} cosine={cosine}");
+        assert!(cosine >= 0.99);
+    }
 }
 
 #[test]
@@ -172,4 +171,36 @@ fn missing_audio_files_leave_text_available() {
         missing.input_identity(Modality::Audio),
         installed.input_identity(Modality::Audio)
     );
+}
+
+fn cases() -> impl Iterator<Item = (&'static str, Vec<f32>, Vec<f32>, serde_json::Value)> {
+    [
+        (
+            "one-second",
+            16000,
+            include_bytes!("fixtures/audio/features.f32").as_slice(),
+            include_str!("fixtures/audio/reference.json"),
+        ),
+        (
+            "partial-frame",
+            16001,
+            include_bytes!("fixtures/audio/tail-features.f32").as_slice(),
+            include_str!("fixtures/audio/tail.json"),
+        ),
+        (
+            "full-window",
+            160000,
+            include_bytes!("fixtures/audio/full-features.f32").as_slice(),
+            include_str!("fixtures/audio/full.json"),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, len, features, reference)| {
+        (
+            name,
+            fixture::signal_len(len),
+            floats(features),
+            serde_json::from_str(reference).unwrap(),
+        )
+    })
 }
