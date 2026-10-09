@@ -40,6 +40,7 @@ def require(condition, message):
 
 def confined(path):
     path = Path(path).expanduser().absolute()
+    require(".." not in path.parts, "parent traversal is not allowed")
     require(path == ROOT or ROOT in path.parents, "path must be under ~/.cache/seyk-bench")
     for parent in (path, *path.parents):
         require(not parent.is_symlink(), f"symlink is not allowed: {parent}")
@@ -139,7 +140,7 @@ def inputs(ds):
                 # pdf_id_x is the physical PDF ID; pdf_id_y comes from the OCR join.
                 paper = row["pdf_id_x"]
                 if row["pdf_id_y"]:
-                    require(int(float(row["pdf_id_y"])) == int(paper), "IRPAPERS PDF join mismatch")
+                    require(float(row["pdf_id_y"]) == int(paper), "IRPAPERS PDF join mismatch")
                 yield page_id(paper, row["page_number"]), (row["pdf_title"] + "\n\n" + row["transcription"]).encode(), "txt"
         return pages(), queries, qrels
     require(kind == "irpapers-pdf", "unknown adapter")
@@ -325,15 +326,17 @@ def determinism(left, right):
 
 
 def report(paths):
-    print("| Dataset | Mode | nDCG@10 | MRR@10 | R@1 | R@5 | R@10 | R@20 | R@100 |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    print("| Dataset | Mode | Precision / dims | nDCG@10 | MRR@10 | R@1 | R@5 | R@10 | R@20 | R@100 |")
+    print("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
     for path in paths:
         r = json.loads(confined(path).read_text())
         for mode, metrics_ in r["metrics"].items():
+            env = r["environment"][mode]
+            profile = f"{env.get('precision', '?')}/{env.get('dimension', '?')}"
             views = metrics_ if r["dataset"] == "irpapers-pdf" else {"":metrics_}
             for view, values in views.items():
                 label = r["dataset"] + (" smoke" if r["smoke"] else "") + (" " + view if view else "")
-                print("| " + label + " | " + mode + " | " + " | ".join(f"{values[str(m)]:.4f}" for m in METRICS) + " |")
+                print("| " + label + " | " + mode + " | " + profile + " | " + " | ".join(f"{values[str(m)]:.4f}" for m in METRICS) + " |")
     print("\nPublished references (different systems): SciFact BM25/TAS-B nDCG@10 .665/.643; NFCorpus .325/.319; IRPAPERS text hybrid R@1/5/20 .46/.78/.91. NanoSciFact is smoke only.")
 
 
@@ -363,6 +366,37 @@ class Tests(unittest.TestCase):
         queries, qrels = ir_queries(rows)
         self.assertEqual(len({q["qid"] for q in queries}), 2)
         self.assertEqual([r[1] for r in qrels], ["7#2", "7#2"])
+
+    def test_irpapers_text_schema_and_join(self):
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            raw_dir = root / "raw/irpapers"
+            raw_dir.mkdir(parents=True)
+            fields = ["pdf_id_x", "pdf_id_y", "page_number", "pdf_title", "transcription", "base64_str"]
+            rows = [dict(zip(fields, ["7", "", "1", "Title", "First page", "not decoded"])),
+                    dict(zip(fields, ["7", "7.0", "2", "Title", "Second page", "not decoded"]))]
+            def write_docs():
+                with (raw_dir / "docs.csv").open("w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            write_docs()
+            with (raw_dir / "queries.csv").open("w", newline="") as f:
+                query_fields = ["dataset_id", "pdf_id", "page_number", "question"]
+                writer = csv.DictWriter(f, fieldnames=query_fields)
+                writer.writeheader()
+                writer.writerows([dict(zip(query_fields, ["7_2", "7", "2", "First question"])),
+                                  dict(zip(query_fields, ["7_2", "7", "2", "Second question"]))])
+            with mock.patch.dict(globals(), ROOT=root):
+                docs, queries, qrels = inputs("irpapers")
+                self.assertEqual(list(docs), [("7#1", b"Title\n\nFirst page", "txt"),
+                                              ("7#2", b"Title\n\nSecond page", "txt")])
+                self.assertEqual(len({q["qid"] for q in queries}), 2)
+                self.assertTrue(all(r[1] == "7#2" for r in qrels))
+                rows[1]["pdf_id_y"] = "7.5"
+                write_docs()
+                with self.assertRaises(ValueError): list(inputs("irpapers")[0])
 
     def test_materialize_score_report_and_integrity(self):
         ROOT.mkdir(parents=True, exist_ok=True)
@@ -403,6 +437,7 @@ class Tests(unittest.TestCase):
 
     def test_confined(self):
         with self.assertRaises(ValueError): confined(Path.home()/"private")
+        with self.assertRaises(ValueError): confined(ROOT/".."/"private")
         ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             link=Path(directory)/"escape"
