@@ -1,0 +1,252 @@
+{
+  "apple.m4a": {
+    "source_hash": "0070ccb7a020e804fc13159e64eb68e72f199da8cbd6b83eee2712b2bea897b4",
+    "windows": [
+      {
+        "input_hash": "aec3b9d263a2b61d329e61f78470cfd0edda964612f18d69f762e6c01817d4c0",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "ffmpeg-aac.m4a": {
+    "source_hash": "14751ab1833b43e55757c0bb4cbd80689483c22dd7a09e6f4ae675911ef5198a",
+    "windows": [
+      {
+        "input_hash": "a92120721ee6d70400a869e9b02cda65c07086aa772ed00729e6523bb588a086",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "fractional-reference.wav": {
+    "source_hash": "14bec4c4f249ee087e677a8b9cf9368dfb5dc53b4be31b33456125f28f05b0a8",
+    "windows": [
+      {
+        "input_hash": "0d76feb2c76935cf6a257fe5230894f5d541170fe9096b9a7df8110777f36a48",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "fractional.m4a": {
+    "source_hash": "a34d1942392af595c8ce6ee6ee3de6bf1480976767ebdf8716057dcec3a6b60b",
+    "windows": [
+      {
+        "input_hash": "faa400e0dd044ad4aac84dc6ab5927e39c5e995e702c6df149384f53b50cf9ed",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "lame.mp3": {
+    "source_hash": "97a6a519e250dc800543814f517dbbc454c3c8b52939c34d0c38f53cf0b72a7a",
+    "windows": [
+      {
+        "input_hash": "bca1b162bed261c87110366817eaad24fbf458f741e25087a504d69ad4154170",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "lossless.flac": {
+    "source_hash": "ed94425a08920d071e9f09f914b3ded740146be85b26832d6131c1d3e090b51e",
+    "windows": [
+      {
+        "input_hash": "70ee867d649aa0c025368bb4fa80d8e54fffc60b62ada9902693f279d9f1949b",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "lossless.m4a": {
+    "source_hash": "3c78cf3ee99bf28f23f455e83b390008676a5db70b407012e425199912118d68",
+    "windows": [
+      {
+        "input_hash": "70ee867d649aa0c025368bb4fa80d8e54fffc60b62ada9902693f279d9f1949b",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "lossless.wav": {
+    "source_hash": "ce3a775fbbb4415c2f308f911dd7e6db4e5dfd4c4f281f7943f8246ac0d21d89",
+    "windows": [
+      {
+        "input_hash": "70ee867d649aa0c025368bb4fa80d8e54fffc60b62ada9902693f279d9f1949b",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "master.wav": {
+    "source_hash": "01244a0edc07031bf32330a0d31c891318a3fb5389103dd36febd496b010dfed",
+    "windows": [
+      {
+        "input_hash": "70ee867d649aa0c025368bb4fa80d8e54fffc60b62ada9902693f279d9f1949b",
+        "locator": {
+          "end_ms": 3000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "no-edts-reference.wav": {
+    "source_hash": "4b8326d6df5057e05cb1c1dc39cc7e9f178096b6304793be9d519bad94886c4a",
+    "windows": [
+      {
+        "input_hash": "e75e80a644cb16cb25d58d52825cbb8ccc4ab0455610938fa81ec0ecf7a3bf56",
+        "locator": {
+          "end_ms": 3030,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "no-edts.m4a": {
+    "source_hash": "458ea732afe449508c58c657c8ba620828320845acb9f06833d6096128857074",
+    "windows": [
+      {
+        "input_hash": "75566df2961e423b77a259be2bda088a24e68150e3108bb4e4037ca9b6ca6853",
+        "locator": {
+          "end_ms": 3030,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "no-lame-reference.wav": {
+    "source_hash": "d37e53bc7d42e7b75878485369f35b5a979452534638d5b49c5384e5141b857e",
+    "windows": [
+      {
+        "input_hash": "28288d0431eb93909de32ef806eeb1d43ce34e08c8af2f12992624f3bdeb166d",
+        "locator": {
+          "end_ms": 3024,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "no-lame.mp3": {
+    "source_hash": "e492e409481e33a5a3ac7d5f062e1e15c4b3c0000b74086b69c648408e1895c6",
+    "windows": [
+      {
+        "input_hash": "e2de7c23b0d147f6f86c60ba5351e25b59f80fc6c1b31832a6749610eecec8cd",
+        "locator": {
+          "end_ms": 3024,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "non16-tail.wav": {
+    "source_hash": "7cd9adb079f42a80cf3ab521d6419d7c8f7a997fa3e0f86fe8e19402d0cf93b3",
+    "windows": [
+      {
+        "input_hash": "c6cc5dc5ec6e8f4cfb9bf808bc1b3060ee5b3a1479f593bb6df37cc6872b4306",
+        "locator": {
+          "end_ms": 10000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      },
+      {
+        "input_hash": "e6eff7fe15374d91f869f0d305560b61d8db485bc8a54d53f7a507e8305105c1",
+        "locator": {
+          "end_ms": 10001,
+          "kind": "time",
+          "start_ms": 8000
+        }
+      }
+    ]
+  },
+  "one-sample.wav": {
+    "source_hash": "5542154d10db19a86739a4f1ac0b7e5b6eca548ec1c129848ff4196c195c2d08",
+    "windows": [
+      {
+        "input_hash": "7b27cce4a3b2aeba7c5fe8b7462c8666ca49420e536652edbc6b258b9dd3c2af",
+        "locator": {
+          "end_ms": 1,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "short-tail.wav": {
+    "source_hash": "f946343ce72d861d30fe713b776d2d9f343561070cdb42a40966f8e5c53bb311",
+    "windows": [
+      {
+        "input_hash": "80d4429920a9ef1c2c40f40c41dd72a2833d3cf03801ec3e9612a1ec0caf2fa4",
+        "locator": {
+          "end_ms": 10000,
+          "kind": "time",
+          "start_ms": 0
+        }
+      },
+      {
+        "input_hash": "e21235b93b85b36ceb4c5017a5b4091acb5bf9792ca5e9419d1d9404fa456424",
+        "locator": {
+          "end_ms": 10001,
+          "kind": "time",
+          "start_ms": 8000
+        }
+      }
+    ]
+  },
+  "trimmed-reference.wav": {
+    "source_hash": "1ec4c9fc9b258d1f024fbeebafa2470c4364a44323e3fc2485921068f5537253",
+    "windows": [
+      {
+        "input_hash": "2c1008627291ca96df8cade4dac6d0847c6b79bd3383e6dcbbd69d675606a9fd",
+        "locator": {
+          "end_ms": 2500,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  },
+  "trimmed.m4a": {
+    "source_hash": "7efc1a5dc5357af425249fddc2350811ad0d34a470f06133a0fefac2cd7d73cc",
+    "windows": [
+      {
+        "input_hash": "e9d81ee18b29b3393e93fa6060552e5029d6226818fee28c1b581745aac63510",
+        "locator": {
+          "end_ms": 2500,
+          "kind": "time",
+          "start_ms": 0
+        }
+      }
+    ]
+  }
+}

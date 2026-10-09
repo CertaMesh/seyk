@@ -86,6 +86,8 @@ pub struct DiscoveryOptions {
     pub include_hidden: bool,
     /// Skip files larger than this.
     pub max_file_bytes: u64,
+    /// Audio-only policy; engine configuration overrides request discovery values.
+    pub max_audio_duration_secs: u64,
 }
 
 impl Default for DiscoveryOptions {
@@ -96,6 +98,7 @@ impl Default for DiscoveryOptions {
             default_excludes: true,
             include_hidden: false,
             max_file_bytes: 32 * 1024 * 1024,
+            max_audio_duration_secs: 7200,
         }
     }
 }
@@ -216,7 +219,12 @@ fn to_resource(
     meta: &std::fs::Metadata,
     opts: &DiscoveryOptions,
 ) -> Option<DiscoveredResource> {
-    if meta.len() > opts.max_file_bytes {
+    let limit = if kind == ResourceKind::Audio {
+        audio_byte_limit(opts.max_audio_duration_secs).ok()?
+    } else {
+        opts.max_file_bytes
+    };
+    if meta.len() > limit {
         return None;
     }
     Some(DiscoveredResource {
@@ -231,6 +239,19 @@ pub(crate) fn modified_ns(meta: &std::fs::Metadata) -> Option<i64> {
     let t = meta.modified().ok()?;
     let d = t.duration_since(UNIX_EPOCH).ok()?;
     i64::try_from(d.as_nanos()).ok()
+}
+
+/// Largest supported PCM rate/channels/depth plus 64 MiB container slack.
+pub fn audio_byte_limit(seconds: u64) -> crate::Result<u64> {
+    if seconds == 0 {
+        return Err(crate::Error::Config(
+            "max audio duration must be positive".into(),
+        ));
+    }
+    seconds
+        .checked_mul(192_000 * 8 * 4)
+        .and_then(|n| n.checked_add(64 * 1024 * 1024))
+        .ok_or_else(|| crate::Error::Config("max audio duration exceeds byte budget range".into()))
 }
 
 #[cfg(test)]

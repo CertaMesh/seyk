@@ -3,7 +3,7 @@
 No media files are committed. Run the ignored core audio_timing test afterwards.
 No-edit-list and no-LAME fixtures intentionally use the decoded-sample timeline.
 """
-import json, subprocess, sys, wave
+import json, subprocess, sys, wave, struct
 from pathlib import Path
 import numpy as np
 ROOT=Path(sys.argv[1]).resolve(); ROOT.mkdir(parents=True,exist_ok=True)
@@ -41,3 +41,9 @@ ff('-i', ROOT/'fractional-reference.wav', '-c:a', 'aac', '-b:a', '192k', ROOT/'f
 records.append(dict(file='fractional.m4a',reference='fractional-reference.wav'))
 (ROOT/'manifest.json').write_text(json.dumps(records,indent=2)+'\n')
 print('TIMING FIXTURES',len(records))
+
+# Identity/slicing edges; the timing correlation suite remains the ten codecs above.
+for name, count, hz in [('one-sample',1,16000), ('short-tail',160001,16000), ('non16-tail',480013,48000)]:
+    with wave.open(str(ROOT/(name+'.wav')),'wb') as f:
+        f.setparams((1,2,hz,0,'NONE','not compressed'))
+        f.writeframes(b''.join(struct.pack('<h',(i*7919)%32767) for i in range(count)))

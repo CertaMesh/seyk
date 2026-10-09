@@ -819,6 +819,9 @@ unavailable on Windows).
 
 ## Phase 5a: audio retrieval
 
+This is the 5a release record. Phase 5b-1 below supersedes its fixed input-size
+and duration limits and whole-file encoded transport.
+
 Opt-in `audio` adds semantic retrieval over WAV, FLAC, MP3 and AAC-LC/ALAC in
 M4A. Default release features are unchanged. Symphonia is pinned to 0.5.5;
 `deny.toml` permits MPL-2.0 only for the eleven approved package/version pairs,
@@ -1115,3 +1118,95 @@ with warnings denied; workspace, core minimal, PDF and PDF-render tests; both
 model-backed cache-profile and PDF CLI goldens; Rust 1.89 all-target checks;
 release CLI smoke; license checks; and embedding dependency boundaries. Linux
 and Windows execution still requires CI when GitHub Actions billing is restored.
+
+## Phase 5b-1: verified streaming audio and duration policy
+
+The optional `audio` feature now admits a canonical 16 kHz presentation of up to
+7,200 seconds by default. `SearchEngineBuilder::max_audio_duration_secs` and CLI
+`--max-audio-duration-secs` set one positive, inclusive, whole-second limit.
+Daemon startup arguments always include the value (including the default), so its endpoint and engine
+use the same policy; request discovery options cannot override the engine.
+Audio discovery derives its byte ceiling as
+`192000 * 8 * 4 * seconds + 64 MiB`; other kinds retain their 32 MiB default.
+This does not add codecs or container variants. Manual edit/priming skip is
+independently limited to 30 seconds. Unknown presentation lengths receive a
+packet-duration demux pass before the first embedding; canonical sample counting
+remains the final authority. Over-limit resources are rejected in full.
+
+`ResourceProvider::open` supplies a `Read + Seek + Send + Sync` source, with an
+unsupported default and a filesystem implementation. Audio no longer calls the
+whole-file `read` method. One pass computes the existing full-source BLAKE3 and
+an in-memory table of BLAKE3 hashes for fixed 1 MiB chunks. `VerifiedReader`
+fetches and verifies a whole chunk before serving any bytes to either MP4 timing
+inspection or Symphonia. Its two-chunk cache serves only already-verified bytes;
+a refetch checks again. Every parser/decoder byte is therefore equal to the
+corresponding byte committed by the source hash, even across seeks or transient
+ABA writes. This is a commitment to the first pass's byte sequence, not a claim
+that a mutable file was atomically snapshotted at a single instant. Unconsumed
+changes need not be detected; they cannot introduce different decoder input.
+Mismatch/truncation poisons the reader and becomes `ChangedWhileReading`, even
+if an upstream parser translates the I/O error. No source snapshot is written.
+
+MP4 inspection traverses checked, parent-bounded ranges, skips `mdat`, and handles
+`moov` after media, extended sizes and size-zero boxes. The original edit-list,
+nearest-sample conversion, mdhd-end clamp and iTunSMPB precedence are retained.
+Before demux construction, stsz/stts/stsc/stco/co64 counts are checked against
+box payload lengths and an aggregate **64 MiB live parsed-table allocation**
+budget; stsc entries are charged at their larger in-memory size. A separate
+64 MiB cumulative top-level metadata-byte limit bounds other MP4 metadata
+(excluding media and free padding). Fragmented MP4 (moof/mvex) is rejected:
+its sample-run allocations are outside this sample-table contract. These limits
+do not scale with recording duration. Existing codec, packet, sample-rate/channel and ALAC-cookie
+checks remain.
+
+PCM remains a bounded packet, resampler history, rolling 10 s window and at most
+four pending windows. The chunk hash table costs 32 bytes per MiB (64 KiB for
+2 GiB). Compact locators grow with the configured duration: exactly two hours
+produce 899 full windows and one 8 s tail, 900 windows total. Source hashing and
+verification add I/O; unknown-length files additionally require demux traversal.
+No PCM, readable content or chunk commitments are persisted in the cache.
+
+The `PREPARATION` string, including historical `cap16777216`, is deliberately
+frozen as an input-identity compatibility token. The suffix no longer describes
+the effective limit. Raising a limit changes neither model-input hashes nor the
+cache profile and does not re-embed already-valid windows. There is no schema
+migration. Both cache reuse paths and result selection enforce eligibility using
+cached Time locators: `max(end_ms) <= 1000 * limit_seconds` is exact for the
+inclusive canonical-sample limit because `end_ms = ceil(N / 16)`. Cached-only
+search also excludes unknown/changed versions and preparation descriptors.
+Failed syncs preserve previous bindings but exclude them from that request.
+
+`audio::extract_samples` / `SearchEngine::extract_audio_samples` verify the full
+source hash before returning a selected, at-most-30-second PCM interval.
+`slice_verified` decodes sequentially from the presentation origin using the
+same resampler, discards earlier output and stops at the requested end with its
+normal right support when a reliable length is available. Unknown lengths are
+fully validated before returning. It never resets phase at an interior boundary.
+Half-open millisecond bounds select `[16*start_ms, min(16*end_ms, N))`; only the
+legitimate rounded EOF endpoint is clamped. The model-only short-tail padding is
+removed. No per-codec fast seek ships. Readable audio extraction still returns
+STT unavailable; search previews remain null. STT, Whisper, model downloads and
+new transcript provenance are outside this phase.
+
+Tests cover changed chunks before decoding, after a successful window/batch and
+on an evicted-chunk reread; no partial resource binding or slice escapes. Limit
+lowering/re-raising exercises both cache fast paths and cached-only search,
+retaining identical vector input hashes. The ignored input-parity test compares
+against hashes captured before the refactor using the same generated timing
+fixtures, and checks bit-exact extraction versus embedding samples, including
+one-sample, short-tail and non-16k cases. Reproduce fixtures with
+`uv run --no-project --with numpy python scripts/audio/timing.py tmp/timing`;
+run `audio_timing` and `audio_input_parity` with `SEYK_AUDIO_TIMING` pointing there.
+The fixture source hashes retain baseline provenance. The gate compares model
+inputs and locators, allowing container creation timestamps to change on
+regeneration; different codec tooling can still change the canonical PCM.
+
+Measurements use `scripts/audio/long.py tmp/long` and the release
+`bench_audio` example, separately per source and mode. The generator streams
+changing synthetic chirps to WAV/MP3 without whole-file PCM allocation. The
+`prepare` mode reports first-pass hash throughput, complete verified-read
+throughput, decode-plus-verification time and peak process RSS without a model.
+The `index` mode uses fresh in-memory caches, the pinned q8 model at 256 dimensions
+and one ORT thread; counts must show every unique window actually embedded.
+Every measurement records the three load averages before and after it. Long
+fixtures live under ignored `tmp` and are deleted after verification.

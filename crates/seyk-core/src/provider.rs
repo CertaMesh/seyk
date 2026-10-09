@@ -96,10 +96,21 @@ impl ProvidedResource {
     }
 }
 
+/// Seekable encoded source; verification is the audio reader's responsibility.
+pub trait ReadSeek: std::io::Read + std::io::Seek + Send + Sync {}
+impl<T: std::io::Read + std::io::Seek + Send + Sync> ReadSeek for T {}
+
 /// Enumerate, read and check freshness without coupling the engine to local files.
 ///
 /// Unstable: may change before 1.0; filesystem is the only supported provider.
 pub trait ResourceProvider: Send + Sync {
+    /// Seekable source for bounded audio reads; no whole-file fallback.
+    fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
+        Err(Error::UnsupportedAudio {
+            resource: id.clone(),
+            reason: "provider does not support seekable audio reads",
+        })
+    }
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>>;
@@ -133,6 +144,12 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 }
 
 impl ResourceProvider for FsProvider {
+    fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
+        let path = file_path(id)?;
+        Ok(Box::new(
+            std::fs::File::open(&path).map_err(|e| Error::io(path, e))?,
+        ))
+    }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
         let paths = scope
             .roots
