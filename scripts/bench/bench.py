@@ -2,7 +2,7 @@
 # requires-python = ">=3.11,<3.14"
 # dependencies = ["blake3==1.0.8", "ir-measures==0.4.3", "pyarrow==19.0.1"]
 # ///
-"""Public data only. Usage: uv run scripts/bench/bench.py --help.
+"""Public data only. Usage: uv run --locked scripts/bench/bench.py --help.
 
 All downloaded, materialized and per-query artifacts stay in ~/.cache/seyk-bench.
 Scoring uses ir_measures/pytrec_eval, with rank-derived scores to retain ties in
@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import io
+from importlib.metadata import version
 import json
 import math
 import shutil
@@ -291,7 +292,7 @@ def score(ds, paths):
         for mode, rows in rows_by_mode.items():
             docs = ranking(rows[qid], docmap, ds == "irpapers-pdf")
             ranks[mode] = {doc:i for i,doc in enumerate(docs,1)}
-            tops[mode] = rows[qid]["ranked"][0]["key"] if docs else None
+            tops[mode] = rows[qid]["ranked_pages" if ds == "irpapers-pdf" else "ranked"][0]["key"] if docs else None
             false[mode] = (docs[0] not in relevant) if docs else None
             top_counts[mode] += bool(docs)
             false_counts[mode] += bool(false[mode])
@@ -302,7 +303,7 @@ def score(ds, paths):
                        "queries_with_result":top_counts[m], "queries_without_result":len(positive)-top_counts[m],
                        "queries_under_100_resources":sum(len(r["ranked"])<100 for r in rows_by_mode[m].values())} for m in per_mode}
     result = {"dataset":ds, "smoke":ds=="nanoscifact", "metrics":per_mode, "diagnostics":diagnostics,
-              "environment":envs, "completion":completions, "scoring":"ir_measures==0.4.3; graded linear nDCG; relevance >= 1"}
+              "environment":envs, "completion":completions, "scoring":f"ir_measures=={version('ir-measures')}; pytrec_eval (pytrec-eval-terrier)=={version('pytrec-eval-terrier')}; graded linear nDCG; relevance >= 1"}
     write_json(out, result)
     log = confined(out.with_suffix(".queries.jsonl"))
     log.write_text("".join(json.dumps(row, sort_keys=True)+"\n" for row in join))
@@ -429,6 +430,23 @@ class Tests(unittest.TestCase):
                 self.assertIn("1.0000",stdout.getvalue())
                 (root/"meta/nfcorpus/docmap.tsv").write_text("corrupt")
                 with self.assertRaises(ValueError): gold("nfcorpus")
+
+    def test_pdf_top1_uses_scored_page_ranking(self):
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            env = {"dataset":"irpapers-pdf", "dataset_manifest":{}, "git_sha":"test", "profile_id":"test", "depth":200, "lexical_weight":None, "manifest_blake3":"test", "run_id":"test", "threads":1, "dirty":False}
+            row = {"mode":"hybrid", "ranked":[{"key":"nonpage", "rank":1}, {"key":"page", "rank":2}],
+                   "ranked_pages":[{"key":"page", "rank":1, "locator":{"kind":"page_text", "page":2}}]}
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=({}, {"nonpage":"1", "page":"2"}, [ir.Qrel("q", "2#2", 1)])), mock.patch(__name__+".read_run", return_value=(env, {"q":row}, {})), mock.patch("sys.stdout", new_callable=io.StringIO):
+                score("irpapers-pdf", [root/"run.jsonl"])
+                result = json.loads((root/"results/irpapers-pdf/test.json").read_text())
+                joined = json.loads((root/"results/irpapers-pdf/test.queries.jsonl").read_text())
+                self.assertEqual(joined["top1_key"], {"hybrid":"page"})
+                self.assertEqual(joined["top1_nonrelevant"], {"hybrid":False})
+                self.assertEqual(result["metrics"]["hybrid"]["page"]["R@1"], 1.0)
+                self.assertEqual(result["metrics"]["hybrid"]["resource"]["R@1"], 0.0)
+                self.assertIn(f"pytrec_eval (pytrec-eval-terrier)=={version('pytrec-eval-terrier')}", result["scoring"])
 
     def test_sanity_band(self):
         sanity_band(.665)

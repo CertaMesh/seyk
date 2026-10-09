@@ -272,7 +272,11 @@ track is deferred.
 
 ### Run and score
 
-Use Python 3.11–3.13 and uv. Rust uses the repository's pinned 1.99.0 toolchain.
+Use Python 3.11–3.13 and uv. The committed `scripts/bench/bench.py.lock` pins
+all Python dependencies, including the metric engine and NumPy; `--locked`
+rejects a stale lockfile. Result scoring metadata records the installed
+`ir_measures` and `pytrec_eval` (`pytrec-eval-terrier`) versions. Rust uses the
+repository's pinned 1.99.0 toolchain.
 Keep a single Cargo target directory when disk is tight. Model weights must be
 provisioned inside the benchmark root too; the runner refuses the default HF
 cache, symlink escapes and arbitrary corpus paths. It never downloads weights.
@@ -284,10 +288,10 @@ export HF_HOME="$HOME/.cache/seyk-bench/huggingface"
 # Explicit, optional model provisioning (once per precision):
 cargo run --release -- model download --precision q8 --text-only
 
-uv run --python 3.12 scripts/bench/bench.py fetch nanoscifact
-uv run --python 3.12 scripts/bench/bench.py materialize nanoscifact
+uv run --locked --python 3.12 scripts/bench/bench.py fetch nanoscifact
+uv run --locked --python 3.12 scripts/bench/bench.py materialize nanoscifact
 cargo run --release --example bench_retrieval -- \
-  --dataset-dir "$HOME/.cache/seyk-bench" --ds nanoscifact \
+  --ds nanoscifact \
   --dimension 256 --precision q8 --threads 2 \
   --modes hybrid,semantic,lexical --depth 200 --label smoke
 ```
@@ -303,11 +307,11 @@ written to `.partial` until complete; a repeated label cannot overwrite a run.
 
 ```bash
 # Use the exact three filenames printed by the runner; do not mix labels/profiles.
-uv run scripts/bench/bench.py score nanoscifact \
+uv run --locked scripts/bench/bench.py score nanoscifact \
   ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-hybrid.jsonl \
   ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-semantic.jsonl \
   ~/.cache/seyk-bench/runs/nanoscifact/*-smoke-lexical.jsonl
-uv run scripts/bench/bench.py report ~/.cache/seyk-bench/results/nanoscifact/*-smoke.json
+uv run --locked scripts/bench/bench.py report ~/.cache/seyk-bench/results/nanoscifact/*-smoke.json
 ```
 
 Scoring uses pinned `ir_measures` with nDCG@10 (graded, linear gain), MRR@10 and
@@ -330,7 +334,7 @@ empty-result counts are reported separately.
 ### Harness checks and later full runs
 
 ```bash
-uv run --python 3.12 scripts/bench/bench.py test
+uv run --locked --python 3.12 scripts/bench/bench.py test
 cargo test --example bench_retrieval --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -344,7 +348,7 @@ deterministic test embedder. For a real-model determinism check, repeat the runn
 with a new `--label warm` and compare each mode's original and warm file:
 
 ```bash
-uv run scripts/bench/bench.py determinism ORIGINAL.jsonl WARM.jsonl
+uv run --locked scripts/bench/bench.py determinism ORIGINAL.jsonl WARM.jsonl
 ```
 
 This compares ranked keys, ranks and locators, excluding timing/environment noise.
@@ -357,6 +361,9 @@ not a proposed default. On full SciFact scoring, lexical nDCG@10 outside [.60,.6
 is an error requiring investigation before any ranking conclusion. This band is
 not applied to NanoSciFact. Full SciFact execution is deferred when only smoke
 runs are authorized; the checked band is not a claim that Seyk meets it yet.
+IRPAPERS text materialization fails loudly on an empty transcription. It has not
+been checked against the full 3.78 GB CSV, including its declared 3,230-document
+count; that validation remains deferred to the first full run.
 
 Published comparison points: SciFact BM25/TAS-B nDCG@10 .665/.643 and NFCorpus
 .325/.319 ([BEIR baselines](https://github.com/beir-cellar/beir/wiki/Results));

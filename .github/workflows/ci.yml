@@ -28,8 +28,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Model-backed tests are #[ignore]d: CI never downloads the weights.
-      - run: cargo test --example bench_retrieval --locked
       - run: cargo test --workspace --locked --no-fail-fast
+      - run: cargo test --example bench_retrieval --locked
       - run: cargo test --workspace --features audio --locked
       - run: cargo clippy --workspace --all-targets --features audio --locked -- -D warnings
       - name: Check standalone dependency boundaries
@@ -55,7 +55,7 @@ jobs:
         with:
           enable-cache: false
       - name: Check retrieval metrics and data adapters (synthetic inputs only)
-        run: UV_CACHE_DIR="$HOME/.cache/seyk-bench/uv" uv run --python 3.12 scripts/bench/bench.py test
+        run: UV_CACHE_DIR="$HOME/.cache/seyk-bench/uv" uv run --locked --python 3.12 scripts/bench/bench.py test
 
   licenses:
     runs-on: ubuntu-24.04

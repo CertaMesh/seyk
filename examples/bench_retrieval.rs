@@ -16,8 +16,6 @@ use seyk::{Dimension, ResourceLocator, SearchEngine, SearchHit, SearchMode, Sqli
 
 #[derive(Parser)]
 struct Args {
-    #[arg(long)]
-    dataset_dir: Option<PathBuf>,
     #[arg(long, value_parser = ["nanoscifact", "scifact", "nfcorpus", "irpapers", "irpapers-pdf"])]
     ds: String,
     #[arg(long, default_value_t = 256)]
@@ -168,9 +166,6 @@ fn main() -> Result<()> {
         !root.symlink_metadata()?.file_type().is_symlink(),
         "benchmark root must not be a symlink"
     );
-    if let Some(dir) = args.dataset_dir {
-        ensure!(dir == root, "data must live under ~/.cache/seyk-bench");
-    }
     let root = root.canonicalize()?;
     let corpus = confined(&root, &format!("corpus/{}", args.ds))?;
     let manifest = fs::read(confined(&root, &format!("meta/{}/manifest.json", args.ds))?)?;
@@ -398,11 +393,10 @@ mod tests {
     }
     #[test]
     fn warm_sqlite_rankings_are_deterministic() -> Result<()> {
-        let root = dirs::home_dir().context("home")?.join(".cache/seyk-bench");
-        fs::create_dir_all(&root)?;
-        let tmp = tempfile::tempdir_in(root)?;
+        let tmp = tempfile::tempdir()?;
         let corpus = tmp.path().join("corpus");
         fs::create_dir(&corpus)?;
+        let corpus = corpus.canonicalize()?;
         for (name, text) in [
             ("a", "alpha beta gamma"),
             ("b", "alpha delta"),
