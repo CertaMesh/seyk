@@ -1058,16 +1058,16 @@ The next release notes must repeat this warning; the crate version remains 0.1.0
 Public synthetic release-mode benchmark on macOS ARM with bundled SQLite 3.53.2:
 32 profiles, 20,031 documents and 4,046,200 postings (20,000 documents in the
 largest profile). `dbstat` allocated keyword pages grew from 22,441,984 to
-68,714,496 bytes, **3.062×** on this corpus; this is larger than the design's
+68,923,392 bytes, **3.071×** on this corpus; this is larger than the design's
 approximate 2× estimate and depends on token distribution. These are active
 keyword pages, excluding relational tables, freed pages and WAL.
 
-In the final run, single-document replacement p50/p95 was 0.504/1.150 ms;
-deletion was 0.176/0.541 ms; a 100-resource batch delete took 53.54 ms.
+In the final run, single-document replacement p50/p95 was 0.607/1.613 ms;
+deletion was 0.180/0.717 ms; a 100-resource batch delete took 13.61 ms.
 Stored document/token totals and BM25 matched a fresh live index exactly after
-100 replacements and 200 deletions. Migration took 99.04 s with a 71,465,552-byte
-WAL; the full benchmark process peaked at 358,645,760 bytes RSS. An earlier run
-on the same busy machine migrated in 50.94 s. The migration's occurrence
+100 replacements and 200 deletions. Migration took 29.71 s with a 73,039,392-byte
+WAL; the full benchmark process peaked at 359,481,344 bytes RSS. Earlier runs
+on the same busy machine migrated in 50.94–99.04 s. The migration's occurrence
 verification scans the old vocabulary per profile, so this one-time cost grows
 with both postings and profile count. These are local observations, not latency
 bounds. Reproduce with:
@@ -1084,3 +1084,30 @@ steps against fresh SQLite and MemoryCache, content integrity checks, Unicode an
 duplicate postings, empty-token documents, sparse IDs across VACUUM, transactional
 rollback, real v1–v5 layouts, warm v5 reuse with a provider that forbids reads,
 unknown schemas, arbitrary profile IDs, and sorted persisted fields.
+
+The existing eight-target evaluation was run with main and P11 release binaries
+against separate copies of the same cache. All **40 ranks were unchanged** across
+semantic, hybrid weights 1.0/0.3/0.15, and default search. Default top-10 coverage
+remains **7/8**. Only anonymized ranks are reported:
+
+| Target | Default before → after | Semantic before → after |
+| --- | --- | --- |
+| Q1 | 1 → 1 | 9 → 9 |
+| Q2 | 7 → 7 | 1 → 1 |
+| Q3 | 1 → 1 | 1 → 1 |
+| Q4 | 2 → 2 | 1 → 1 |
+| Q5 | 1 → 1 | 1 → 1 |
+| Q6 | 2 → 2 | 18 → 18 |
+| Q7 | 25 → 25 | 19 → 19 |
+| Q8 | 7 → 7 | 7 → 7 |
+
+All 2,195 embedding blobs and all 2,195 segment rows (including rowids) were
+identical across the evaluated v5 and v6 copies. The evaluation harness decodes
+CLI resource URIs before matching the existing path-based targets; queries,
+paths and source text remain local.
+
+The local merge gate passed: pinned Rust 1.99 formatting and workspace Clippy
+with warnings denied; workspace, core minimal, PDF and PDF-render tests; both
+model-backed cache-profile and PDF CLI goldens; Rust 1.89 all-target checks;
+release CLI smoke; license checks; and embedding dependency boundaries. Linux
+and Windows execution still requires CI when GitHub Actions billing is restored.
