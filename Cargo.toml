@@ -75,3 +75,7 @@ required-features = ["onnx"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[[example]]
+name = "bench_cpu_pool"
+required-features = ["onnx"]

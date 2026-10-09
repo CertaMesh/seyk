@@ -57,9 +57,25 @@ struct ModelArgs {
     #[arg(long, default_value = "256", global = true)]
     dimension: Dimension,
 
-    /// Weight precision: q8 (smaller, faster) or fp32.
+    /// Weight precision: q8 (smaller) or fp32; benchmark speed on your machine.
     #[arg(long, default_value = "q8", global = true)]
     precision: Precision,
+
+    /// Independent CPU text sessions (several GiB each; measure memory use).
+    #[arg(long, default_value_t = 1, value_parser = positive_count, global = true)]
+    sessions: usize,
+
+    /// Intra-op threads per session; omitted lets ONNX Runtime decide.
+    #[arg(long, value_parser = thread_count, global = true)]
+    threads: Option<usize>,
+
+    /// Text inputs per model call, independently of the engine window.
+    #[arg(long, default_value_t = 16, value_parser = positive_count, global = true)]
+    batch_size: usize,
+
+    /// Inputs per engine dispatch. Defaults to sessions × batch-size.
+    #[arg(long, value_parser = positive_count, global = true)]
+    embedding_window: Option<usize>,
 
     /// Do not load the vision encoder; image files are skipped.
     #[arg(long, global = true)]
@@ -267,6 +283,21 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    let model = match &cli.command {
+        Command::Search { model, .. }
+        | Command::Index { model, .. }
+        | Command::Model { model, .. } => Some(model),
+        #[cfg(feature = "mcp")]
+        Command::Mcp { model, .. } => Some(model),
+        #[cfg(all(feature = "mcp", unix))]
+        Command::Daemon { model, .. } => Some(model),
+        _ => None,
+    };
+    if model.is_some_and(|m| m.sessions > 1 && m.threads.is_none()) {
+        eprintln!(
+            "warning: multiple CPU sessions with automatic threads may oversubscribe the machine; set --threads per session"
+        );
+    }
     match cli.command {
         Command::Search {
             query,
@@ -534,7 +565,31 @@ fn watch_and_index(
     Ok(ExitCode::SUCCESS)
 }
 
+fn positive_count(value: &str) -> std::result::Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
+        .ok_or_else(|| "must be a positive integer".to_string())
+}
+
+fn thread_count(value: &str) -> std::result::Result<usize, String> {
+    positive_count(value).and_then(|n| {
+        (n <= i32::MAX as usize)
+            .then_some(n)
+            .ok_or_else(|| "threads must not exceed i32::MAX".into())
+    })
+}
+
 impl ModelArgs {
+    fn embedding_window(&self) -> Result<usize> {
+        self.embedding_window.map(Ok).unwrap_or_else(|| {
+            self.sessions
+                .checked_mul(self.batch_size)
+                .context("sessions × batch-size exceeds usize")
+        })
+    }
+
     /// These options as flags, with paths made absolute, so a daemon started
     /// from another directory resolves them the same way.
     #[cfg(all(feature = "mcp", unix))]
@@ -545,6 +600,20 @@ impl ModelArgs {
             "--precision".to_string(),
             self.precision.name().to_string(),
         ];
+        // Omit defaults to retain the existing default daemon endpoint identity.
+        for (flag, value) in [
+            ("--sessions", (self.sessions != 1).then_some(self.sessions)),
+            ("--threads", self.threads),
+            (
+                "--batch-size",
+                (self.batch_size != 16).then_some(self.batch_size),
+            ),
+            ("--embedding-window", self.embedding_window),
+        ] {
+            if let Some(value) = value {
+                a.extend([flag.to_string(), value.to_string()]);
+            }
+        }
         if let Some(m) = &self.model {
             let p = expand_tilde(Path::new(m));
             let m = if p.is_dir() {
@@ -624,12 +693,16 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
         config.source = source;
         config.dimension = args.dimension;
         config.precision = args.precision;
+        config.sessions = args.sessions;
+        config.threads = args.threads;
+        config.batch_size = args.batch_size;
         config.vision = cfg!(feature = "image") && !args.text_only;
         config
     })
 }
 
 fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
+    let window = args.embedding_window()?;
     let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(|error| {
         if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
             anyhow::Error::new(error).context("model is missing; run `seyk model download`")
@@ -637,7 +710,9 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
             anyhow::Error::new(error)
         }
     })?;
-    let builder = SearchEngine::builder().embedder(embedder);
+    let builder = SearchEngine::builder()
+        .embedder(embedder)
+        .batch_size(window);
     let builder = if ephemeral {
         builder.cache(MemoryCache::new())
     } else {
@@ -997,6 +1072,91 @@ mod tests {
                 ),
             ],
             stats: SearchStats::default(),
+        }
+    }
+
+    #[test]
+    fn threads_reject_out_of_range_counts() {
+        for value in ["1".to_string(), i32::MAX.to_string()] {
+            assert!(Cli::try_parse_from(["seyk", "search", "test", "--threads", &value]).is_ok());
+        }
+        for value in [
+            "0".to_string(),
+            (i32::MAX as usize + 1).to_string(),
+            usize::MAX.to_string(),
+        ] {
+            assert!(Cli::try_parse_from(["seyk", "search", "test", "--threads", &value]).is_err());
+        }
+    }
+
+    #[test]
+    fn cpu_controls_keep_defaults_and_forward_to_daemon() {
+        let Cli {
+            command: Command::Search {
+                model: defaults, ..
+            },
+        } = Cli::try_parse_from(["seyk", "search", "test"]).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                defaults.sessions,
+                defaults.threads,
+                defaults.batch_size,
+                defaults.embedding_window().unwrap()
+            ),
+            (1, None, 16, 16)
+        );
+        let Cli {
+            command: Command::Search { model, .. },
+        } = Cli::try_parse_from([
+            "seyk",
+            "search",
+            "test",
+            "--sessions",
+            "2",
+            "--threads",
+            "4",
+            "--batch-size",
+            "8",
+            "--embedding-window",
+            "24",
+        ])
+        .unwrap()
+        else {
+            panic!()
+        };
+        let config = gemma_config(&model).unwrap();
+        assert_eq!(
+            (
+                config.sessions,
+                config.threads,
+                config.batch_size,
+                model.embedding_window().unwrap()
+            ),
+            (2, Some(4), 8, 24)
+        );
+        #[cfg(all(feature = "mcp", unix))]
+        {
+            let args = model.to_args().unwrap();
+            for flag in [
+                "--sessions",
+                "--threads",
+                "--batch-size",
+                "--embedding-window",
+            ] {
+                assert!(args.iter().any(|a| a == flag));
+                assert!(!defaults.to_args().unwrap().iter().any(|a| a == flag));
+            }
+        }
+        for flag in [
+            "--sessions",
+            "--threads",
+            "--batch-size",
+            "--embedding-window",
+        ] {
+            assert!(Cli::try_parse_from(["seyk", "search", "test", flag, "0"]).is_err());
         }
     }
 
