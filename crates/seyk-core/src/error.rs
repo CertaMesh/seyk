@@ -6,6 +6,8 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("resource changed while reading: {resource}")]
+    ChangedWhileReading { resource: crate::ResourceId },
     #[error("unsupported audio for {resource}: {reason}")]
     UnsupportedAudio {
         resource: crate::ResourceId,

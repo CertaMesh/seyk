@@ -56,7 +56,7 @@ assert_cmd = "2"
 predicates = "3"
 
 [target.'cfg(unix)'.dev-dependencies]
-# Peak RSS and load average in examples/bench_model.rs.
+# Peak RSS and load average in examples/bench_model.rs and examples/bench_audio.rs.
 libc = "0.2"
 
 [[bin]]

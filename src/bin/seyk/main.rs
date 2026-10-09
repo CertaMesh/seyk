@@ -49,6 +49,10 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct ModelArgs {
+    /// Maximum audio presentation duration in seconds (inclusive).
+    #[arg(long, default_value_t = 7200, value_parser = audio_duration, global = true)]
+    max_audio_duration_secs: u64,
+
     /// Model directory, or Hugging Face repo as REPO[@REVISION]. Defaults to the pinned ONNX export.
     #[arg(long, env = "SEYK_MODEL", global = true)]
     model: Option<String>,
@@ -161,6 +165,9 @@ enum Command {
         /// Emit a versioned extraction JSON document instead of raw text.
         #[arg(long)]
         json: bool,
+        /// Maximum audio presentation duration in seconds (inclusive).
+        #[arg(long, default_value_t = 7200, value_parser = audio_duration)]
+        max_audio_duration_secs: u64,
     },
     /// Embed files ahead of time so later searches are fast. Optional.
     Index {
@@ -354,6 +361,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             from_json,
             hit,
             json,
+            max_audio_duration_secs,
         } => {
             let input: Box<dyn Read> = if from_json == Path::new("-") {
                 Box::new(std::io::stdin().lock())
@@ -372,6 +380,24 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 } else {
                     extractor
                 };
+            #[cfg(feature = "audio")]
+            if selected.metadata.modality == seyk::Modality::Audio {
+                seyk::audio::extract_samples(
+                    &seyk::FsProvider,
+                    &selected.resource,
+                    &selected.locator,
+                    &selected.metadata,
+                    max_audio_duration_secs,
+                )?;
+                return Err(seyk::Error::UnsupportedExtraction {
+                    resource: selected.resource,
+                    modality: seyk::Modality::Audio,
+                    locator: selected.locator,
+                }
+                .into());
+            }
+            #[cfg(not(feature = "audio"))]
+            let _ = max_audio_duration_secs;
             let extracted = seyk::extract_resource(
                 &seyk::FsProvider,
                 extractor,
@@ -565,6 +591,14 @@ fn watch_and_index(
     Ok(ExitCode::SUCCESS)
 }
 
+fn audio_duration(value: &str) -> std::result::Result<u64, String> {
+    let seconds = value
+        .parse::<u64>()
+        .map_err(|_| "must be a positive integer".to_string())?;
+    seyk::discovery::audio_byte_limit(seconds).map_err(|e| e.to_string())?;
+    Ok(seconds)
+}
+
 fn positive_count(value: &str) -> std::result::Result<usize, String> {
     value
         .parse::<usize>()
@@ -614,6 +648,12 @@ impl ModelArgs {
                 a.extend([flag.to_string(), value.to_string()]);
             }
         }
+        // Include the default too: do not attach a new 2 h client to an older
+        // daemon whose implementation still has the fixed 5a duration limit.
+        a.extend([
+            "--max-audio-duration-secs".to_string(),
+            self.max_audio_duration_secs.to_string(),
+        ]);
         if let Some(m) = &self.model {
             let p = expand_tilde(Path::new(m));
             let m = if p.is_dir() {
@@ -712,7 +752,8 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
     })?;
     let builder = SearchEngine::builder()
         .embedder(embedder)
-        .batch_size(window);
+        .batch_size(window)
+        .max_audio_duration_secs(args.max_audio_duration_secs);
     let builder = if ephemeral {
         builder.cache(MemoryCache::new())
     } else {
@@ -1301,5 +1342,32 @@ mod tests {
             }),
             " page 3 bytes 0-120"
         );
+    }
+    #[test]
+    fn audio_duration_configuration_and_daemon_round_trip() {
+        let cli = Cli::try_parse_from(["seyk", "search", "q", "--max-audio-duration-secs", "123"])
+            .unwrap();
+        let Command::Search { model, .. } = cli.command else {
+            panic!()
+        };
+        assert_eq!(model.max_audio_duration_secs, 123);
+        #[cfg(all(feature = "mcp", unix))]
+        {
+            let args = model.to_args().unwrap();
+            let at = args
+                .iter()
+                .position(|a| a == "--max-audio-duration-secs")
+                .unwrap();
+            assert_eq!(args[at + 1], "123");
+            let mut daemon = vec!["seyk".to_string(), "daemon".into(), "run".into()];
+            daemon.extend(args);
+            assert!(Cli::try_parse_from(daemon).is_ok());
+        }
+        for bad in ["0", "-1", "18446744073709551615"] {
+            assert!(
+                Cli::try_parse_from(["seyk", "search", "q", "--max-audio-duration-secs", bad])
+                    .is_err()
+            );
+        }
     }
 }

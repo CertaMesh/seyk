@@ -819,6 +819,9 @@ unavailable on Windows).
 
 ## Phase 5a: audio retrieval
 
+This is the 5a release record. Phase 5b-1 below supersedes its fixed input-size
+and duration limits and whole-file encoded transport.
+
 Opt-in `audio` adds semantic retrieval over WAV, FLAC, MP3 and AAC-LC/ALAC in
 M4A. Default release features are unchanged. Symphonia is pinned to 0.5.5;
 `deny.toml` permits MPL-2.0 only for the eleven approved package/version pairs,
@@ -1115,3 +1118,195 @@ with warnings denied; workspace, core minimal, PDF and PDF-render tests; both
 model-backed cache-profile and PDF CLI goldens; Rust 1.89 all-target checks;
 release CLI smoke; license checks; and embedding dependency boundaries. Linux
 and Windows execution still requires CI when GitHub Actions billing is restored.
+
+## Phase 5b-1: verified streaming audio and duration policy
+
+The optional `audio` feature now admits a canonical 16 kHz presentation of up to
+7,200 seconds by default. `SearchEngineBuilder::max_audio_duration_secs` and CLI
+`--max-audio-duration-secs` set one positive, inclusive, whole-second limit.
+Daemon startup arguments always include the value (including the default), so its endpoint and engine
+use the same policy; request discovery options cannot override the engine.
+Audio discovery derives its byte ceiling as
+`192000 * 8 * 4 * seconds + 64 MiB`; other kinds retain their 32 MiB default.
+This does not add codecs or container variants. Manual edit/priming skip is
+independently limited to 30 seconds. Unknown presentation lengths receive a
+packet-duration demux pass before the first embedding; canonical sample counting
+remains the final authority. Over-limit resources are rejected in full.
+
+`ResourceProvider::open` supplies a `Read + Seek + Send + Sync` source, with an
+unsupported default and a filesystem implementation. Audio no longer calls the
+whole-file `read` method. One pass computes the existing full-source BLAKE3 and
+an in-memory table of BLAKE3 hashes for fixed 1 MiB chunks. `VerifiedReader`
+fetches and verifies a whole chunk before serving any bytes to either MP4 timing
+inspection or Symphonia. Its two-chunk cache serves only already-verified bytes;
+a refetch checks again. Every parser/decoder byte is therefore equal to the
+corresponding byte committed by the source hash, even across seeks or transient
+ABA writes. This is a commitment to the first pass's byte sequence, not a claim
+that a mutable file was atomically snapshotted at a single instant. Unconsumed
+changes need not be detected; they cannot introduce different decoder input.
+Mismatch/truncation poisons the reader and becomes `ChangedWhileReading`, even
+if an upstream parser translates the I/O error. Other refetch failures return
+an ordinary I/O error from `Read` without setting the content-change poison flag.
+No source snapshot is written.
+
+MP4 is admitted only with `ftyp` at offset 4. Preflight and the directly
+constructed isomp4 reader both start at byte zero; the non-MP4 probes never
+register isomp4, including the second pass after a duration scan. Prefixed MP4
+is rejected. MP3 ID3 prefixes are skipped by checked extents without allocating
+or interpreting their payload, so embedded tag bytes cannot select a probe origin.
+Inspection traverses checked, parent-bounded ranges, skips `mdat`,
+and handles `moov` after media and extended sizes. Size-zero is accepted for
+opaque media/padding only; parsed metadata with that encoding is rejected
+because Symphonia gives it a zero data length. Original edit-list conversion,
+mdhd-end clamping and iTunSMPB precedence are retained.
+
+Before demux construction, stsz/stts/stsc/stco/co64 counts are checked against
+box payload lengths and an aggregate **64 MiB live parsed-table allocation**
+budget; stsc entries are charged at their larger in-memory size. Every constant
+and variable stsz sample size is bounded to the **1 MiB packet limit**, including
+before the demux-only duration pass. A fixed scratch buffer scans variable sizes.
+A separate 64 MiB cumulative top-level metadata-byte limit bounds metadata
+(excluding media and free padding). Parent bounds are checked throughout metadata
+containers, every ilst item (including cover art and unknown tags), sample
+entries and wave codec containers. Parsed leaves/items are capped at **64 KiB**;
+minimum prefixes prevent upstream length subtraction from underflowing. ESDS
+nested descriptor lengths are checked against their enclosing bytes as well.
+Unsupported sample entries, ES optional flags and fragmented MP4 structures
+(moof/mvex/sidx/mfra) are rejected before upstream construction. These limits do
+not scale with duration. AAC/ALAC sample entries retain their existing codec,
+packet, sample-rate/channel and ALAC-cookie checks.
+
+PCM remains a bounded packet, resampler history, rolling 10 s window and at most
+four pending windows. The chunk hash table costs 32 bytes per MiB (64 KiB for
+2 GiB). At the default 44,303,908,864-byte ceiling, the table has at most
+42,252 entries / 1,352,064 hash bytes (about 1.29 MiB, excluding Vec capacity).
+The first pass hashes the full admitted byte extent **before** checking duration;
+a source near that byte ceiling is fully read even if its duration is then
+rejected. The small measured over-cap fixtures do not represent that worst-case
+rejection cost. Compact locators grow with the configured duration: exactly two hours
+produce 899 full windows and one 8 s tail, 900 windows total. Source hashing and
+verification add I/O; unknown-length files additionally require demux traversal.
+No PCM, readable content or chunk commitments are persisted in the cache.
+
+The `PREPARATION` string, including historical `cap16777216`, is deliberately
+frozen as an input-identity compatibility token. The suffix no longer describes
+the effective limit. Raising a limit changes neither model-input hashes nor the
+cache profile and does not re-embed already-valid windows. There is no schema
+migration. Both cache reuse paths and result selection enforce eligibility using
+cached Time locators: `max(end_ms) <= 1000 * limit_seconds` is exact for the
+inclusive canonical-sample limit because `end_ms = ceil(N / 16)`. Cached-only
+search also excludes unknown/changed versions and preparation descriptors.
+Failed syncs preserve previous bindings but exclude them from that request.
+
+`audio::extract_samples` / `SearchEngine::extract_audio_samples` verify the full
+source hash before returning a selected, at-most-30-second PCM interval.
+`slice_verified` decodes sequentially from the presentation origin using the
+same resampler, discards earlier output and stops at the requested end with its
+normal right support when a reliable length is available. Unknown lengths are
+fully validated before returning. It never resets phase at an interior boundary.
+Half-open millisecond bounds select `[16*start_ms, min(16*end_ms, N))`; only the
+legitimate rounded EOF endpoint is clamped. The model-only short-tail padding is
+removed. No per-codec fast seek ships. Readable audio extraction still returns
+STT unavailable; search previews remain null. STT, Whisper, model downloads and
+new transcript provenance are outside this phase.
+
+Tests cover changed chunks before decoding, after a successful window/batch and
+on an evicted-chunk reread; no partial resource binding or slice escapes. Limit
+lowering/re-raising exercises both cache fast paths and cached-only search,
+retaining identical vector input hashes. The ignored input-parity test compares
+against hashes captured before the refactor using the same generated timing
+fixtures, and checks bit-exact extraction versus embedding samples, including
+one-sample, short-tail and non-16k cases. Reproduce fixtures with
+`uv run --no-project --with numpy python scripts/audio/timing.py tmp/timing`;
+run `audio_timing` and `audio_input_parity` with `SEYK_AUDIO_TIMING` pointing there.
+The fixture source hashes retain baseline provenance. The gate compares model
+inputs and locators, allowing container creation timestamps to change on
+regeneration; different codec tooling can still change the canonical PCM.
+`audio_input_capture.rs` is a standalone ignored capture helper using only APIs
+available at `7cab7ee`; its header gives the command for a clean historical
+checkout. Use the same generated files for historical and current captures to
+compare complete JSON. CoreAudio AAC encoding can change the actual audio
+between fixture generations, not just timestamps. For regenerated fixtures,
+pass `SEYK_AUDIO_BASELINE=/path/to/7cab7ee-capture.json` to `audio_input_parity`;
+the default remains the committed capture. Do not capture that override with the
+implementation under test. This review's same-file control using unmodified
+`7cab7ee` audio modules produced identical complete JSON for all 18 files and
+20 windows; only the regenerated Apple AAC differed from the older capture.
+The legacy `windows(Vec<u8>)` helper always uses the default duration; configured
+callers use `windows_verified` or the engine builder instead.
+
+Measurements use `scripts/audio/long.py tmp/long` and the release
+`bench_audio` example, separately per source and mode. The generator streams
+changing synthetic chirps to WAV/MP3 without whole-file PCM allocation. The
+`prepare` mode reports first-pass hash throughput, complete verified-read
+throughput, decode-plus-verification time and peak process RSS without a model.
+The `index` mode uses fresh in-memory caches, the pinned q8 model at 256 dimensions
+and one ORT thread; counts must show every unique window actually embedded.
+Every measurement records the three load averages before and after it. Long
+fixtures live under ignored `tmp` and are deleted after verification.
+
+### Phase 5b-1 measured evidence
+
+The cost and held-out recall observations below were collected at `c969667`,
+before review hardening; they were not remeasured in the fix round.
+
+Measured on Apple M5 Max, 64 GiB, macOS 26.5, Rust 1.99.0 release. Indexing uses CPU/q8, 256 dimensions, one ORT thread, a fresh model/process and empty in-memory cache per file. OS caches were not flushed. Up to two indexing measurements ran concurrently; other host work also ran. Load columns show **(1, 5, 15 minute averages), before → after**, not a run average. The host one-minute load was also observed above 82 during the long runs; these are shared-host costs, not isolated performance comparisons.
+
+#### Preparation (no embedding model)
+
+Decode time includes verified reads and, where required, the demux duration pass. RSS is the per-process peak, including libraries. The hash and complete verified-read stages are measured separately. MB/s uses decimal MB; RSS uses MiB.
+
+| Source | Hash MB/s | Verify MB/s | Decode + verify s | Windows/s | s/audio-min | Peak MiB | Load before → after |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 10min.wav | 548.7 | 1141.1 | 0.200 | 374.8 | 0.0200 | 16.91 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| 10min.mp3 | 455.1 | 950.4 | 0.329 | 228.2 | 0.0329 | 16.44 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| old-cap.wav | 599.4 | 1209.1 | 0.386 | 339.6 | 0.0221 | 18.55 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| old-cap.mp3 | 592.9 | 1159.0 | 0.508 | 258.0 | 0.0290 | 18.58 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| 2h.wav | 533.7 | 1125.0 | 2.376 | 378.7 | 0.0198 | 21.25 | (28.8, 24.2, 20.8) → (28.8, 24.2, 20.8) |
+| 2h.mp3 | 622.7 | 1194.6 | 3.273 | 274.9 | 0.0273 | 19.61 | (28.8, 24.2, 20.8) → (28.3, 24.2, 20.9) |
+| over-cap.wav | 612.7 | 1045.0 | 0.001 | 0.0 | 0.0000 | 15.06 | (28.3, 24.2, 20.9) → (28.3, 24.2, 20.9) |
+| over-cap.mp3 | 507.3 | 1020.1 | 0.072 | 0.0 | 0.0006 | 12.61 | (28.3, 24.2, 20.9) → (28.3, 24.2, 20.9) |
+
+Over-cap preparation timings are **rejection latency**, not successful decode throughput; both emitted zero windows. Durations: 10 min = 600 s; old cap = 1,048.576 s; 2 h = 7,200 s; over cap = 7,260 s. Here old cap means the prior decoded-duration ceiling; the WAV header puts that synthetic source slightly above the former encoded-byte ceiling.
+
+#### Full indexing
+
+Index time excludes initial text-model construction but includes lazy audio-model load, source verification, decoding, embedding and resource binding. Embedding throughput includes the first lazy audio load. Total s also includes initial model construction; it starts inside the benchmark process.
+
+| Source | Total s | Index s | Embedded windows | Embedding windows/s | Index windows/s | Index s/audio-min | Peak GiB | Load before → after |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 10min.wav | 246.415 | 244.358 | 75 | 0.308 | 0.307 | 24.436 | 1.150 | (12.9, 24.4, 30.6) → (43.8, 36.9, 34.6) |
+| 10min.mp3 | 605.480 | 602.335 | 75 | 0.125 | 0.125 | 60.234 | 1.151 | (19.6, 25.1, 30.7) → (28.2, 40.5, 38.0) |
+| old-cap.wav | 350.712 | 345.317 | 131 | 0.381 | 0.379 | 19.759 | 1.144 | (43.3, 40.5, 36.6) → (19.6, 25.1, 30.7) |
+| old-cap.mp3 | 325.285 | 319.794 | 131 | 0.411 | 0.410 | 18.299 | 1.144 | (43.3, 40.5, 36.6) → (12.9, 24.4, 30.6) |
+| 2h.wav | 2590.337 | 2588.832 | 900 | 0.349 | 0.348 | 21.574 | 1.159 | (40.7, 30.7, 24.5) → (43.3, 40.5, 36.6) |
+| 2h.mp3 | 2589.060 | 2587.555 | 900 | 0.349 | 0.348 | 21.563 | 1.123 | (40.7, 30.7, 24.5) → (43.3, 40.5, 36.6) |
+| over-cap.wav | 10.184 | 1.830 | 0 | — | 0.000 | 0.015 | 0.422 | (43.8, 36.9, 34.6) → (47.6, 37.9, 35.0) |
+| over-cap.mp3 | 9.768 | 0.885 | 0 | — | 0.000 | 0.007 | 0.405 | (47.3, 38.0, 35.1) → (46.3, 38.1, 35.1) |
+
+Over-cap index timings are rejection latency. The harness asserts zero embedder calls for both over-cap sources. The two-hour admitted cases each embedded 900 windows; source windows contain 8,998 audio seconds including overlap. No STT runs in any measurement. Over-cap RSS excludes the lazy audio model because embedding is never attempted. Admitted-case RSS stays in a narrow band across durations. The ten-minute MP3 observation is much slower than the other admitted cases; these unisolated runs do not establish a codec performance difference.
+
+#### Retrieval compatibility
+
+The frozen held-out synthetic corpus retains its earlier results at both widths. Load is the whole recall gate’s before/after (1, 5, 15 minute) averages, including compilation; it is not a per-width average. The two widths ran sequentially while host contention changed, so their elapsed costs are not a dimension comparison.
+
+| Dimensions | Recall@5 | MRR@20 | Boundary Recall@5 / MRR@20 | Index s/audio-min | Gate load before → after |
+|---|---:|---:|---:|---:|---|
+| 256 | 1.000 | 0.9875 | 1.000 / 1.000 | 58.742 | (73.8, 47.5, 36.9) → (13.3, 25.4, 34.2) |
+| 768 | 1.000 | 0.9875 | 1.000 / 1.000 | 27.613 | (73.8, 47.5, 36.9) → (13.3, 25.4, 34.2) |
+
+The input-identity gate retained every recorded window hash and locator across all 18 timing/edge fixtures (20 windows). Slice samples are bit-exact after removing model-only short-tail padding. The audio embedding and feature goldens also pass their existing gates.
+
+Local validation passed on the integrated branch: Rust 1.99.0 formatting,
+default/audio workspace tests and warning-denied Clippy; generated timing and
+input-hash/slice parity; model-backed audio and cache-profile goldens; held-out
+retrieval recall; and Rust 1.89.0 default/audio all-target workspace checks.
+All-feature license validation passes. The complete cargo-deny audit reports
+pre-existing unmaintained packages number_prefix 0.4.0 (RUSTSEC-2025-0119),
+paste 1.0.15 (RUSTSEC-2024-0436), and ttf-parser 0.25.1 (RUSTSEC-2026-0192).
+Dependency versions, the lockfile and advisory policy are unchanged.
+
+The review round reran formatting, default/audio workspace Clippy with warnings
+denied, both workspace test configurations, audio goldens, generated timing
+fixtures, same-file historical input-hash/slice parity, and both Rust 1.89
+all-target checks; all passed. The benchmark usage-error smoke check passed.

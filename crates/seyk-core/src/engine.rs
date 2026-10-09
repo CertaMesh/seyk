@@ -171,6 +171,7 @@ pub struct SearchEngineBuilder {
     cache: Option<Box<dyn EmbeddingCache>>,
     segmenter: TextSegmenter,
     batch_size: usize,
+    max_audio_duration_secs: u64,
 }
 
 impl SearchEngineBuilder {
@@ -219,7 +220,14 @@ impl SearchEngineBuilder {
         self
     }
 
+    /// Inclusive canonical audio duration limit; independent of vector identity.
+    pub fn max_audio_duration_secs(mut self, seconds: u64) -> Self {
+        self.max_audio_duration_secs = seconds;
+        self
+    }
+
     pub fn build(mut self) -> Result<SearchEngine> {
+        crate::discovery::audio_byte_limit(self.max_audio_duration_secs)?;
         #[cfg(feature = "pdf")]
         self.extractors.push(Arc::new(crate::PdfTextExtractor));
         self.extractors.push(Arc::new(TextExtractor));
@@ -246,6 +254,7 @@ impl SearchEngineBuilder {
             profile,
             profile_id,
             batch_size: self.batch_size,
+            max_audio_duration_secs: self.max_audio_duration_secs,
         })
     }
 }
@@ -268,6 +277,7 @@ pub struct SearchEngine {
     profile: CacheProfile,
     profile_id: String,
     batch_size: usize,
+    max_audio_duration_secs: u64,
 }
 
 impl SearchEngine {
@@ -279,12 +289,19 @@ impl SearchEngine {
             cache: None,
             segmenter: TextSegmenter::default(),
             batch_size: 16,
+            max_audio_duration_secs: 7200,
         }
     }
 
     /// Extract readable evidence from a hit, verifying its full-resource hash
     /// before any extractor receives bytes. No indexing or model calls occur.
     pub fn extract(&self, hit: &SearchHit) -> Result<ExtractedContent> {
+        #[cfg(feature = "audio")]
+        if hit.metadata.modality == crate::Modality::Audio {
+            // Validate the configured policy even while readable STT is unavailable.
+            self.extract_audio_samples(hit)?;
+            return Err(unsupported(&hit.resource, &hit.locator, &hit.metadata));
+        }
         let extractor = self
             .extractors
             .iter()
@@ -297,6 +314,28 @@ impl SearchEngine {
             &hit.locator,
             &hit.metadata,
         )
+    }
+
+    /// Verified selected audio samples, without STT. At most 30 seconds per slice.
+    #[cfg(feature = "audio")]
+    pub fn extract_audio_samples(&self, hit: &SearchHit) -> Result<Vec<f32>> {
+        crate::audio::extract_samples(
+            self.provider.as_ref(),
+            &hit.resource,
+            &hit.locator,
+            &hit.metadata,
+            self.max_audio_duration_secs,
+        )
+    }
+
+    fn audio_eligible(&self, id: &ResourceId) -> Result<bool> {
+        let limit = self.max_audio_duration_secs * 1000;
+        self.with_cache(|c| {
+            let Some(r) = c.resource(&self.profile_id, id)? else {return Ok(false);};
+            Ok(r.metadata.size_bytes <= crate::discovery::audio_byte_limit(self.max_audio_duration_secs)?
+                && !r.segments.is_empty()
+                && r.segments.iter().all(|s| matches!(s.locator, ResourceLocator::Time {start_ms,end_ms} if start_ms<end_ms && end_ms<=limit)))
+        })
     }
 
     pub fn profile(&self) -> &CacheProfile {
@@ -416,7 +455,14 @@ impl SearchEngine {
                 m.version.matches(&r.version)
                     && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
             }) {
-                stats.resources_unchanged += 1;
+                if r.kind == ResourceKind::Audio && !self.audio_eligible(&r.id)? {
+                    stats.skipped.push(skip(
+                        &r.id,
+                        "audio exceeds configured duration limit or is not validated",
+                    ));
+                } else {
+                    stats.resources_unchanged += 1;
+                }
                 continue;
             }
             let version = match self.provider.version(&r.id) {
@@ -431,6 +477,88 @@ impl SearchEngine {
                 stats
                     .skipped
                     .push(skip(&r.id, "resource changed after discovery"));
+                continue;
+            }
+            #[cfg(feature = "audio")]
+            if r.kind == ResourceKind::Audio {
+                let source = self.provider.open(&r.id).and_then(|source| {
+                    crate::audio::VerifiedReader::new(
+                        source,
+                        &r.id,
+                        crate::discovery::audio_byte_limit(self.max_audio_duration_secs)?,
+                    )
+                });
+                let mut source = match source {
+                    Ok(s) => s,
+                    Err(e) => {
+                        stats.skipped.push(skip(&r.id, e.to_string()));
+                        continue;
+                    }
+                };
+                let after = match self.provider.version(&r.id) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        stats.skipped.push(skip(&r.id, e.to_string()));
+                        continue;
+                    }
+                };
+                if version.is_known() && !version.matches(&after) {
+                    stats
+                        .skipped
+                        .push(skip(&r.id, "resource changed while reading"));
+                    continue;
+                }
+                let content_hash = source.content_hash().to_owned();
+                if let Some(m) = cached.filter(|m| {
+                    m.metadata.content_hash == content_hash
+                        && m.descriptor_hash.as_ref() == Some(&descriptor_hash)
+                }) {
+                    if !self.audio_eligible(&r.id)? {
+                        stats.skipped.push(skip(
+                            &r.id,
+                            "audio exceeds configured duration limit or is not validated",
+                        ));
+                        continue;
+                    }
+                    let mut metadata = m.metadata.clone();
+                    metadata.size_bytes = source.len();
+                    metadata.modified_ns = r.modified_ns;
+                    self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
+                    stats.resources_unchanged += 1;
+                    continue;
+                }
+                use std::io::{Read, Seek};
+                let mut header = [0; 12];
+                let header_result = source.read(&mut header).and_then(|n| {
+                    source.rewind()?;
+                    Ok(n)
+                });
+                let n = match header_result {
+                    Ok(n) => n,
+                    Err(_) => {
+                        stats
+                            .skipped
+                            .push(skip(&r.id, "audio changed while reading"));
+                        continue;
+                    }
+                };
+                let target = Pending {
+                    resource: r.id.clone(),
+                    metadata: ResourceMetadata {
+                        media_type: Some(crate::audio::media_type(&header[..n]).into()),
+                        modality,
+                        size_bytes: source.len(),
+                        modified_ns: r.modified_ns,
+                        content_hash,
+                    },
+                    version,
+                    descriptor_hash,
+                    jobs: Vec::new(),
+                    page_diagnostics: Vec::new(),
+                };
+                if let Some(reason) = self.sync_audio(r, source, target, &mut stats, progress)? {
+                    stats.skipped.push(skip(&r.id, reason));
+                }
                 continue;
             }
             let bytes = match self.provider.read(&r.id) {
@@ -488,21 +616,6 @@ impl SearchEngine {
                     page_diagnostics: Vec::new(),
                 };
                 if let Some(reason) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
-                    stats.skipped.push(skip(&r.id, reason));
-                }
-                continue;
-            }
-            #[cfg(feature = "audio")]
-            if r.kind == ResourceKind::Audio {
-                let target = Pending {
-                    resource: r.id.clone(),
-                    metadata,
-                    version,
-                    descriptor_hash,
-                    jobs: Vec::new(),
-                    page_diagnostics: Vec::new(),
-                };
-                if let Some(reason) = self.sync_audio(r, bytes, target, &mut stats, progress)? {
                     stats.skipped.push(skip(&r.id, reason));
                 }
                 continue;
@@ -895,7 +1008,7 @@ impl SearchEngine {
     fn sync_audio(
         &self,
         r: &ProvidedResource,
-        bytes: Vec<u8>,
+        source: crate::audio::VerifiedReader,
         target: Pending,
         stats: &mut SyncStats,
         progress: Option<ProgressFn>,
@@ -903,37 +1016,43 @@ impl SearchEngine {
         let mut batch = Vec::new();
         let mut records = Vec::new();
         let capacity = self.batch_size.min(4);
-        let result = crate::audio::windows(bytes, &r.id, |locator, samples| {
-            let mut hash = blake3::Hasher::new();
-            hash.update(b"audio-input-v1");
-            hash.update(crate::audio::PREPARATION.as_bytes());
-            let identity = self.embedder.input_identity(crate::Modality::Audio);
-            hash.update(&(identity.len() as u64).to_le_bytes());
-            hash.update(identity.as_bytes());
-            hash.update(&(samples.len() as u64).to_le_bytes());
-            for sample in &samples {
-                hash.update(&sample.to_le_bytes());
-            }
-            batch.push(Job {
-                segment: CachedSegment {
-                    locator,
-                    heading: None,
-                    input_hash: hash.finalize().to_hex().to_string(),
-                },
-                lexical_body: String::new(),
-                input: JobInput::Audio { samples },
-            });
-            if batch.len() == capacity
-                && let Some(reason) =
-                    self.flush_media_batch(&mut batch, &mut records, stats, progress)?
-            {
-                return Err(Error::Embedding(reason));
-            }
-            Ok(())
-        });
+        let result = crate::audio::windows_verified(
+            source,
+            &r.id,
+            self.max_audio_duration_secs,
+            |locator, samples| {
+                let mut hash = blake3::Hasher::new();
+                hash.update(b"audio-input-v1");
+                hash.update(crate::audio::PREPARATION.as_bytes());
+                let identity = self.embedder.input_identity(crate::Modality::Audio);
+                hash.update(&(identity.len() as u64).to_le_bytes());
+                hash.update(identity.as_bytes());
+                hash.update(&(samples.len() as u64).to_le_bytes());
+                for sample in &samples {
+                    hash.update(&sample.to_le_bytes());
+                }
+                batch.push(Job {
+                    segment: CachedSegment {
+                        locator,
+                        heading: None,
+                        input_hash: hash.finalize().to_hex().to_string(),
+                    },
+                    lexical_body: String::new(),
+                    input: JobInput::Audio { samples },
+                });
+                if batch.len() == capacity
+                    && let Some(reason) =
+                        self.flush_media_batch(&mut batch, &mut records, stats, progress)?
+                {
+                    return Err(Error::Embedding(reason));
+                }
+                Ok(())
+            },
+        );
         if let Err(error) = result {
             return match error {
-                Error::UnsupportedAudio { .. }
+                Error::ChangedWhileReading { .. }
+                | Error::UnsupportedAudio { .. }
                 | Error::InvalidLocator { .. }
                 | Error::Embedding(_)
                 | Error::ModelNotFound(_) => Ok(Some(error.to_string())),
@@ -942,6 +1061,13 @@ impl SearchEngine {
         }
         if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
             return Ok(Some(reason));
+        }
+        let after = match self.provider.version(&r.id) {
+            Ok(v) => v,
+            Err(e) => return Ok(Some(e.to_string())),
+        };
+        if target.version.is_known() && !target.version.matches(&after) {
+            return Ok(Some("resource changed while reading".into()));
         }
         self.commit_media_resource(&target, &records, stats)?;
         Ok(None)
@@ -1283,7 +1409,9 @@ impl<'e> SearchRequest<'e> {
         if self.paths.is_empty() && self.roots.is_empty() {
             return Err(Error::Config("no paths to search".into()));
         }
-        let scope = ResourceScope::from_paths(&self.paths, self.roots, self.discovery)?;
+        let mut discovery = self.discovery;
+        discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
+        let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
         let resources = engine.provider.list(&scope)?;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
@@ -1304,12 +1432,39 @@ impl<'e> SearchRequest<'e> {
         };
 
         let pid = engine.profile_id.as_str();
-        let wanted: HashSet<ResourceId> = resources
+        let mut wanted: HashSet<ResourceId> = resources
             .iter()
             .filter(|r| engine.supports_kind(r.kind))
             .map(|r| r.id.clone())
             .collect();
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
+        for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
+            let failed = sync.skipped.iter().any(|s| s.resource == r.id);
+            let descriptor = {
+                #[cfg(feature = "audio")]
+                {
+                    input_hash(&[
+                        &r.fingerprint(),
+                        crate::audio::PREPARATION,
+                        engine.embedder.input_identity(crate::Modality::Audio),
+                    ])
+                }
+                #[cfg(not(feature = "audio"))]
+                {
+                    r.fingerprint()
+                }
+            };
+            let current = metadata.get(&r.id).is_some_and(|m| {
+                // Unknown/changed cached sources cannot establish eligibility in cached-only search.
+                (self.sync || m.version.matches(&r.version))
+                    && m.metadata.size_bytes == r.size_bytes
+                    && m.descriptor_hash.as_ref() == Some(&descriptor)
+            });
+            if failed || !current || !engine.audio_eligible(&r.id)? {
+                wanted.remove(&r.id);
+            }
+        }
+
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
         let depth = (self.limit * 4).max(50);
@@ -1785,7 +1940,9 @@ impl<'e> IndexRequest<'e> {
         if self.paths.is_empty() && self.roots.is_empty() {
             return Err(Error::Config("no paths to index".into()));
         }
-        let scope = ResourceScope::from_paths(&self.paths, self.roots, self.discovery)?;
+        let mut discovery = self.discovery;
+        discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
+        let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
         let resources = engine.provider.list(&scope)?;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {

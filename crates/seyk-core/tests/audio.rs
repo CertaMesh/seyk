@@ -197,9 +197,16 @@ fn bounded_batches_atomic_binding_and_no_audio_at_rest() {
         .limit(20)
         .execute()
         .unwrap();
+    // The old binding survives, but a changed/unvalidated source is ineligible.
+    assert!(after.hits.is_empty());
     assert_eq!(
-        after.hits.iter().map(|h| &h.locator).collect::<Vec<_>>(),
-        result.hits.iter().map(|h| &h.locator).collect::<Vec<_>>()
+        engine
+            .with_cache(|c| c.resource(engine.profile_id(), &result.hits[0].resource))
+            .unwrap()
+            .unwrap()
+            .segments
+            .len(),
+        6
     );
     drop(engine);
     let data = std::fs::read(db).unwrap();
@@ -332,22 +339,219 @@ fn decoded_duration_cap_is_independent_of_compression() {
     // cap, while preserving one bounded output window at any instant.
     let id: ResourceId = "mem://audio/too-long".parse().unwrap();
     let mut windows = 0;
-    let error = audio::windows(
-        wav((audio::MAX_SAMPLES / 2 + 1) as usize, 8000),
+    let source = audio::VerifiedReader::new(
+        Box::new(std::io::Cursor::new(wav(8001, 8000))),
         &id,
-        |_, pcm| {
-            assert!(pcm.len() <= audio::WINDOW);
-            windows += 1;
-            Ok(())
-        },
+        seyk_core::discovery::audio_byte_limit(1).unwrap(),
     )
+    .unwrap();
+    let error = audio::windows_verified(source, &id, 1, |_, pcm| {
+        assert!(pcm.len() <= audio::WINDOW);
+        windows += 1;
+        Ok(())
+    })
     .unwrap_err();
     assert_eq!(windows, 0);
     assert!(matches!(
         error,
         Error::UnsupportedAudio {
-            reason: "decoded audio exceeds 1048.576 second duration cap",
+            reason: "decoded audio exceeds configured duration limit",
             ..
         }
     ));
+}
+
+#[test]
+fn limits_filter_both_cache_fast_paths_and_cached_only_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clip.wav");
+    let db = dir.path().join("cache.db");
+    std::fs::write(&path, wav(32001, 16000)).unwrap();
+    let model = Arc::new(Model::new("policy"));
+    let make = |seconds| {
+        SearchEngine::builder()
+            .embedder(model.clone())
+            .max_audio_duration_secs(seconds)
+            .cache(SqliteCache::open(&db).unwrap())
+            .build()
+            .unwrap()
+    };
+    let high = make(3);
+    let first = high.search("q").paths([&path]).execute().unwrap();
+    assert_eq!(first.hits.len(), 1);
+    let id = first.hits[0].resource.clone();
+    let old = high
+        .with_cache(|c| c.resource(high.profile_id(), &id))
+        .unwrap()
+        .unwrap()
+        .segments;
+    drop(high);
+    for touch in [false, true] {
+        if touch {
+            std::fs::File::open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_secs(1_700_000_000),
+                ))
+                .unwrap();
+        }
+        let low = make(2);
+        assert!(
+            low.search("q")
+                .paths([&path])
+                .sync(false)
+                .execute()
+                .unwrap()
+                .hits
+                .is_empty()
+        );
+        let result = low.search("q").paths([&path]).execute().unwrap();
+        assert!(result.hits.is_empty());
+        assert_eq!(result.stats.sync.skipped.len(), 1);
+        assert!(low.extract_audio_samples(&first.hits[0]).is_err());
+    }
+    let high = make(4);
+    let again = high.search("q").paths([&path]).execute().unwrap();
+    assert_eq!(again.hits.len(), 1);
+    assert_eq!(again.stats.sync.segments_embedded, 0);
+    assert_eq!(
+        high.with_cache(|c| c.resource(high.profile_id(), &id))
+            .unwrap()
+            .unwrap()
+            .segments,
+        old
+    );
+    assert_eq!(model.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn changed_during_decode_leaves_no_binding_and_no_slice() {
+    use std::io::{Seek, SeekFrom, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clip.wav");
+    std::fs::write(&path, wav(16000 * 100, 16000)).unwrap();
+    let id = ResourceId::from_path(&path).unwrap();
+    let source =
+        audio::VerifiedReader::new(Box::new(std::fs::File::open(&path).unwrap()), &id, u64::MAX)
+            .unwrap();
+    let mut windows = 0;
+    let error = audio::windows_verified(source, &id, 7200, |_, _| {
+        windows += 1;
+        if windows == 1 {
+            let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            f.seek(SeekFrom::Start(2 * 1024 * 1024)).unwrap();
+            f.write_all(&[0xff; 32]).unwrap();
+        }
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(windows > 0);
+    assert!(matches!(error, Error::ChangedWhileReading { .. }));
+    let source =
+        audio::VerifiedReader::new(Box::new(std::fs::File::open(&path).unwrap()), &id, u64::MAX)
+            .unwrap();
+    let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    f.seek(SeekFrom::Start(44)).unwrap();
+    f.write_all(&[0xff; 32]).unwrap();
+    assert!(matches!(
+        audio::slice_verified(
+            source,
+            &id,
+            &ResourceLocator::Time {
+                start_ms: 0,
+                end_ms: 1000
+            },
+            7200
+        ),
+        Err(Error::ChangedWhileReading { .. })
+    ));
+    // Mutation through the embedding callback occurs after a validated batch,
+    // before the last chunk is consumed. No resource can be committed.
+    struct MutatingModel {
+        inner: Model,
+        path: std::path::PathBuf,
+        changed: std::sync::atomic::AtomicBool,
+    }
+    impl Embedder for MutatingModel {
+        fn identity(&self) -> &ModelIdentity {
+            self.inner.identity()
+        }
+        fn supports(&self, m: Modality) -> bool {
+            self.inner.supports(m)
+        }
+        fn embed_batch(&self, r: &[EmbeddingRequest<'_>]) -> seyk_embed::Result<Vec<Embedding>> {
+            if !self.changed.swap(true, Ordering::Relaxed) {
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&self.path)
+                    .unwrap();
+                f.seek(SeekFrom::Start(2 * 1024 * 1024)).unwrap();
+                f.write_all(&[0xaa; 32]).unwrap();
+            }
+            self.inner.embed_batch(r)
+        }
+    }
+    let engine = SearchEngine::builder()
+        .embedder(MutatingModel {
+            inner: Model::new(""),
+            path: path.clone(),
+            changed: std::sync::atomic::AtomicBool::new(false),
+        })
+        .batch_size(1)
+        .build()
+        .unwrap();
+    let report = engine.index().paths([&path]).execute().unwrap();
+    assert_eq!(report.sync.resources_updated, 0);
+    assert_eq!(report.sync.skipped.len(), 1);
+    assert!(
+        report.sync.skipped[0]
+            .reason
+            .contains("changed while reading")
+    );
+    assert!(
+        engine
+            .with_cache(|c| c.resource(engine.profile_id(), &id))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn audio_uses_provider_open_without_whole_file_reads() {
+    struct StreamingOnly;
+    impl seyk_core::ResourceProvider for StreamingOnly {
+        fn list(
+            &self,
+            s: &seyk_core::ResourceScope,
+        ) -> seyk_core::Result<Vec<seyk_core::ProvidedResource>> {
+            seyk_core::ResourceProvider::list(&seyk_core::FsProvider, s)
+        }
+        fn read(&self, _: &ResourceId) -> seyk_core::Result<Vec<u8>> {
+            panic!("audio must not read the whole resource")
+        }
+        fn open(
+            &self,
+            id: &ResourceId,
+        ) -> seyk_core::Result<Box<dyn seyk_core::provider::ReadSeek>> {
+            seyk_core::ResourceProvider::open(&seyk_core::FsProvider, id)
+        }
+        fn version(&self, id: &ResourceId) -> seyk_core::Result<seyk_core::ResourceVersion> {
+            seyk_core::ResourceProvider::version(&seyk_core::FsProvider, id)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clip.wav");
+    std::fs::write(&path, wav(16001, 16000)).unwrap();
+    let engine = SearchEngine::builder()
+        .provider(StreamingOnly)
+        .embedder(Model::new("policy"))
+        .build()
+        .unwrap();
+    let result = engine.search("q").paths([path]).execute().unwrap();
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(
+        engine.extract_audio_samples(&result.hits[0]).unwrap().len(),
+        16001
+    );
 }

@@ -98,6 +98,12 @@ pub fn extract_resource(
     locator: &ResourceLocator,
     metadata: &ResourceMetadata,
 ) -> Result<ExtractedContent> {
+    #[cfg(feature = "audio")]
+    if metadata.modality == Modality::Audio {
+        // The byte-based extractor contract must never load a long audio file.
+        crate::audio::extract_samples(provider, source, locator, metadata, 7200)?;
+        return Err(unsupported(source, locator, metadata));
+    }
     if !extractor.supports(source, locator, metadata) {
         return Err(unsupported(source, locator, metadata));
     }
