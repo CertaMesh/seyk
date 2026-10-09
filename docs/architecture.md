@@ -816,3 +816,185 @@ floating-point raster/PNG determinism, filesystem behavior and dependency
 linking; production rendering adds no platform-specific branches. The optional
 evaluation RSS measurement uses getrusage (bytes on macOS, KiB on other Unix;
 unavailable on Windows).
+
+## Phase 5a: audio retrieval
+
+Opt-in `audio` adds semantic retrieval over WAV, FLAC, MP3 and AAC-LC/ALAC in
+M4A. Default release features are unchanged. Symphonia is pinned to 0.5.5;
+`deny.toml` permits MPL-2.0 only for the eleven approved package/version pairs,
+with source/licence notices in `THIRD_PARTY.md`. No FFmpeg library or executable
+is used at runtime (FFmpeg and macOS speech tools only generate test fixtures).
+
+### Preparation and evidence
+
+The core reads at most the existing 32 MiB encoded input limit. Symphonia emits
+bounded packets with gapless MP3 enabled. A bounded MP4 box reader applies one
+`elst` entry's `media_time` and `segment_duration`, converting the media/movie
+timescales, clamping to the `mdhd` media end so millisecond rounding cannot
+retain AAC block padding. Without an edit list it uses iTunSMPB delay/length; without either it
+uses the decoded-sample timeline. Empty, multi-entry, non-unit-rate edits and
+multiple tracks are rejected rather than assigned speculative offsets. AAC-LC
+AudioSpecificConfig is checked before decoding: Symphonia can otherwise ignore
+SBR while decoding the LC core of HE-AAC.
+
+Channels are averaged with f64 accumulation, then a versioned 64-tap Blackman
+windowed-sinc filter (0.94 Nyquist guard, zero-extended edges) produces mono
+16 kHz f32. Decoding never retains a full PCM file. The packet buffer, resampler
+history and 10-second rolling window are bounded independently of duration.
+Window starts advance by 8 seconds; the first short window ends the sequence,
+without emitting further windows contained in that tail. Tails
+shorter than 320 samples are zero-padded only for embedding. Time locators use
+floor(start sample × 1000 / 16000), ceil(end sample × 1000 / 16000), with the real
+post-trim end, never the padded end. Intervals are half-open and non-empty.
+
+The decoded cap is **16,777,216 samples at 16 kHz = 1,048.576 seconds**, derived
+from 32 MiB of 16-bit mono PCM. Known exact lengths can fail before decoding;
+the streaming counter also enforces it. Recordings over about 17.5 minutes are
+skipped entirely, even if windows were processed before the limit was detected.
+This bounds work for highly compressed
+inputs while retaining the existing encoded-file policy. Supported source rates
+are 8–192 kHz, with up to eight channels (AAC-LC is mono/stereo); format changes,
+corrupt frames and unsupported profiles return `UnsupportedAudio`.
+
+ALAC cookies must contain 24 or 48 bytes, 1–16,384 samples per frame (four times
+Apple’s usual 4096), 1–8 channels and a supported 16/20/24/32-bit depth before
+decoder construction. This caps each ALAC output/tail buffer at 512 KiB.
+Symphonia probing, construction, packet reads and decoding use a shared
+`catch_unwind` boundary returning payload-free `UnsupportedAudio` errors.
+Library callers must also use a payload-free panic hook; aborts, OOM and hangs
+are not contained.
+
+### Embedding, cache and failure boundaries
+
+The optional backend ports the pinned Gemma 4 feature extractor: periodic Hann,
+160 zero samples on the left, 321-sample frame indexing/320-sample window,
+160-sample hop, 512-point FFT **magnitude**, 128 HTK mel filters and
+`ln(mel + 0.001)`. The mask sampled every four frames determines the audio token
+count; a full 10-second window has 999 frames and 250 tokens. The q8 encoder
+feeds `[tokens,512]` audio features into the existing text graph between audio
+begin/end tokens, with no task prefix. Output truncation/normalization and text
+query behavior are unchanged.
+
+`seyk model download --audio` provisions only
+`onnx/audio_encoder_quantized.onnx` and its external data file at pinned ONNX
+revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0`. Together they are
+340,307,954 bytes (324.54 MiB). The encoder loads lazily. Missing/corrupt optional
+weights fail individual audio files while text, image and PDF indexing proceeds.
+Inference has no download path.
+
+API changes: the opt-in `pub mod audio` exposes preparation helpers/constants;
+`ResourceKind::Audio` requires downstream exhaustive matches to add an arm.
+`Embedder::input_identity(Modality)` is a new defaulted generic seam, forwarded by
+Box/Arc. The backend's audio identity hashes both audio files and the feature
+policy. The core includes this identity, the preparation policy and exact f32
+sample bytes in **`audio-input-v1`**, and includes the policy/identity in the
+resource descriptor. Neither changes the global cache profile, text model
+identity or existing text input hashes. Tests cover local audio installation
+without changing text identity/vectors and byte-identical files being re-prepared
+with corrected locators after a timing-policy change.
+
+At most `min(batch_size,4)` windows reach embedding together. The existing media
+batch flush caches validated vectors and drops PCM immediately; only compact
+locators remain until one atomic resource binding. Late decode/model failure
+leaves any previous binding intact. Cache failures still propagate. No PCM,
+mel arrays, audio tokens, ordered source text or transcripts are stored in the
+cache. Tests inspect the database and cover failure after a successful batch.
+
+CLI/JSON/MCP use the existing `Time` locator and schema; no MCP tool or option
+was added. Search creates no previews or transcripts. Explicit audio extraction
+uses the existing `UnsupportedExtraction` variant and says STT is not available
+until 5b. STT, VAD, diarization, previews and a larger input-size policy remain
+outside this phase.
+
+### Measurements and reproduction
+
+Measured locally on an Apple M5 Max, 64 GiB RAM, macOS 26.5, Rust 1.99.0,
+CPU/q8, one ONNX thread. Evaluations use the production engine with fresh
+in-memory caches and semantic-only queries. A hit is correct only when the
+resource matches and its Time locator contains the **entire** annotated phrase.
+Each corpus has 20 × 21-second synthetic recordings and 40 queries; 20 phrases
+cross the first window boundary. The frozen manifests contain 1.87–3.43-second
+phrases placed fully inside at least one window. Phrases longer than the
+two-second overlap that straddle windows without fitting in either are
+unmeasured; the boundary subset does not test that case.
+No private corpus or recognizer is used.
+
+The original spike set uses Samantha/Daniel. The separately frozen held-out set
+uses new scripts and Karen, a voice unused by the spike. Its script SHA256 is
+`36afa09b0063fd2c76db1575af68e953b5cd24129675aa837db5e948458a6591`.
+No held-out tuning was performed. These synthetic results establish compatibility,
+not a claim about noisy, multilingual or real-world speech.
+
+| Set | Dimensions | Recall@5 | MRR@20 | Boundary Recall@5 / MRR@20 | Index s/audio-minute |
+|---|---:|---:|---:|---:|---:|
+| Spike | 256 | 1.000 | 0.9750 | 1.000 / 0.950 | 20.173 |
+| Spike | 768 | 1.000 | 0.9875 | 1.000 / 0.975 | 17.089 |
+| Held-out | 256 | 1.000 | 0.9875 | 1.000 / 1.000 | 16.600 |
+| Held-out | 768 | 1.000 | 0.9875 | 1.000 / 1.000 | 15.838 |
+
+Every format has Recall@5 1.0. Spike per-format MRR at 256/768: WAV 1/1,
+FLAC .95/1, AAC 1/1, MP3 .95/.95 (10 queries each). Held-out per-format MRR is
+identical at both widths: WAV/FLAC/AAC/ALAC 1.0, MP3 .9375 (8 queries each).
+Elapsed measurements include decoding/resampling and run on a shared machine;
+they are not isolated comparative dimension benchmarks. These post-fix timings
+were collected under heavy host contention (observed load averages 32–52);
+comparison with the earlier roughly 6.7 s/audio-minute run does not isolate
+the code change.
+
+A one-second Rust-generated chirp plus tones supplies the committed parity
+signal. Pinned local Transformers 5.19.0 / Torch 2.14.1 FP32 generated the feature,
+mask/token and 768-dimensional embedding goldens. Feature maximum absolute error
+is **4.7683716e-7** (normal test, gate 1e-5); embedding cosine is **0.9998887**
+(ignored model-backed test, gate .99). Exact reference revisions/source hashes
+are recorded in `crates/seyk-embeddinggemma/tests/fixtures/audio/reference.json`.
+Additional goldens repeat the same Rust signal to 16,001 samples (partial-frame
+padding, 100 frames / 25 tokens) and 160,000 samples (full window, 999 frames /
+250 tokens). Both features/masks and 768-dimensional embeddings use the same
+pinned reference and parity gates. Their feature maximum errors are both
+4.7683716e-7; embedding cosines are 0.9999343 and 0.9997173 respectively.
+No additional source audio is committed.
+
+Ten generated timing fixtures have zero cross-correlation lag and exact output
+lengths at 16 kHz: WAV, FLAC, ALAC, FFmpeg AAC (1024 priming samples), Apple AAC
+(2112), MP3/LAME, a nonzero-media-time trimmed AAC, MP3 without LAME metadata and
+AAC without `edts`, plus an AAC file ending between whole milliseconds. The two metadata-absent cases compare to their decoded-timeline WAV
+reference,
+so no hidden constant is used to guess missing encoder delay. HE-AAC and
+multiple-track fixtures produce typed rejections.
+
+The largest allowed WAV is exactly **33,554,432 bytes**, representing
+1,048.574625 seconds. It indexed 131 windows in **302.202 seconds**
+(**17.292 s/audio-minute**); `/usr/bin/time -l` measured peak RSS
+**1,257,816,064 bytes (1.171 GiB)** for the process, including ONNX Runtime.
+
+Stripped (`-x`) Rust 1.99.0 release binaries: default **34,908,632 bytes**, `--features audio` **36,368,200 bytes**; delta **1,459,568 bytes (1.392 MiB, 4.18%)**. No probe harness is included. Default dependency-tree verification contains no Symphonia.
+
+The local merge gate passed: default/audio workspace tests and clippy, core
+feature matrix, ignored cache/PDF/audio goldens, timing fixtures, standalone
+checks, Rust 1.89 checks and builds with/without audio, release smoke, licenses
+(default/all features) and dependency boundaries. The fractional-duration fix
+was followed by the affected audio gates again. The ALAC/panic-containment
+and tail-window fixes passed the full local gate, including the expanded
+feature/embedding goldens and the ten timing fixtures. Linux and Windows validation
+remains for the CI matrix; this report covers macOS ARM64 only.
+
+Reproduce (local weights only; ignored tests never provision models):
+
+```sh
+# Fixture generator: macOS say/afconvert, ffmpeg, Python numpy/soundfile.
+python scripts/audio/generate.py spike /tmp/seyk-audio-spike
+python scripts/audio/generate.py heldout /tmp/seyk-audio-heldout
+SEYK_AUDIO_MANIFEST=/tmp/seyk-audio-heldout/manifest.json \
+  cargo test --release --features audio --test audio_eval retrieval_gate -- --ignored --nocapture
+# Repeat with the spike manifest; SEYK_AUDIO_REPORT optionally writes metrics JSON.
+python scripts/audio/timing.py /tmp/seyk-audio-timing
+SEYK_AUDIO_TIMING=/tmp/seyk-audio-timing \
+  cargo test -p seyk-core --release --features audio --test audio_timing -- --ignored --nocapture
+cargo test -p seyk-embeddinggemma --features audio --test audio_golden -- --include-ignored --nocapture
+cargo test --release --features audio --test audio_eval largest_allowed_file -- --ignored --nocapture
+# Regenerate parity input with the Rust audio_signal example, then run
+# scripts/audio/reference.py using the pinned locally cached Transformers model.
+```
+
+Next: Phase 5b requires a separate STT/extraction decision and a user decision
+before changing the 32 MiB input-size policy.

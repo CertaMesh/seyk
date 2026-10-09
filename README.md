@@ -193,6 +193,30 @@ an unsupported-extraction error. MCP extraction is deferred until MCP hits can
 carry exact locators and hashes with session-scoped read checks; MCP search and
 its root confinement are unchanged.
 
+### Audio (opt-in)
+
+Build with `cargo build --release --features audio`, then provision the extra
+q8 encoder with `seyk model download --audio` (about 325 MiB). This command only
+downloads the two pinned audio files; provision the ordinary model separately.
+Default release builds retain their existing feature set.
+
+`seyk search "repairing a bicycle" ./recordings` embeds sound directly, with no
+transcription. WAV, FLAC, MP3 and AAC-LC/ALAC in M4A are decoded locally into
+10-second windows every 8 seconds. Results use the existing half-open `time`
+locator (`start_ms`, `end_ms`) and have no transcript or preview. Explicit audio
+extraction returns `UnsupportedExtraction`: STT is not available until Phase 5b.
+Missing audio weights skip individual audio files; text, images and PDFs still
+work. Search never downloads weights.
+
+The existing 32 MiB file limit still applies. Decoding also stops at 1,048.576
+seconds (the same byte budget as 16-bit mono PCM at 16 kHz). Recordings over
+about 17.5 minutes are skipped entirely, including any windows already processed.
+Complex MP4 edits,
+multiple tracks, HE-AAC/SBR and changing sample formats are rejected. MP4 edit
+lists or iTunSMPB remove encoder priming/padding; files without timing metadata
+use their decoded-sample timeline. See the [audio report](docs/architecture.md#phase-5a-audio-retrieval)
+for timing, parity and retrieval measurements.
+
 ### PDFs
 
 Normal builds include `pdf-render` and image embedding. Minimal library
@@ -506,7 +530,7 @@ deletes every vector.
 | Plain text | `.txt` `.text` `.rst` `.org` `.adoc` `.tex` | ✅ paragraph segments |
 | Source code | `.rs` `.py` `.js` `.ts` `.go` `.java` `.c` `.cpp` `.rb` `.php` `.sh` `.sql` `.toml` `.yaml` and more | ✅ blank-line blocks |
 | Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.tiff` | ✅ one vector per image (`WholeResource`) |
-| Audio | — | ❌ not implemented |
+| Audio | `.wav` `.flac` `.mp3` `.m4a` | Opt-in `audio` feature; 10 s windows, `Time` evidence; no transcription |
 | Video | — | ❌ not implemented |
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
@@ -606,7 +630,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
   segments. After that, only changes are embedded. Run `index --watch` or the MCP
   server so this happens in the background.
 
-- **Audio, video and scanned-page OCR are not implemented.** See
+- **Audio transcription, video and scanned-page OCR are not implemented.** See
   [the multimodal status](docs/multimodal.md) for current support and remaining
   work, including [PDF extraction limits](docs/multimodal.md#pdf-retrieval-done-ocr-deferred).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is

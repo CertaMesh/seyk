@@ -375,6 +375,8 @@ impl SearchEngine {
                     &r.id,
                     if r.kind == ResourceKind::Pdf && !cfg!(feature = "pdf") {
                         "PDF support is not compiled in (feature `pdf`)".into()
+                    } else if r.kind == ResourceKind::Audio && !cfg!(feature = "audio") {
+                        "audio support is not compiled in (feature `audio`)".into()
                     } else {
                         format!("{modality} search is not supported by this embedder")
                     },
@@ -397,6 +399,16 @@ impl SearchEngine {
                 }
             } else {
                 r.fingerprint()
+            };
+            #[cfg(feature = "audio")]
+            let descriptor_hash = if r.kind == ResourceKind::Audio {
+                input_hash(&[
+                    &descriptor_hash,
+                    crate::audio::PREPARATION,
+                    self.embedder.input_identity(crate::Modality::Audio),
+                ])
+            } else {
+                descriptor_hash
             };
             let cached = known.get(&r.id);
             // Listing already supplies a freshness token; only stat again before a read.
@@ -454,7 +466,12 @@ impl SearchEngine {
                 continue;
             }
             let metadata = ResourceMetadata {
-                media_type: (r.kind == ResourceKind::Pdf).then(|| "application/pdf".into()),
+                media_type: match r.kind {
+                    ResourceKind::Pdf => Some("application/pdf".into()),
+                    #[cfg(feature = "audio")]
+                    ResourceKind::Audio => Some(crate::audio::media_type(&bytes).into()),
+                    _ => None,
+                },
                 modality,
                 size_bytes: bytes.len() as u64,
                 modified_ns: r.modified_ns,
@@ -471,6 +488,21 @@ impl SearchEngine {
                     page_diagnostics: Vec::new(),
                 };
                 if let Some(reason) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
+                    stats.skipped.push(skip(&r.id, reason));
+                }
+                continue;
+            }
+            #[cfg(feature = "audio")]
+            if r.kind == ResourceKind::Audio {
+                let target = Pending {
+                    resource: r.id.clone(),
+                    metadata,
+                    version,
+                    descriptor_hash,
+                    jobs: Vec::new(),
+                    page_diagnostics: Vec::new(),
+                };
+                if let Some(reason) = self.sync_audio(r, bytes, target, &mut stats, progress)? {
                     stats.skipped.push(skip(&r.id, reason));
                 }
                 continue;
@@ -632,11 +664,17 @@ impl SearchEngine {
     fn supports_kind(&self, kind: ResourceKind) -> bool {
         match kind {
             ResourceKind::Pdf => cfg!(feature = "pdf"),
+            ResourceKind::Audio => {
+                cfg!(feature = "audio") && self.embedder.supports(crate::Modality::Audio)
+            }
             _ => self.embedder.supports(kind.modality()),
         }
     }
 
     fn supports_locator(&self, metadata: &ResourceMetadata, locator: &ResourceLocator) -> bool {
+        if metadata.modality == crate::Modality::Audio {
+            return cfg!(feature = "audio") && self.embedder.supports(crate::Modality::Audio);
+        }
         if metadata.media_type.as_deref() != Some("application/pdf") {
             return true;
         }
@@ -714,7 +752,7 @@ impl SearchEngine {
                     ));
                     if batch.len() == capacity
                         && let Some(reason) =
-                            self.flush_pdf_batch(&mut batch, &mut records, stats, progress)?
+                            self.flush_media_batch(&mut batch, &mut records, stats, progress)?
                     {
                         return Ok(Some(reason));
                     }
@@ -759,12 +797,12 @@ impl SearchEngine {
             }
             if batch.len() == capacity
                 && let Some(reason) =
-                    self.flush_pdf_batch(&mut batch, &mut records, stats, progress)?
+                    self.flush_media_batch(&mut batch, &mut records, stats, progress)?
             {
                 return Ok(Some(reason));
             }
         }
-        if let Some(reason) = self.flush_pdf_batch(&mut batch, &mut records, stats, progress)? {
+        if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
             return Ok(Some(reason));
         }
         // Commit the whole resource once. Failed model/parser work leaves the
@@ -787,8 +825,8 @@ impl SearchEngine {
         Ok(None)
     }
 
-    #[cfg(feature = "pdf")]
-    fn flush_pdf_batch(
+    #[cfg(any(feature = "pdf", feature = "audio"))]
+    fn flush_media_batch(
         &self,
         batch: &mut Vec<Job>,
         records: &mut Vec<(CachedSegment, String)>,
@@ -842,6 +880,75 @@ impl SearchEngine {
         Ok(failure)
     }
 
+    #[cfg(feature = "audio")]
+    fn sync_audio(
+        &self,
+        r: &ProvidedResource,
+        bytes: Vec<u8>,
+        target: Pending,
+        stats: &mut SyncStats,
+        progress: Option<ProgressFn>,
+    ) -> Result<Option<String>> {
+        let mut batch = Vec::new();
+        let mut records = Vec::new();
+        let capacity = self.batch_size.min(4);
+        let result = crate::audio::windows(bytes, &r.id, |locator, samples| {
+            let mut hash = blake3::Hasher::new();
+            hash.update(b"audio-input-v1");
+            hash.update(crate::audio::PREPARATION.as_bytes());
+            let identity = self.embedder.input_identity(crate::Modality::Audio);
+            hash.update(&(identity.len() as u64).to_le_bytes());
+            hash.update(identity.as_bytes());
+            hash.update(&(samples.len() as u64).to_le_bytes());
+            for sample in &samples {
+                hash.update(&sample.to_le_bytes());
+            }
+            batch.push(Job {
+                segment: CachedSegment {
+                    locator,
+                    heading: None,
+                    input_hash: hash.finalize().to_hex().to_string(),
+                },
+                lexical_body: String::new(),
+                input: JobInput::Audio { samples },
+            });
+            if batch.len() == capacity
+                && let Some(reason) =
+                    self.flush_media_batch(&mut batch, &mut records, stats, progress)?
+            {
+                return Err(Error::Embedding(reason));
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
+            return match error {
+                Error::UnsupportedAudio { .. }
+                | Error::InvalidLocator { .. }
+                | Error::Embedding(_)
+                | Error::ModelNotFound(_) => Ok(Some(error.to_string())),
+                other => Err(other),
+            };
+        }
+        if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
+            return Ok(Some(reason));
+        }
+        let write = ResourceWrite {
+            metadata: &target.metadata,
+            version: &target.version,
+            descriptor_hash: Some(&target.descriptor_hash),
+            segments: records
+                .iter()
+                .map(|(segment, body)| SegmentWrite {
+                    segment,
+                    lexical_body: body,
+                })
+                .collect(),
+        };
+        self.with_cache(|c| c.put_resource(&self.profile_id, &r.id, &write))?;
+        stats.resources_updated += 1;
+        Ok(None)
+    }
+
     /// Turn a resource into embedding jobs. Errors are reasons to skip the resource.
     fn prepare(
         &self,
@@ -849,6 +956,9 @@ impl SearchEngine {
         bytes: Vec<u8>,
     ) -> std::result::Result<(Vec<Job>, Vec<PageDiagnostic>), String> {
         match r.kind {
+            ResourceKind::Audio => {
+                Err("audio requires the streaming preparation path (feature `audio`)".into())
+            }
             ResourceKind::Pdf => {
                 #[cfg(feature = "pdf")]
                 {
@@ -963,8 +1073,17 @@ impl Job {
 }
 
 enum JobInput {
-    Text { title: Option<String>, text: String },
-    Image { bytes: Vec<u8> },
+    Text {
+        title: Option<String>,
+        text: String,
+    },
+    Image {
+        bytes: Vec<u8>,
+    },
+    #[cfg(feature = "audio")]
+    Audio {
+        samples: Vec<f32>,
+    },
 }
 
 impl JobInput {
@@ -975,6 +1094,11 @@ impl JobInput {
                 text,
             },
             JobInput::Image { bytes } => ResourceInput::Image { bytes },
+            #[cfg(feature = "audio")]
+            JobInput::Audio { samples } => ResourceInput::Audio {
+                samples,
+                sample_rate: 16000,
+            },
         }
     }
 }

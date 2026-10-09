@@ -6,9 +6,7 @@
 //! `sentence_embedding`; this module truncates it to the configured
 //! Matryoshka dimension and L2-normalises it.
 //!
-//! Text and images are implemented. Audio needs a port of the Gemma 4
-//! log-mel feature extractor, and video needs frame decoding; both are
-//! reported as unsupported rather than approximated.
+//! Text, images and opt-in audio are implemented. Video remains unsupported.
 
 //! # Standalone text embedding
 //!
@@ -134,6 +132,8 @@ pub struct GemmaConfig {
     pub max_tokens: usize,
     /// Load the vision encoder so image resources can be embedded.
     pub vision: bool,
+    /// Enable audio inputs; missing weights fail individual audio requests.
+    pub audio: bool,
     /// ONNX Runtime intra-op threads. `None` lets ONNX Runtime decide.
     pub threads: Option<usize>,
     /// Inputs per model call.
@@ -148,6 +148,7 @@ impl Default for GemmaConfig {
             precision: Precision::default(),
             max_tokens: 2048,
             vision: cfg!(feature = "image"),
+            audio: cfg!(feature = "audio"),
             threads: None,
             batch_size: 16,
         }
@@ -279,6 +280,8 @@ pub struct EmbeddingGemma2 {
     tokenizer: Tokenizer,
     text: Mutex<Session>,
     vision: Option<Mutex<Session>>,
+    #[cfg(feature = "audio")]
+    audio: Option<audio::AudioEncoder>,
     identity: ModelIdentity,
     config: GemmaConfig,
     pad_id: i64,
@@ -312,6 +315,10 @@ impl EmbeddingGemma2Builder {
     }
     pub fn vision(mut self, enabled: bool) -> Self {
         self.config.vision = enabled;
+        self
+    }
+    pub fn audio(mut self, enabled: bool) -> Self {
+        self.config.audio = enabled;
         self
     }
     pub fn max_tokens(mut self, count: usize) -> Self {
@@ -356,6 +363,11 @@ impl EmbeddingGemma2 {
                 "max_tokens, batch_size and threads must be nonzero".into(),
             ));
         }
+        if config.audio && !cfg!(feature = "audio") {
+            return Err(Error::UnsupportedModality {
+                modality: Modality::Audio,
+            });
+        }
         if config.vision && !cfg!(feature = "image") {
             return Err(Error::UnsupportedModality {
                 modality: Modality::Image,
@@ -391,6 +403,8 @@ impl EmbeddingGemma2 {
 
         let identity = resolved.identity(&config)?;
         Ok(Self {
+            #[cfg(feature = "audio")]
+            audio: config.audio.then(|| audio::AudioEncoder::new(dir)),
             tokenizer,
             text: Mutex::new(text),
             vision,
@@ -478,7 +492,7 @@ impl EmbeddingGemma2 {
         let mut out: Vec<Option<Embedding>> = vec![None; ids.len()];
         for chunk in order.chunks(self.config.batch_size.max(1)) {
             let batch: Vec<&[i64]> = chunk.iter().map(|&i| ids[i].as_slice()).collect();
-            let vecs = self.run_text(&batch, None)?;
+            let vecs = self.run_text(&batch, None, None)?;
             for (&i, v) in chunk.iter().zip(vecs) {
                 out[i] = Some(v);
             }
@@ -494,6 +508,7 @@ impl EmbeddingGemma2 {
         &self,
         batch: &[&[i64]],
         image_features: Option<(Vec<f32>, usize)>,
+        audio_features: Option<(Vec<f32>, usize)>,
     ) -> Result<Vec<Embedding>> {
         let max_len = batch.iter().map(|b| b.len()).max().unwrap_or(0);
         let n = batch.len();
@@ -504,12 +519,13 @@ impl EmbeddingGemma2 {
             mask[r * max_len..r * max_len + row.len()].fill(1);
         }
         let (img, img_tokens) = image_features.unwrap_or((Vec::new(), 0));
+        let (aud, aud_tokens) = audio_features.unwrap_or((Vec::new(), 0));
         let inputs = ort::inputs![
             "input_ids" => Tensor::from_array(([n, max_len], input_ids)).map_err(ort_err)?,
             "attention_mask" => Tensor::from_array(([n, max_len], mask)).map_err(ort_err)?,
             "image_features" => Tensor::from_array(([img_tokens, FEATURE_DIM], img)).map_err(ort_err)?,
             "video_features" => Tensor::from_array(([0usize, FEATURE_DIM], Vec::<f32>::new())).map_err(ort_err)?,
-            "audio_features" => Tensor::from_array(([0usize, FEATURE_DIM], Vec::<f32>::new())).map_err(ort_err)?,
+            "audio_features" => Tensor::from_array(([aud_tokens, FEATURE_DIM], aud)).map_err(ort_err)?,
         ];
         let mut session = self
             .text
@@ -565,7 +581,7 @@ impl EmbeddingGemma2 {
         // and images get no task prefix (model card, "Task Instruction Prefixes").
         let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
         let ids: Vec<i64> = self.token_ids(&text)?.into_iter().map(i64::from).collect();
-        let mut out = self.run_text(&[&ids], Some((features, pre.soft_tokens)))?;
+        let mut out = self.run_text(&[&ids], Some((features, pre.soft_tokens)), None)?;
         Ok(out.pop().expect("one input"))
     }
 
@@ -583,8 +599,15 @@ impl EmbeddingGemma2 {
 /// hard-link the resolved files side by side in a private directory (falling
 /// back to a copy across filesystems). Plain directories are used as they are.
 fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf> {
-    let onnx: Vec<String> = config
-        .files()
+    onnx_files_without_symlinks(dir, config.files(), "")
+}
+
+fn onnx_files_without_symlinks(
+    dir: &Path,
+    files: Vec<String>,
+    discriminator: &str,
+) -> Result<PathBuf> {
+    let onnx: Vec<String> = files
         .into_iter()
         .filter_map(|f| f.strip_prefix("onnx/").map(str::to_string))
         .collect();
@@ -597,7 +620,10 @@ fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf
     }
     let base = dirs::cache_dir()
         .ok_or_else(|| Error::Config("no cache directory on this platform".into()))?;
-    let key = blake3::hash(src.to_string_lossy().as_bytes()).to_hex();
+    let mut key = blake3::Hasher::new();
+    key.update(src.to_string_lossy().as_bytes());
+    key.update(discriminator.as_bytes());
+    let key = key.finalize().to_hex();
     let dst = base.join("seyk").join("models").join(&key[..16]);
     std::fs::create_dir_all(&dst).map_err(|e| io_error(&dst, e))?;
     for f in &onnx {
@@ -652,9 +678,23 @@ impl Embedder for EmbeddingGemma2 {
         &self.identity
     }
 
+    fn input_identity(&self, modality: Modality) -> &str {
+        #[cfg(feature = "audio")]
+        if modality == Modality::Audio {
+            return self
+                .audio
+                .as_ref()
+                .map_or("audio-disabled", |a| a.identity.as_str());
+        }
+        let _ = modality;
+        ""
+    }
+
     fn supports(&self, modality: Modality) -> bool {
         match modality {
             Modality::Text => true,
+            #[cfg(feature = "audio")]
+            Modality::Audio => self.config.audio,
             Modality::Image => cfg!(feature = "image") && self.vision.is_some(),
             _ => false,
         }
@@ -684,6 +724,11 @@ impl Embedder for EmbeddingGemma2 {
                     text_inputs.push(Self::text_input(*title, text, request.task)?);
                 }
                 ResourceInput::Image { bytes } => out[i] = Some(self.embed_image(bytes)?),
+                #[cfg(feature = "audio")]
+                ResourceInput::Audio {
+                    samples,
+                    sample_rate,
+                } => out[i] = Some(self.embed_audio(samples, *sample_rate)?),
                 other => {
                     return Err(Error::UnsupportedModality {
                         modality: other.modality(),
@@ -962,3 +1007,6 @@ mod resolution_tests {
         assert!(matches!(locate(&config), Err(Error::ModelNotFound(_))));
     }
 }
+
+#[cfg(feature = "audio")]
+pub mod audio;

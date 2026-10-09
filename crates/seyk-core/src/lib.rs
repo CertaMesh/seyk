@@ -5,6 +5,9 @@
 //! `hayro_font` to Off: upstream diagnostics can contain document bytes. This crate installs
 //! neither a logger nor a panic hook. PDF panics become errors via catch_unwind,
 //! but the application's panic hook still runs first; use a payload-free hook.
+//! With `audio`, Symphonia probe, construction, packet reads and decode panics
+//! likewise become payload-free `UnsupportedAudio` errors; the same panic-hook
+//! requirement applies. ALAC frame allocations are checked before construction.
 //! Unwinding does not contain aborts, OOM, hangs or excessive parser allocations.
 
 pub mod cache;
@@ -48,3 +51,6 @@ pub use provider::{
 };
 
 pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};
+
+#[cfg(feature = "audio")]
+pub mod audio;

@@ -41,6 +41,8 @@ pub mod embedder {
     #[cfg(feature = "onnx")]
     pub mod gemma {
         pub use crate::model_download::download;
+        #[cfg(feature = "audio")]
+        pub use crate::model_download::download_audio;
         pub use seyk_embeddinggemma::*;
     }
 }

@@ -13,7 +13,7 @@ pub enum ResourceInput<'a> {
     },
     /// An encoded image file (PNG, JPEG, ...).
     Image { bytes: &'a [u8] },
-    /// Mono PCM samples. Reserved: no shipped embedder accepts audio yet.
+    /// Mono PCM samples at the given sample rate.
     Audio {
         samples: &'a [f32],
         sample_rate: u32,
@@ -42,7 +42,8 @@ pub struct VideoFrame<'a> {
     pub rgb: &'a [u8],
 }
 
-/// Everything that determines what vector an embedder produces for a given input.
+/// Shared embedding-space configuration used by every modality.
+/// Modality-specific weights/preprocessing additionally use [`Embedder::input_identity`].
 ///
 /// Persisted alongside cached vectors. If any field changes, cached vectors
 /// from the old profile are never used.
@@ -77,6 +78,11 @@ pub trait Embedder: Send + Sync {
     fn identity(&self) -> &ModelIdentity;
     fn dimension(&self) -> Dimension {
         self.identity().dimension
+    }
+    /// Extra modality-specific weights/preparation identity, included in that
+    /// input's cache key without invalidating other modalities' vectors.
+    fn input_identity(&self, _modality: Modality) -> &str {
+        ""
     }
     fn supports(&self, modality: Modality) -> bool;
     fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>>;
@@ -121,6 +127,9 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
     fn identity(&self) -> &ModelIdentity {
         (**self).identity()
     }
+    fn input_identity(&self, modality: Modality) -> &str {
+        (**self).input_identity(modality)
+    }
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)
     }
@@ -149,6 +158,9 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
 impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     fn identity(&self) -> &ModelIdentity {
         (**self).identity()
+    }
+    fn input_identity(&self, modality: Modality) -> &str {
+        (**self).input_identity(modality)
     }
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)

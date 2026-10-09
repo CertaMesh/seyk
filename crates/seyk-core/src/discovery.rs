@@ -37,6 +37,7 @@ pub enum ResourceKind {
     Pdf,
     Text(TextFormat),
     Image,
+    Audio,
 }
 
 impl ResourceKind {
@@ -45,6 +46,7 @@ impl ResourceKind {
             ResourceKind::Pdf => Modality::Document,
             ResourceKind::Text(_) => Modality::Text,
             ResourceKind::Image => Modality::Image,
+            ResourceKind::Audio => Modality::Audio,
         }
     }
 
@@ -60,6 +62,8 @@ impl ResourceKind {
             Some(Self::Text(TextFormat::Plain))
         } else if CODE_EXT.contains(&ext) {
             Some(Self::Text(TextFormat::Code))
+        } else if ["wav", "flac", "mp3", "m4a"].contains(&ext) {
+            Some(Self::Audio)
         } else if IMAGE_EXT.contains(&ext) {
             Some(Self::Image)
         } else {
