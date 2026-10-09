@@ -1210,3 +1210,61 @@ The `index` mode uses fresh in-memory caches, the pinned q8 model at 256 dimensi
 and one ORT thread; counts must show every unique window actually embedded.
 Every measurement records the three load averages before and after it. Long
 fixtures live under ignored `tmp` and are deleted after verification.
+
+### Phase 5b-1 measured evidence
+
+Measured on Apple M5 Max, 64 GiB, macOS 26.5, Rust 1.99.0 release. Indexing uses CPU/q8, 256 dimensions, one ORT thread, a fresh model/process and empty in-memory cache per file. OS caches were not flushed. Up to two indexing measurements ran concurrently; other host work also ran. Load columns show **(1, 5, 15 minute averages), before → after**, not a run average. The host one-minute load was also observed above 82 during the long runs; these are shared-host costs, not isolated performance comparisons.
+
+### Preparation (no embedding model)
+
+Decode time includes verified reads and, where required, the demux duration pass. RSS is the per-process peak, including libraries. The hash and complete verified-read stages are measured separately. MB/s uses decimal MB; RSS uses MiB.
+
+| Source | Hash MB/s | Verify MB/s | Decode + verify s | Windows/s | s/audio-min | Peak MiB | Load before → after |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 10min.wav | 548.7 | 1141.1 | 0.200 | 374.8 | 0.0200 | 16.91 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| 10min.mp3 | 455.1 | 950.4 | 0.329 | 228.2 | 0.0329 | 16.44 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| old-cap.wav | 599.4 | 1209.1 | 0.386 | 339.6 | 0.0221 | 18.55 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| old-cap.mp3 | 592.9 | 1159.0 | 0.508 | 258.0 | 0.0290 | 18.58 | (30.5, 24.4, 20.9) → (30.5, 24.4, 20.9) |
+| 2h.wav | 533.7 | 1125.0 | 2.376 | 378.7 | 0.0198 | 21.25 | (28.8, 24.2, 20.8) → (28.8, 24.2, 20.8) |
+| 2h.mp3 | 622.7 | 1194.6 | 3.273 | 274.9 | 0.0273 | 19.61 | (28.8, 24.2, 20.8) → (28.3, 24.2, 20.9) |
+| over-cap.wav | 612.7 | 1045.0 | 0.001 | 0.0 | 0.0000 | 15.06 | (28.3, 24.2, 20.9) → (28.3, 24.2, 20.9) |
+| over-cap.mp3 | 507.3 | 1020.1 | 0.072 | 0.0 | 0.0006 | 12.61 | (28.3, 24.2, 20.9) → (28.3, 24.2, 20.9) |
+
+Over-cap preparation timings are **rejection latency**, not successful decode throughput; both emitted zero windows. Durations: 10 min = 600 s; old cap = 1,048.576 s; 2 h = 7,200 s; over cap = 7,260 s. Here old cap means the prior decoded-duration ceiling; the WAV header puts that synthetic source slightly above the former encoded-byte ceiling.
+
+### Full indexing
+
+Index time excludes initial text-model construction but includes lazy audio-model load, source verification, decoding, embedding and resource binding. Embedding throughput includes the first lazy audio load. Total s also includes initial model construction; it starts inside the benchmark process.
+
+| Source | Total s | Index s | Embedded windows | Embedding windows/s | Index windows/s | Index s/audio-min | Peak GiB | Load before → after |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 10min.wav | 246.415 | 244.358 | 75 | 0.308 | 0.307 | 24.436 | 1.150 | (12.9, 24.4, 30.6) → (43.8, 36.9, 34.6) |
+| 10min.mp3 | 605.480 | 602.335 | 75 | 0.125 | 0.125 | 60.234 | 1.151 | (19.6, 25.1, 30.7) → (28.2, 40.5, 38.0) |
+| old-cap.wav | 350.712 | 345.317 | 131 | 0.381 | 0.379 | 19.759 | 1.144 | (43.3, 40.5, 36.6) → (19.6, 25.1, 30.7) |
+| old-cap.mp3 | 325.285 | 319.794 | 131 | 0.411 | 0.410 | 18.299 | 1.144 | (43.3, 40.5, 36.6) → (12.9, 24.4, 30.6) |
+| 2h.wav | 2590.337 | 2588.832 | 900 | 0.349 | 0.348 | 21.574 | 1.159 | (40.7, 30.7, 24.5) → (43.3, 40.5, 36.6) |
+| 2h.mp3 | 2589.060 | 2587.555 | 900 | 0.349 | 0.348 | 21.563 | 1.123 | (40.7, 30.7, 24.5) → (43.3, 40.5, 36.6) |
+| over-cap.wav | 10.184 | 1.830 | 0 | — | 0.000 | 0.015 | 0.422 | (43.8, 36.9, 34.6) → (47.6, 37.9, 35.0) |
+| over-cap.mp3 | 9.768 | 0.885 | 0 | — | 0.000 | 0.007 | 0.405 | (47.3, 38.0, 35.1) → (46.3, 38.1, 35.1) |
+
+Over-cap index timings are rejection latency. The harness asserts zero embedder calls for both over-cap sources. The two-hour admitted cases each embedded 900 windows; source windows contain 8,998 audio seconds including overlap. No STT runs in any measurement. Over-cap RSS excludes the lazy audio model because embedding is never attempted. Admitted-case RSS stays in a narrow band across durations. The ten-minute MP3 observation is much slower than the other admitted cases; these unisolated runs do not establish a codec performance difference.
+
+### Retrieval compatibility
+
+The frozen held-out synthetic corpus retains its earlier results at both widths. Load is the whole recall gate’s before/after (1, 5, 15 minute) averages, including compilation; it is not a per-width average. The two widths ran sequentially while host contention changed, so their elapsed costs are not a dimension comparison.
+
+| Dimensions | Recall@5 | MRR@20 | Boundary Recall@5 / MRR@20 | Index s/audio-min | Gate load before → after |
+|---|---:|---:|---:|---:|---|
+| 256 | 1.000 | 0.9875 | 1.000 / 1.000 | 58.742 | (73.8, 47.5, 36.9) → (13.3, 25.4, 34.2) |
+| 768 | 1.000 | 0.9875 | 1.000 / 1.000 | 27.613 | (73.8, 47.5, 36.9) → (13.3, 25.4, 34.2) |
+
+The input-identity gate retained every recorded window hash and locator across all 18 timing/edge fixtures (20 windows). Slice samples are bit-exact after removing model-only short-tail padding. The audio embedding and feature goldens also pass their existing gates.
+
+Local validation passed on the integrated branch: Rust 1.99.0 formatting,
+default/audio workspace tests and warning-denied Clippy; generated timing and
+input-hash/slice parity; model-backed audio and cache-profile goldens; held-out
+retrieval recall; and Rust 1.89.0 default/audio all-target workspace checks.
+All-feature license validation passes. The complete cargo-deny audit reports
+pre-existing unmaintained packages number_prefix 0.4.0 (RUSTSEC-2025-0119),
+paste 1.0.15 (RUSTSEC-2024-0436), and ttf-parser 0.25.1 (RUSTSEC-2026-0192).
+Dependency manifests, the lockfile and advisory policy are unchanged.
