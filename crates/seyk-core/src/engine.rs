@@ -805,8 +805,20 @@ impl SearchEngine {
         if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
             return Ok(Some(reason));
         }
-        // Commit the whole resource once. Failed model/parser work leaves the
-        // prior resource binding untouched, even if earlier vectors were cached.
+        self.commit_media_resource(&target, &records, stats)?;
+        stats.page_diagnostics.extend(target.page_diagnostics);
+        Ok(None)
+    }
+
+    /// Publish only after preparation and the final embedding flush succeed.
+    /// Earlier cached vectors may survive failure, but the prior binding must not change.
+    #[cfg(any(feature = "pdf", feature = "audio"))]
+    fn commit_media_resource(
+        &self,
+        target: &Pending,
+        records: &[(CachedSegment, String)],
+        stats: &mut SyncStats,
+    ) -> Result<()> {
         let write = ResourceWrite {
             metadata: &target.metadata,
             version: &target.version,
@@ -819,10 +831,9 @@ impl SearchEngine {
                 })
                 .collect(),
         };
-        self.with_cache(|c| c.put_resource(&self.profile_id, &r.id, &write))?;
+        self.with_cache(|c| c.put_resource(&self.profile_id, &target.resource, &write))?;
         stats.resources_updated += 1;
-        stats.page_diagnostics.extend(target.page_diagnostics);
-        Ok(None)
+        Ok(())
     }
 
     #[cfg(any(feature = "pdf", feature = "audio"))]
@@ -932,20 +943,7 @@ impl SearchEngine {
         if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
             return Ok(Some(reason));
         }
-        let write = ResourceWrite {
-            metadata: &target.metadata,
-            version: &target.version,
-            descriptor_hash: Some(&target.descriptor_hash),
-            segments: records
-                .iter()
-                .map(|(segment, body)| SegmentWrite {
-                    segment,
-                    lexical_body: body,
-                })
-                .collect(),
-        };
-        self.with_cache(|c| c.put_resource(&self.profile_id, &r.id, &write))?;
-        stats.resources_updated += 1;
+        self.commit_media_resource(&target, &records, stats)?;
         Ok(None)
     }
 
@@ -1937,6 +1935,105 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "pdf", feature = "audio"))]
+    #[test]
+    fn media_commit_failure_preserves_binding_and_update_count() {
+        struct NoInference(crate::ModelIdentity);
+        impl Embedder for NoInference {
+            fn identity(&self) -> &crate::ModelIdentity {
+                &self.0
+            }
+            fn supports(&self, _: crate::Modality) -> bool {
+                true
+            }
+            fn embed_batch(
+                &self,
+                _: &[EmbeddingRequest<'_>],
+            ) -> seyk_embed::Result<Vec<Embedding>> {
+                panic!("committing prepared records must not run inference")
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let engine = SearchEngine::builder()
+            .embedder(NoInference(crate::ModelIdentity {
+                model_id: "test/media-commit".into(),
+                revision: "1".into(),
+                variant: "test".into(),
+                dimension: crate::Dimension::D128,
+                normalization: "l2".into(),
+                query_prompt: String::new(),
+                document_prompt: String::new(),
+                max_tokens: 512,
+            }))
+            .cache(crate::SqliteCache::open(&path).unwrap())
+            .build()
+            .unwrap();
+        let mut target = Pending {
+            resource: "test://media/document".parse().unwrap(),
+            metadata: ResourceMetadata {
+                media_type: Some("application/pdf".into()),
+                modality: crate::Modality::Document,
+                size_bytes: 10,
+                modified_ns: None,
+                content_hash: "old-content".into(),
+            },
+            version: ResourceVersion::known("old-version"),
+            descriptor_hash: "old-descriptor".into(),
+            jobs: Vec::new(),
+            page_diagnostics: Vec::new(),
+        };
+        let records = vec![(
+            CachedSegment {
+                locator: ResourceLocator::Page { page: 1 },
+                heading: None,
+                input_hash: "old-input".into(),
+            },
+            String::new(),
+        )];
+        let mut stats = SyncStats::default();
+        engine
+            .commit_media_resource(&target, &records, &mut stats)
+            .unwrap();
+        assert_eq!(stats.resources_updated, 1);
+        let binding = || {
+            engine
+                .with_cache(|cache| cache.resource(engine.profile_id(), &target.resource))
+                .unwrap()
+                .unwrap()
+        };
+        let old = binding();
+        target.metadata.content_hash = "new-content".into();
+        target.version = ResourceVersion::known("new-version");
+        target.descriptor_hash = "new-descriptor".into();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        // Fail after put_resource has deleted the old binding inside its transaction.
+        conn.execute_batch(
+            "CREATE TRIGGER fail_media_commit BEFORE INSERT ON resources
+             BEGIN SELECT RAISE(ABORT, 'injected media commit failure'); END;",
+        )
+        .unwrap();
+        let error = engine
+            .commit_media_resource(&target, &[], &mut stats)
+            .unwrap_err();
+        assert!(matches!(error, Error::Cache(_)));
+        assert!(error.to_string().contains("injected media commit failure"));
+        assert_eq!(stats.resources_updated, 1);
+        assert_eq!(binding(), old);
+
+        conn.execute_batch("DROP TRIGGER fail_media_commit;")
+            .unwrap();
+        engine
+            .commit_media_resource(&target, &[], &mut stats)
+            .unwrap();
+        assert_eq!(stats.resources_updated, 2);
+        let new = binding();
+        assert_eq!(new.metadata, target.metadata);
+        assert_eq!(new.version, target.version);
+        assert_eq!(new.descriptor_hash.as_deref(), Some("new-descriptor"));
+        assert!(new.segments.is_empty());
+    }
 
     #[test]
     fn keywords_count_fully_for_names_and_identifiers_only() {
