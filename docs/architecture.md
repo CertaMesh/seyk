@@ -998,3 +998,89 @@ cargo test --release --features audio --test audio_eval largest_allowed_file -- 
 
 Next: Phase 5b requires a separate STT/extraction decision and a user decision
 before changing the 32 MiB input-size policy.
+||||||| parent of 6bf0018 (fix(cache): isolate BM25 by profile and maintain live corpus statistics)
+
+## P11 report: per-profile BM25 and live deletion statistics
+
+### Implemented
+
+Schema v6 gives every registered profile a regular FTS5 table named
+`segments_fts_p_<hex(profile UTF-8)>`. Its name, path, heading and body columns
+hold sorted normalized tokens, including duplicates, never source word order.
+This stores the same information recoverable from the old full-detail postings
+in a more directly readable form, with an additional copy on disk. The index
+and vectors remain sensitive; OS encryption remains the at-rest boundary.
+
+BM25 now uses only the selected profile's live indexed segments. Other profiles
+cannot affect its scores, order or top-k results. Ordinary FTS deletes let SQLite
+update document and token totals immediately, including replacement writes;
+results match a fresh surviving-document index without periodic rebuilds.
+The scoring corpus is still the whole profile, even when querying a path subset.
+Field weights, query construction, tie ordering, CLI JSON and MemoryCache stay
+unchanged.
+
+The v3/v4/v5 migration reconstructs sorted fields from live `fts5vocab(instance)`
+postings. It retains token multiplicities, field boundaries and zero-token rows,
+checks full occurrence equivalence, and ignores deleted/orphan rows. Known
+legacy-invalidated segments stay unindexed until their next sync. Unexpected
+missing keyword rows abort the migration. Embedding bytes, input hashes, resource
+state, profile IDs and segment rowids survive; no source reads or re-embedding
+are required for a valid v5 cache. The same transaction pins segment rowids as
+`id INTEGER PRIMARY KEY`. Any migration failure rolls back to the old schema.
+The v1/v2 privacy reset still keeps segment/vector references and marks resources
+stale, including their provider version and preparation descriptor.
+
+Registration creates its table transactionally. Unknown-profile searches return
+empty; a registered profile with a missing table produces an error. Clear drops
+all per-profile FTS virtual tables, including orphans, then retains the existing
+empty-cache checkpoint/VACUUM. Many profiles can exceed rusqlite's default
+statement-cache capacity; this affects preparation cost, not correctness.
+
+### Deliberately excluded
+
+No automatic migration VACUUM, secure deletion, vector pruning, new profile
+identity, or extraction change. Migration replaces the active index; it does not
+scrub freed pages, old WAL frames, backups or snapshots. Physical erasure remains
+separate work. Migration needs space for both indexes and the WAL, plus memory
+for reconstructed tokens and SQLite's verification queries.
+
+### Upgrading
+
+This is a **one-way cache upgrade**. Stop older Seyk processes before opening an
+existing cache with schema v6. Older binaries treat an unknown schema as disposable
+and **delete the cache, including embeddings**. Use separate `--cache-path` files
+when running mixed versions. New binaries reject unknown/future versions and
+nonempty databases missing version metadata without dropping their tables.
+The next release notes must repeat this warning; the crate version remains 0.1.0.
+
+### Measurements and checks
+
+Public synthetic release-mode benchmark on macOS ARM with bundled SQLite 3.53.2:
+32 profiles, 20,031 documents and 4,046,200 postings (20,000 documents in the
+largest profile). `dbstat` allocated keyword pages grew from 22,441,984 to
+68,714,496 bytes, **3.062×** on this corpus; this is larger than the design's
+approximate 2× estimate and depends on token distribution. These are active
+keyword pages, excluding relational tables, freed pages and WAL.
+
+In the final run, single-document replacement p50/p95 was 0.504/1.150 ms;
+deletion was 0.176/0.541 ms; a 100-resource batch delete took 53.54 ms.
+Stored document/token totals and BM25 matched a fresh live index exactly after
+100 replacements and 200 deletions. Migration took 99.04 s with a 71,465,552-byte
+WAL; the full benchmark process peaked at 358,645,760 bytes RSS. An earlier run
+on the same busy machine migrated in 50.94 s. The migration's occurrence
+verification scans the old vocabulary per profile, so this one-time cost grows
+with both postings and profile count. These are local observations, not latency
+bounds. Reproduce with:
+
+```sh
+cargo test -p seyk-core --release --locked --test cache measure_p11 -- --ignored --nocapture
+```
+
+The public asymmetric ranking regression keeps A's top two documents and scores
+(3.928078, 3.868289) unchanged across B registration, addition, replacement,
+deletion, pruning and reopen. Previously, B reversed A's top two results and its
+deletion left inflated scores. Additional bundled-SQLite tests cover 24 edit/delete
+steps against fresh SQLite and MemoryCache, content integrity checks, Unicode and
+duplicate postings, empty-token documents, sparse IDs across VACUUM, transactional
+rollback, real v1–v5 layouts, warm v5 reuse with a provider that forbids reads,
+unknown schemas, arbitrary profile IDs, and sorted persisted fields.

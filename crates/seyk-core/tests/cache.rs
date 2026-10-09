@@ -454,13 +454,10 @@ fn memory_cache_prunes_only_unreferenced_vectors() {
 }
 
 #[test]
-fn characterize_cross_profile_bm25_score_and_top_k_contamination() {
+fn cross_profile_bm25_scores_and_top_k_are_isolated() {
     use seyk_core::cache::LexicalHit;
     use seyk_core::lexical::LexicalQuery;
 
-    // F-S04-2 / Solo #4390 (P10): characterize the existing defect, not a desired
-    // scoring contract. P11 should replace the contaminated expectations with
-    // profile isolation. No production ranking or schema change belongs here.
     let dir = TempDir::new().unwrap();
     let database = dir.path().join("cache.sqlite3");
     let mut sqlite = SqliteCache::open(&database).unwrap();
@@ -480,9 +477,7 @@ fn characterize_cross_profile_bm25_score_and_top_k_contamination() {
     // have equal token lengths and contain neither query term on any platform.
     let value = resource(&["synthetic"]);
     for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
-        for p in ["a", "b"] {
-            cache.register_profile(p, &profile(p)).unwrap();
-        }
+        cache.register_profile("a", &profile("a")).unwrap();
         for (id, body) in ids.iter().zip(&bodies) {
             cache.put_resource("a", id, &write(&value, body)).unwrap();
         }
@@ -517,93 +512,39 @@ fn characterize_cross_profile_bm25_score_and_top_k_contamination() {
     assert!(alone[0].score > alone[1].score);
 
     for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
+        cache.register_profile("b", &profile("b")).unwrap();
+        same_scores_and_order(&alone, &measure(cache));
         for (i, id) in ids[12..].iter().enumerate() {
             cache
                 .put_resource("b", id, &write(&value, &"quartz ".repeat(40 + i)))
                 .unwrap();
         }
     }
-    let contaminated = measure(&sqlite);
+    same_scores_and_order(&alone, &measure(&sqlite));
     same_scores_and_order(&memory_alone, &measure(&memory));
-    assert_eq!(contaminated[0].resource, ids[1]);
-    assert_eq!(contaminated[1].resource, ids[0]);
-    assert!(contaminated[0].score > contaminated[1].score);
-    for original in &alone {
-        let changed = contaminated
-            .iter()
-            .find(|h| h.resource == original.resource)
+    for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
+        cache
+            .put_resource(
+                "b",
+                &ids[12],
+                &write(&resource(&["one", "two"]), "amber amber"),
+            )
             .unwrap();
-        let delta = changed.score - original.score;
-        assert!(
-            delta.abs() > 0.1,
-            "expected measurable movement for {original:?}"
-        );
-        println!(
-            "P10 {}: A alone / MemoryCache={:.6}, with B={:.6}, delta={delta:+.6} ({:+.2}%)",
-            original.resource,
-            original.score,
-            changed.score,
-            100.0 * delta / original.score,
-        );
     }
-
-    // Read the existing contentless index through its supported vocabulary API.
-    // Per-instance postings retain the profile join, frequencies and lengths
-    // needed to investigate P11 without re-reading source bodies. This only
-    // measures the index; it neither migrates nor changes the scoring path.
-    let conn = rusqlite::Connection::open(&database).unwrap();
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE temp.p10_vocab USING fts5vocab(main, segments_fts, instance);",
-    )
-    .unwrap();
-    let counts = || -> Vec<(String, i64, i64, i64)> {
-        conn.prepare(
-            "SELECT s.profile, count(DISTINCT s.rowid), count(*),
-                count(DISTINCT CASE WHEN v.term = 'quartz' THEN s.rowid END)
-         FROM p10_vocab v JOIN segments s ON s.rowid = v.doc
-         GROUP BY s.profile ORDER BY s.profile",
-        )
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap()
-    };
-    assert_eq!(
-        counts(),
-        [("a".into(), 12, 114, 2), ("b".into(), 6, 279, 6)]
-    );
-
+    same_scores_and_order(&alone, &measure(&sqlite));
     for cache in [&mut sqlite as &mut dyn EmbeddingCache, &mut memory] {
         cache.remove_resources("b", &ids[12..]).unwrap();
-        assert!(cache.resource_index("b").unwrap().is_empty());
-        // A's complete stored resources stayed fixed throughout the experiment.
+        cache.prune_orphans("b").unwrap();
         for id in &ids[..12] {
             assert_eq!(cache.resource("a", id).unwrap().unwrap(), value);
         }
     }
-    let removed = measure(&sqlite);
-    assert_eq!(counts(), [("a".into(), 12, 114, 2)]);
-    // Bundled SQLite 3.53.2's contentless-delete path adds tombstones without
-    // decrementing the stored row/token totals used by BM25. Live term matches
-    // exclude B, but those totals still include it: deleting B restores the order,
-    // NOT the scores, even after reopening. P11 must account for this lifecycle
-    // effect instead of assuming profile deletion restores shared statistics.
-    for (original, deleted) in alone.iter().zip(&removed) {
-        assert_eq!(original.resource, deleted.resource);
-        let delta = deleted.score - original.score;
-        assert!(delta > 1.0);
-        println!(
-            "P10 {}: after deleting B={:.6}, delta from A alone={delta:+.6} ({:+.2}%)",
-            deleted.resource,
-            deleted.score,
-            100.0 * delta / original.score,
-        );
-    }
-    same_scores_and_order(&removed, &measure(&SqliteCache::open(&database).unwrap()));
+    same_scores_and_order(&alone, &measure(&sqlite));
+    same_scores_and_order(&alone, &measure(&SqliteCache::open(&database).unwrap()));
     same_scores_and_order(&memory_alone, &measure(&memory));
     println!(
-        "P10 top-1: d00 -> d01 -> d00; top-2 order reverses with B; deletion does not restore scores"
+        "P11 top-1/top-2 unchanged after B add/replace/delete/prune/reopen; scores {:.6}, {:.6}",
+        alone[0].score, alone[1].score
     );
 }
 
@@ -714,22 +655,15 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        let fts = conn
-            .prepare("SELECT id,block FROM segments_fts_data ORDER BY id")
-            .unwrap()
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
+        let fts = common::legacy::postings(conn);
         (vectors, segments, fts)
     };
-    // Recreate the actual v3 resources layout, without provider state.
-    conn.execute_batch("ALTER TABLE resources DROP COLUMN version; ALTER TABLE resources DROP COLUMN descriptor_hash; UPDATE meta SET value='3' WHERE key='schema_version';").unwrap();
+    common::legacy::downgrade(&conn, "3");
     let stored = snapshot(&conn);
     drop(conn);
     let cache = SqliteCache::open(&file).unwrap();
     let conn = Connection::open(&file).unwrap();
-    assert_eq!(snapshot(&conn), stored); // Migration preserves every existing byte/rowid.
+    assert_eq!(snapshot(&conn), stored); // Preserve vector bytes, segment rowids and every posting.
     drop(conn);
     let (engine, fake) = shared_engine(cache, Dimension::D128, "r1");
     let after = engine
@@ -751,7 +685,7 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "5"
+        "6"
     );
     drop(conn);
     let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");
@@ -961,11 +895,12 @@ fn copied_v4_migration_preserves_vectors_fts_and_warm_reuse() {
     let before = search(&engine, &notes);
     drop(engine);
     let conn = Connection::open(&v4).unwrap();
-    conn.execute_batch("ALTER TABLE resources DROP COLUMN media_type; UPDATE meta SET value='4' WHERE key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    common::legacy::downgrade(&conn, "4");
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
     let snapshot = |c: &Connection| {
         ["SELECT quote(profile)||quote(input_hash)||hex(vector) FROM embeddings ORDER BY profile,input_hash",
          "SELECT quote(rowid)||quote(path)||quote(ordinal)||quote(locator)||quote(heading)||quote(input_hash) FROM segments ORDER BY rowid",
-         "SELECT quote(id)||hex(block) FROM segments_fts_data ORDER BY id",
          "SELECT quote(id)||quote(profile)||quote(dimension) FROM profiles ORDER BY id"]
         .map(|sql| c.prepare(sql).unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap())
     };
@@ -990,4 +925,545 @@ fn copied_v4_migration_preserves_vectors_fts_and_warm_reuse() {
             .unwrap(),
         "4"
     );
+}
+
+fn fts_totals(conn: &rusqlite::Connection, profile: &str) -> Vec<u8> {
+    conn.query_row(
+        &format!(
+            "SELECT block FROM {}_data WHERE id=1",
+            common::legacy::table(profile)
+        ),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn assert_integrity(conn: &rusqlite::Connection, profile: &str) {
+    let table = common::legacy::table(profile);
+    conn.execute_batch(&format!(
+        "INSERT INTO {table}({table},rank) VALUES('integrity-check',1)"
+    ))
+    .unwrap();
+}
+
+#[test]
+fn replacements_and_deletions_match_a_fresh_live_corpus() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("churn.db");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("p", &profile("p")).unwrap();
+    let ids: Vec<ResourceId> = (0..12)
+        .map(|i| format!("mem://corpus/d{i:02}").parse().unwrap())
+        .collect();
+    let query = seyk_core::lexical::LexicalQuery::new(["quartz amber"]);
+    let wanted = ids.iter().cloned().collect();
+    let mut live = std::collections::BTreeMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        let body = if i < 2 {
+            "quartz quartz amber"
+        } else {
+            "neutral pebble"
+        };
+        cache
+            .put_resource("p", id, &write(&resource(&["a", "b"]), body))
+            .unwrap();
+        live.insert(i, (2, body));
+    }
+    // Fewer segments, empty body, no segments, duplicate removals, rowid reuse,
+    // delete-to-empty and reinsert. Compare immediately AND on a fresh connection.
+    for step in 0..24 {
+        let i = step % 12;
+        if step % 3 == 0 {
+            cache
+                .remove_resources("p", &[ids[i].clone(), ids[i].clone()])
+                .unwrap();
+            live.remove(&i);
+        } else {
+            let count = step % 3 - 1;
+            let body = if step % 2 == 0 {
+                ""
+            } else {
+                "quartz amber amber"
+            };
+            let hashes = vec!["replacement"; count];
+            cache
+                .put_resource("p", &ids[i], &write(&resource(&hashes), body))
+                .unwrap();
+            live.insert(i, (count, body));
+        }
+        let fresh_db = dir.path().join(format!("fresh-{step}.db"));
+        let mut fresh = SqliteCache::open(&fresh_db).unwrap();
+        let mut memory = MemoryCache::new();
+        for c in [&mut fresh as &mut dyn EmbeddingCache, &mut memory] {
+            c.register_profile("p", &profile("p")).unwrap();
+            for (&i, &(count, body)) in &live {
+                c.put_resource(
+                    "p",
+                    &ids[i],
+                    &write(&resource(&vec!["replacement"; count]), body),
+                )
+                .unwrap();
+            }
+        }
+        let expected = fresh.lexical_search("p", &query, &wanted, 12).unwrap();
+        for c in [
+            &cache as &dyn EmbeddingCache,
+            &SqliteCache::open(&database).unwrap(),
+            &memory,
+        ] {
+            assert_eq!(
+                c.lexical_search("p", &query, &wanted, 12).unwrap(),
+                expected,
+                "step {step}"
+            );
+        }
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            fts_totals(&conn, "p"),
+            fts_totals(&rusqlite::Connection::open(&fresh_db).unwrap(), "p")
+        );
+        assert_integrity(&conn, "p");
+    }
+    cache.remove_resources("p", &ids).unwrap();
+    cache.remove_resources("p", &ids).unwrap();
+    assert!(
+        cache
+            .lexical_search("p", &query, &wanted, 12)
+            .unwrap()
+            .is_empty()
+    );
+    cache
+        .put_resource("p", &ids[0], &write(&resource(&["again"]), "quartz amber"))
+        .unwrap();
+    assert_eq!(
+        cache.lexical_search("p", &query, &wanted, 1).unwrap().len(),
+        1
+    );
+    assert_integrity(&rusqlite::Connection::open(&database).unwrap(), "p");
+}
+
+#[test]
+fn arbitrary_profiles_lifecycle_missing_tables_and_path_subset() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("profiles.db");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    let id: ResourceId = "mem://corpus/note".parse().unwrap();
+    let second: ResourceId = "mem://corpus/second".parse().unwrap();
+    let wanted = paths(&[&second]);
+    let query = seyk_core::lexical::LexicalQuery::new(["quartz"]);
+    for p in ["", "a", "A", "a_data", "'\";--", "Σ東京"] {
+        cache.register_profile(p, &profile(p)).unwrap();
+        cache.register_profile(p, &profile(p)).unwrap();
+        assert!(
+            cache
+                .lexical_search(p, &query, &wanted, 1)
+                .unwrap()
+                .is_empty()
+        );
+        cache
+            .put_resource(p, &id, &write(&resource(&["a"]), "quartz quartz"))
+            .unwrap();
+        cache
+            .put_resource(p, &second, &write(&resource(&["b"]), "quartz"))
+            .unwrap();
+        assert_eq!(
+            cache.lexical_search(p, &query, &wanted, 1).unwrap()[0].resource,
+            second
+        );
+    }
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    assert!(
+        cache
+            .lexical_search("unknown", &query, &wanted, 1)
+            .unwrap()
+            .is_empty()
+    );
+    cache
+        .remove_resources("unknown", std::slice::from_ref(&id))
+        .unwrap();
+    conn.execute_batch("DROP TABLE segments_fts_p_61").unwrap();
+    assert!(cache.lexical_search("a", &query, &wanted, 1).is_err());
+    conn.execute_batch("CREATE VIRTUAL TABLE segments_fts_p_deadbeef USING fts5(body)")
+        .unwrap();
+    cache.clear().unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name GLOB 'segments_fts_p_*'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    cache.register_profile("a", &profile("a")).unwrap();
+    cache
+        .put_resource("a", &id, &write(&resource(&["a"]), "quartz"))
+        .unwrap();
+    assert_eq!(cache.stats().unwrap().profiles[0].segments, 1);
+}
+
+#[test]
+fn v5_migration_preserves_postings_sparse_ids_vectors_and_empty_documents() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("v5.db");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    let ids: Vec<ResourceId> = (0..12)
+        .map(|i| format!("mem://zeta/zeta{i}").parse().unwrap())
+        .collect();
+    for p in ["a", "東京"] {
+        cache.register_profile(p, &profile(p)).unwrap();
+        cache
+            .put_embeddings(
+                p,
+                &[
+                    ("h".into(), vec![1.25, -0.5]),
+                    ("orphan".into(), vec![0.75]),
+                ],
+            )
+            .unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            let mut value = resource(&["h"]);
+            value.segments[0].heading = Some("Zürich Café Café κόσμος 東京".into());
+            cache
+                .put_resource(
+                    p,
+                    id,
+                    &write(
+                        &value,
+                        if i == 0 {
+                            "quartz quartz amber नमस्ते"
+                        } else {
+                            "neutral"
+                        },
+                    ),
+                )
+                .unwrap();
+        }
+    }
+    drop(cache);
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    common::legacy::downgrade(&conn, "5");
+    // An actual zero-posting document, a sparse rowid, and an orphan (discarded).
+    conn.execute_batch(
+        "UPDATE segments SET rowid=1001 WHERE rowid=1;
+        DELETE FROM segments_fts WHERE rowid=1;
+        INSERT INTO segments_fts(rowid,name,path,heading,body) VALUES(1001,'','','','');
+        INSERT INTO segments_fts(rowid,body) VALUES(99999,'obsolete obsolete');
+        DELETE FROM segments_fts WHERE rowid=99999;",
+    )
+    .unwrap();
+    let before = common::legacy::postings(&conn);
+    let rows = |c: &rusqlite::Connection| {
+        c.prepare("SELECT rowid FROM segments ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let vectors = |c: &rusqlite::Connection| {
+        c.prepare("SELECT hex(vector) FROM embeddings ORDER BY profile,input_hash")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let old_rows = rows(&conn);
+    let old_vectors = vectors(&conn);
+    drop(SqliteCache::open(&database).unwrap());
+    assert_eq!(common::legacy::postings(&conn), before);
+    assert_eq!(rows(&conn), old_rows);
+    assert_eq!(vectors(&conn), old_vectors);
+    assert_eq!(
+        conn.query_row(
+            "SELECT body FROM segments_fts_p_61 WHERE rowid=1001",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        ""
+    );
+    for p in ["a", "東京"] {
+        assert_integrity(&conn, p);
+    }
+    for p in ["a", "東京"] {
+        assert_eq!(fts_totals(&conn, p)[0], 12);
+        let table = common::legacy::table(p);
+        conn.execute_batch(&format!("CREATE VIRTUAL TABLE fresh USING fts5(name,path,heading,body,tokenize='unicode61 remove_diacritics 2');
+            INSERT INTO fresh(rowid,name,path,heading,body) SELECT rowid,name,path,heading,body FROM {table};")).unwrap();
+        let fresh: Vec<u8> = conn
+            .query_row("SELECT block FROM fresh_data WHERE id=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts_totals(&conn, p), fresh);
+        conn.execute_batch("DROP TABLE fresh").unwrap();
+    }
+    conn.execute_batch("VACUUM").unwrap();
+    assert_eq!(rows(&conn), old_rows);
+    assert_eq!(common::legacy::postings(&conn), before);
+    // Reopening is idempotent; deleting the empty-token document updates N.
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.remove_resources("a", &[ids[0].clone()]).unwrap();
+    assert_eq!(fts_totals(&conn, "a")[0], 11);
+    assert_integrity(&conn, "a");
+}
+
+#[test]
+fn migration_failure_and_unsupported_metadata_preserve_the_database() {
+    for failure in [
+        "future",
+        "unknown",
+        "missing",
+        "no_meta",
+        "missing_row",
+        "unsorted",
+    ] {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("broken.db");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("a", &profile("a")).unwrap();
+        let id: ResourceId = "mem://corpus/note".parse().unwrap();
+        cache
+            .put_resource("a", &id, &write(&resource(&["h"]), "amber quartz"))
+            .unwrap();
+        cache
+            .put_embeddings("a", &[("h".into(), vec![1.0])])
+            .unwrap();
+        drop(cache);
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        common::legacy::downgrade(&conn, "5");
+        conn.execute_batch(match failure {
+            "future" => "UPDATE meta SET value='7'",
+            "unknown" => "UPDATE meta SET value='garbage'",
+            "missing" => "DELETE FROM meta",
+            "no_meta" => "DROP TABLE meta",
+            "missing_row" => "DELETE FROM segments_fts",
+            _ => "DELETE FROM segments_fts; INSERT INTO segments_fts(rowid,body) VALUES(1,'zulu alpha')",
+        }).unwrap();
+        let snapshot = || {
+            let schema = conn
+                .prepare("SELECT name,sql FROM sqlite_master ORDER BY name")
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            let vector: String = conn
+                .query_row("SELECT hex(vector) FROM embeddings", [], |r| r.get(0))
+                .unwrap();
+            (schema, vector, common::legacy::postings(&conn))
+        };
+        let before = snapshot();
+        assert!(SqliteCache::open(&database).is_err(), "{failure}");
+        assert_eq!(snapshot(), before, "{failure}");
+    }
+}
+
+#[test]
+fn v5_warm_migration_does_not_read_sources_or_embed() {
+    let dir = TempDir::new().unwrap();
+    let notes = dir.path().join("note.txt");
+    fs::write(&notes, "quartz amber").unwrap();
+    let database = dir.path().join("cache.db");
+    let (engine, _) = shared_engine(SqliteCache::open(&database).unwrap(), Dimension::D128, "r1");
+    let before = engine
+        .search("alpha garden")
+        .paths([&notes])
+        .previews(None)
+        .execute()
+        .unwrap();
+    drop(engine);
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    common::legacy::downgrade(&conn, "5");
+    struct NoRead;
+    impl seyk_core::ResourceProvider for NoRead {
+        fn list(
+            &self,
+            scope: &seyk_core::ResourceScope,
+        ) -> seyk_core::Result<Vec<seyk_core::ProvidedResource>> {
+            seyk_core::ResourceProvider::list(&seyk_core::FsProvider, scope)
+        }
+        fn read(&self, _: &ResourceId) -> seyk_core::Result<Vec<u8>> {
+            panic!("warm migration must not read a source")
+        }
+        fn version(&self, id: &ResourceId) -> seyk_core::Result<ResourceVersion> {
+            seyk_core::ResourceProvider::version(&seyk_core::FsProvider, id)
+        }
+    }
+    let fake = std::sync::Arc::new(FakeEmbedder::new(Dimension::D128, "r1"));
+    let engine = SearchEngine::builder()
+        .shared_embedder(fake.clone())
+        .provider(NoRead)
+        .cache(SqliteCache::open(&database).unwrap())
+        .segmenter(TextSegmenter::new(TextSegmenterConfig {
+            min_chars: 0,
+            target_chars: 20,
+            max_chars: 100,
+            overlap_chars: 0,
+        }))
+        .build()
+        .unwrap();
+    let after = engine
+        .search("alpha garden")
+        .paths([&notes])
+        .previews(None)
+        .execute()
+        .unwrap();
+    assert_eq!(after.hits, before.hits);
+    assert_eq!(after.stats.sync.resources_updated, 0);
+    assert_eq!(after.stats.sync.resources_unchanged, 1);
+    assert_eq!(fake.resource_count(), 0);
+}
+
+#[test]
+#[ignore = "public synthetic P11 storage, migration and churn measurement"]
+fn measure_p11_storage_migration_and_churn() {
+    use std::time::Instant;
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("measure.db");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    for i in 0..32 {
+        cache
+            .register_profile(&format!("p{i}"), &profile("bench"))
+            .unwrap();
+    }
+    drop(cache);
+    let mut conn = rusqlite::Connection::open(&database).unwrap();
+    let body = (0..200)
+        .map(|i| format!("token{i:04}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let ids: Vec<ResourceId> = (0..20_000)
+        .map(|i| format!("mem://synthetic/d{i:05}").parse().unwrap())
+        .collect();
+    {
+        let tx = conn.transaction().unwrap();
+        let table = common::legacy::table("p0");
+        for (i, id) in ids.iter().enumerate() {
+            let key: Vec<u8> = std::iter::once(0).chain(id.as_str().bytes()).collect();
+            tx.execute("INSERT INTO resources(profile,path,modality,size_bytes,content_hash,version) VALUES('p0',?1,'text',1,'synthetic','null')",[&key]).unwrap();
+            tx.execute("INSERT INTO segments(profile,path,ordinal,locator,input_hash) VALUES('p0',?1,0,'{\"kind\":\"whole_resource\"}','h')",[&key]).unwrap();
+            let rowid = tx.last_insert_rowid();
+            tx.execute(&format!("INSERT INTO {table}(rowid,name,path,heading,body) VALUES(?1,'synthetic','synthetic','',?2)"),rusqlite::params![rowid,body]).unwrap();
+            if i < 31 {
+                let p = format!("p{}", i + 1);
+                tx.execute("INSERT INTO resources(profile,path,modality,size_bytes,content_hash) VALUES(?1,?2,'text',1,'synthetic')",rusqlite::params![p,key]).unwrap();
+                tx.execute("INSERT INTO segments(profile,path,ordinal,locator,input_hash) VALUES(?1,?2,0,'{\"kind\":\"whole_resource\"}','h')",rusqlite::params![p,key]).unwrap();
+                let rowid = tx.last_insert_rowid();
+                let t = common::legacy::table(&p);
+                tx.execute(
+                    &format!("INSERT INTO {t}(rowid,body) VALUES(?1,?2)"),
+                    rusqlite::params![rowid, body],
+                )
+                .unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+    common::legacy::downgrade(&conn, "5");
+    let keyword_bytes = |c: &rusqlite::Connection| {
+        c.query_row(
+            "SELECT sum(pgsize) FROM dbstat WHERE name GLOB 'segments_fts*'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    let before = keyword_bytes(&conn);
+    let start = Instant::now();
+    let mut cache = SqliteCache::open(&database).unwrap();
+    let migration = start.elapsed();
+    assert!(cache.resource("p0", &ids[1000]).unwrap().is_some());
+    let after = keyword_bytes(&conn);
+    let wal = fs::metadata(format!("{}-wal", database.display()))
+        .unwrap()
+        .len();
+    println!(
+        "P11 32 profiles / 20,031 documents / 4,046,200 postings: keyword allocated bytes {before} -> {after} ({:.3}x); migration {migration:?}; WAL bytes {wal}",
+        after as f64 / before as f64
+    );
+    let value = resource(&["h"]);
+    let mut replaces = Vec::new();
+    for id in &ids[..100] {
+        let start = Instant::now();
+        cache.put_resource("p0", id, &write(&value, &body)).unwrap();
+        replaces.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let mut deletes = Vec::new();
+    for id in &ids[100..200] {
+        let start = Instant::now();
+        cache
+            .remove_resources("p0", std::slice::from_ref(id))
+            .unwrap();
+        deletes.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let start = Instant::now();
+    cache.remove_resources("p0", &ids[200..300]).unwrap();
+    let batch = start.elapsed();
+    replaces.sort_by(f64::total_cmp);
+    deletes.sort_by(f64::total_cmp);
+    // Compare live-corpus totals and raw BM25 to a fresh regular FTS table after 300 edits/deletes.
+    let table = common::legacy::table("p0");
+    conn.execute_batch(&format!("CREATE VIRTUAL TABLE fresh USING fts5(name,path,heading,body,tokenize='unicode61 remove_diacritics 2');
+        INSERT INTO fresh(rowid,name,path,heading,body) SELECT rowid,name,path,heading,body FROM {table};")).unwrap();
+    let fresh: Vec<u8> = conn
+        .query_row("SELECT block FROM fresh_data WHERE id=1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fts_totals(&conn, "p0"), fresh);
+    let score = |t: &str| {
+        conn.query_row(&format!("SELECT bm25({t},10,3,4,1) FROM {t} WHERE {t} MATCH 'token0001' ORDER BY rowid LIMIT 1"),[],|r|r.get::<_,f64>(0)).unwrap()
+    };
+    assert_eq!(score(&table), score("fresh"));
+    assert_integrity(&conn, "p0");
+    println!(
+        "P11 replace ms p50={:.3} p95={:.3}; delete ms p50={:.3} p95={:.3}; batch delete 100={batch:?}; totals and BM25 exact fresh parity after 300 edits/deletes",
+        replaces[50], replaces[95], deletes[50], deletes[95]
+    );
+}
+
+#[test]
+fn v5_migration_keeps_legacy_invalidated_segments_unindexed() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("partial.db");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("a", &profile("a")).unwrap();
+    let id: ResourceId = "mem://corpus/stale".parse().unwrap();
+    cache
+        .put_resource("a", &id, &write(&resource(&["h"]), "quartz"))
+        .unwrap();
+    cache
+        .put_embeddings("a", &[("h".into(), vec![1.0])])
+        .unwrap();
+    drop(cache);
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    common::legacy::downgrade(&conn, "5");
+    conn.execute_batch(
+        "DELETE FROM segments_fts;
+        UPDATE resources SET modified_ns=NULL,content_hash='',version='null',descriptor_hash=NULL;",
+    )
+    .unwrap();
+    let mut cache = SqliteCache::open(&database).unwrap();
+    assert_eq!(cache.vectors_for("a", &paths(&[&id])).unwrap().len(), 1);
+    assert!(
+        cache
+            .lexical_search(
+                "a",
+                &seyk_core::lexical::LexicalQuery::new(["quartz"]),
+                &paths(&[&id]),
+                1
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(cache.prune_orphans("a").unwrap(), 0);
+    cache
+        .put_resource("a", &id, &write(&resource(&["h"]), "quartz"))
+        .unwrap();
+    assert_eq!(fts_totals(&conn, "a")[0], 1);
+    assert_integrity(&conn, "a");
 }

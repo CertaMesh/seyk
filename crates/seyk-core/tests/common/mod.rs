@@ -1,5 +1,7 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod legacy;
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
