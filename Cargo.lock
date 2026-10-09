@@ -3083,6 +3083,7 @@ dependencies = [
  "seyk-core",
  "seyk-embed",
  "seyk-embeddinggemma",
+ "seyk-stt",
  "tempfile",
  "tokenizers",
  "tokio",
@@ -3134,6 +3135,23 @@ dependencies = [
  "serde",
  "serde_json",
  "seyk-embed",
+ "tempfile",
+ "tokenizers",
+]
+
+[[package]]
+name = "seyk-stt"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "flate2",
+ "libc",
+ "ort",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "seyk-core",
+ "sha2",
  "tempfile",
  "tokenizers",
 ]

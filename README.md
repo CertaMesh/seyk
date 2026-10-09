@@ -180,18 +180,19 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
   seyk extract --from-json - --json
 ```
 
-Without `--json`, extract writes only the exact text, with no added newline.
-It needs no model, cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2` or `3`, not a bare hit. The extraction document uses
-version 3 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+For raw text, extract writes the exact bytes without an added newline; PDF text
+also needs no model. Audio STT is optional and clearly labelled (see below).
+Extraction needs no cache or network. Input must be a complete search JSON envelope
+at `schema_version: 2`, `3` or `4`, not a bare hit. The extraction document uses
+version 4 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
 
 Raw text ranges and PDF page-text ranges are supported. Images, whole-resource and other locators return
-an unsupported-extraction error. MCP extraction is deferred until MCP hits can
-carry exact locators and hashes with session-scoped read checks; MCP search and
-its root confinement are unchanged.
+an unsupported-extraction error. MCP also exposes an explicit
+`extract` tool accepting a selected MCP hit; it verifies the hash and confines
+reads to the session roots. Search never transcribes.
 
 ### Audio (opt-in)
 
@@ -204,18 +205,36 @@ Default release builds retain their existing feature set.
 transcription. WAV, FLAC, MP3 and AAC-LC/ALAC in M4A are decoded locally into
 10-second windows every 8 seconds. Results use the existing half-open `time`
 locator (`start_ms`, `end_ms`) and have no transcript or preview. Explicit audio
-extraction returns `UnsupportedExtraction`: STT is not available until Phase 5b.
+extraction requires `audio-stt` (see below); search needs no STT model.
 Missing audio weights skip individual audio files; text, images and PDFs still
 work. Search never downloads weights.
 
-The existing 32 MiB file limit still applies. Decoding also stops at 1,048.576
-seconds (the same byte budget as 16-bit mono PCM at 16 kHz). Recordings over
-about 17.5 minutes are skipped entirely, including any windows already processed.
+The default duration ceiling is two hours, configurable with
+`--max-audio-duration-secs`. Decoding/windowing uses bounded memory; it never
+holds whole-file PCM in RAM. Over-limit sources are skipped entirely.
 Complex MP4 edits,
 multiple tracks, HE-AAC/SBR and changing sample formats are rejected. MP4 edit
 lists or iTunSMPB remove encoder priming/padding; files without timing metadata
 use their decoded-sample timeline. See the [audio report](docs/architecture.md#phase-5a-audio-retrieval)
 for timing, parity and retrieval measurements.
+
+### Speech-to-text extraction (opt-in)
+
+Build with `cargo build --release --features audio-stt`, then explicitly run
+`seyk model download --stt` to install the pinned Xenova Whisper tiny FP32
+model (about 255 MiB). Inference stays offline. A local exact asset directory
+can be selected with `--stt-model-dir` or `SEYK_STT_MODEL_DIR`; it receives the
+same manifest check, including rejection of unexpected files.
+
+Select an audio hit using `seyk extract --from-json hits.json --hit 0 --json`.
+Each half-open interval is capped at 30 seconds; longer intervals return a
+typed error. Language is detected from that hit, or set with `--stt-language en`.
+Human output says **Machine transcript (may contain errors)**. JSON includes
+machine-transcription provenance, verified sample bounds, model manifest hash,
+language and `no_speech`; it does not claim word-level timestamps. Silence has
+no detected language. Transcripts are never cached or logged, and search,
+indexing and previews never invoke STT. See the
+[implementation and model gate](docs/architecture.md#phase-5b-2-on-demand-speech-to-text-extraction).
 
 ### PDFs
 
@@ -255,7 +274,7 @@ MiB total extracted text are rejected explicitly; other resources continue
 indexing. These output limits do not bound upstream decompression, CPU time or
 memory use.
 
-CLI/MCP output now uses JSON schema 3. `seyk extract` accepts schema 2 and 3
+CLI/MCP output now uses JSON schema 4. `seyk extract` accepts schema 2, 3 and 4
 search envelopes. Cache schema 5 adds nullable media type and preserves existing
 vectors, profiles and keyword indexes. Older binaries may reset a schema-5
 cache, so keep a copy if downgrading.
@@ -414,7 +433,7 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 3`.
+CLI JSON objects and MCP search responses include `schema_version: 4`.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -614,7 +633,6 @@ Everything runs locally.
 ## Performance
 
 See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to reproduce them.
-
 
 ## CPU throughput controls
 

@@ -100,3 +100,62 @@ Unmodified Symphonia crates, approved for the optional `audio` feature. Each is 
 - [symphonia-format-riff 0.5.5](https://crates.io/crates/symphonia-format-riff/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-format-riff/0.5.5/download).
 - [symphonia-metadata 0.5.5](https://crates.io/crates/symphonia-metadata/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-metadata/0.5.5/download).
 - [symphonia-utils-xiph 0.5.5](https://crates.io/crates/symphonia-utils-xiph/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-utils-xiph/0.5.5/download).
+
+## Optional speech-to-text (Phase 5b-2)
+
+`audio-stt` uses the separate FP32 graphs from
+[Xenova/whisper-tiny at 5332fcc35e32a33b86612b9a57a89be7906102b1](https://huggingface.co/Xenova/whisper-tiny/tree/5332fcc35e32a33b86612b9a57a89be7906102b1).
+The [card at that exact revision](https://huggingface.co/Xenova/whisper-tiny/blob/5332fcc35e32a33b86612b9a57a89be7906102b1/README.md)
+explicitly declares `license: apache-2.0` and identifies Transformers.js. Its
+1,160 bytes have SHA-256 `cdd395427d195f122aee69c00e34183f2fadd8bc217aef35ca7c43395b96d29d`.
+There is no separate LICENSE or NOTICE file in that revision's tree. Preserve
+the [exact card](crates/seyk-stt/assets/XENOVA-CARD.md) and
+[Apache-2.0 text](crates/seyk-stt/assets/APACHE-2.0.txt) with the attribution.
+We do not rely on the unlicensed onnx-community export. Model weights and
+runtime tokenizer/configuration assets are not bundled; users explicitly
+provision them with `seyk model download --stt`. The compiled
+[manifest](crates/seyk-stt/assets/manifest.json) records every length and hash.
+
+Original Whisper weights, reference mel code and mel filters come from
+[OpenAI Whisper](https://github.com/openai/whisper/tree/86098128c0b4f24f0e2aa2994de830614b474227),
+licensed MIT. The small bundled float32 mel bank is derived from its pinned
+`whisper/assets/mel_filters.npz`; its SHA-256 and reference provenance are in
+the manifest and fixture generator. Retain the following notice (also saved as
+[OPENAI-MIT.txt](crates/seyk-stt/assets/OPENAI-MIT.txt)):
+
+```text
+MIT License
+
+Copyright (c) 2022 OpenAI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+RustFFT is MIT OR Apache-2.0; tokenizers is Apache-2.0. ONNX Runtime remains the
+MIT native runtime already used by the optional embedding backend. Cargo-deny
+checks the locked Rust graph; release packaging must also preserve the model,
+mel and native-runtime notices described here. These dependency additions do
+not introduce a copyleft exception.
+
+### Local speech test generation
+
+macOS System Voice (`say`) output is for local testing only and must never be
+committed or redistributed. Speech gates require `SEYK_STT_SPEECH_WAV`, generated
+under ignored `tmp/` by `scripts/audio/stt_fixture.py`. Only public text/token
+goldens and mathematical chirp/mel fixtures are bundled.

@@ -329,6 +329,7 @@ impl Extractor for PdfTextExtractor {
             locator: locator.clone(),
             metadata: metadata.clone(),
             provenance: Some(ExtractionProvenance {
+                speech: None,
                 method: "embedded_pdf_text".into(),
                 implementation: TEXT_VERSION.into(),
             }),

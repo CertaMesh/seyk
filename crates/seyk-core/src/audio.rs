@@ -17,6 +17,8 @@ use symphonia::core::{
     probe::{Hint, Probe},
 };
 mod aac;
+mod extraction;
+pub use extraction::{AudioExtractor, SpeechToText, Transcript};
 mod alac;
 mod mp4;
 mod verified;
@@ -592,7 +594,10 @@ pub fn slice_verified(
     let ResourceLocator::Time { start_ms, end_ms } = *locator else {
         return Err(invalid("expected audio time interval"));
     };
-    if start_ms >= end_ms || end_ms - start_ms > 30_000 {
+    if end_ms.saturating_sub(start_ms) > 30_000 {
+        return Err(Error::AudioIntervalTooLong);
+    }
+    if start_ms >= end_ms {
         return Err(invalid(
             "audio slice must be nonempty and at most 30 seconds",
         ));

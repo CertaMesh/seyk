@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Readable content from a selected location in a verified resource snapshot.
 ///
 /// Unstable: may change before 1.0 (a range/streaming method is planned for audio and video).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedContent {
     /// How readable text was derived; absent for exact raw text slices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,6 +25,35 @@ pub struct ExtractedContent {
 pub struct ExtractionProvenance {
     pub method: String,
     pub implementation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech: Option<SpeechProvenance>,
+}
+
+/// Bounds identify model input, not word alignment or transcription accuracy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechProvenance {
+    pub fidelity: String,
+    pub requested_locator: ResourceLocator,
+    pub sample_start: u64,
+    pub sample_end: u64,
+    pub sample_rate: u32,
+    pub manifest_sha256: String,
+    /// None means automatic language detection was requested.
+    pub language_requested: Option<String>,
+    /// None for no_speech; never invent a language for silence.
+    pub language_detected: Option<String>,
+    pub no_speech: bool,
+}
+
+impl std::fmt::Debug for ExtractedContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtractedContent")
+            .field("text", &"[redacted]")
+            .field("source", &self.source)
+            .field("locator", &self.locator)
+            .field("provenance", &self.provenance)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Convert verified resource bytes into readable evidence.

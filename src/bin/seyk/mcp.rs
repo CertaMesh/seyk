@@ -102,9 +102,23 @@ pub struct SearchParams {
     pub mode: Option<String>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct ExtractParams {
+    /// The complete selected hit object returned by search, including locator and metadata.
+    pub hit: serde_json::Value,
+}
+#[derive(Deserialize)]
+struct SelectedHit {
+    resource: ResourceId,
+    locator: ResourceLocator,
+    metadata: seyk::ResourceMetadata,
+}
+
 #[derive(Debug, Serialize)]
 struct Hit {
     resource: ResourceId,
+    locator: ResourceLocator,
+    metadata: seyk::ResourceMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
     /// "start-end" line range, when the hit is a text segment.
@@ -294,6 +308,29 @@ impl SeykServer {
         })
     }
 
+    fn run_extract(&self, params: ExtractParams) -> Result<seyk::ExtractedContent> {
+        let hit: SelectedHit = serde_json::from_value(params.hit).map_err(|_| {
+            anyhow!("invalid selected hit: resource, locator and metadata are required")
+        })?;
+        let path = hit
+            .resource
+            .to_file_path()
+            .ok_or_else(|| anyhow!("only local resources may be extracted"))?;
+        // Authorization is independent of the caller's claimed content hash.
+        let path = confine(&path, &self.roots)?;
+        let hit = seyk::SearchHit {
+            resource: ResourceId::from_path(path)?,
+            locator: hit.locator,
+            metadata: hit.metadata,
+            score: 0.0,
+            signals: Default::default(),
+            heading: None,
+            preview: None,
+            query_index: 0,
+        };
+        Ok(self.hub.engine()?.extract(&hit)?)
+    }
+
     /// The least settled state among this session's watchers, so an agent never
     /// sees `ready` while one of its folders is still indexing. `None` means
     /// background indexing is off, never that a lock failed.
@@ -446,6 +483,8 @@ fn to_response(r: SearchResults) -> Response {
                 .to_file_path()
                 .map(|p| p.to_string_lossy().into_owned()),
             resource: h.resource,
+            locator: h.locator,
+            metadata: h.metadata,
             score: (h.score * 1000.0).round() / 1000.0,
             heading: h.heading,
             matched: [
@@ -476,6 +515,25 @@ fn to_response(r: SearchResults) -> Response {
 
 #[tool_router]
 impl SeykServer {
+    #[tool(
+        description = "Extract readable evidence from one selected search hit. Pass the entire hit object. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
+    )]
+    async fn extract(
+        &self,
+        Parameters(params): Parameters<ExtractParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let server = self.clone();
+        let outcome = tokio::task::spawn_blocking(move || server.run_extract(params))
+            .await
+            .map_err(|_| McpError::internal_error("extraction worker failed", None))?;
+        Ok(match outcome {
+            Ok(extracted) => {
+                CallToolResult::success(vec![ContentBlock::json(crate::json_output(&extracted))?])
+            }
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+        })
+    }
+
     #[tool(
         description = "Semantic search over local files (Markdown, text, code, images). Returns \
         ranked passages as path + line range + preview. Read the files at those lines before \
@@ -659,7 +717,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 3);
+        assert_eq!(response["schema_version"], 4);
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
             Path::new(response["hits"][0]["path"].as_str().unwrap())
@@ -673,6 +731,36 @@ mod tests {
         );
         assert!(response["hits"][0]["lines"].is_string());
         assert!(response["hits"][0]["preview"].is_string());
+    }
+
+    #[test]
+    fn explicit_extraction_uses_selected_hash_and_session_roots() {
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = inside.path().join("note.txt");
+        std::fs::write(&file, "quartz pebble").unwrap();
+        let server = SeykServer::new(
+            vec![inside.path().into()],
+            Hub::new(Box::new(fake_engine), false),
+        )
+        .unwrap();
+        let response = serde_json::to_value(search(&server, "quartz")).unwrap();
+        let hit = response["hits"][0].clone();
+        let result = server
+            .run_extract(ExtractParams { hit: hit.clone() })
+            .unwrap();
+        assert_eq!(result.text, "quartz pebble");
+        std::fs::write(&file, "changed bytes").unwrap();
+        assert!(
+            server
+                .run_extract(ExtractParams { hit: hit.clone() })
+                .is_err()
+        );
+        let other = outside.path().join("other.txt");
+        std::fs::write(&other, "quartz pebble").unwrap();
+        let mut escaped = hit;
+        escaped["resource"] = serde_json::to_value(ResourceId::from_path(&other).unwrap()).unwrap();
+        assert!(server.run_extract(ExtractParams { hit: escaped }).is_err());
     }
 
     #[test]

@@ -1,0 +1,15 @@
+{
+  "speech_storage": "Generated at test time in ignored tmp/stt-speech.wav; never commit or redistribute System Voice output",
+  "text": "The morning train arrives at the station. Please bring a blue notebook and a pencil. The library opens at nine. Today we will walk through the garden and look at the flowers. A small bird is singing near the window. After lunch we will read a story together.",
+  "voice": "Karen en_AU",
+  "rate": 160,
+  "reference_commit": "86098128c0b4f24f0e2aa2994de830614b474227",
+  "torch": "2.14.1",
+  "numpy": "2.5.3",
+  "mel_tolerance": "max absolute error <= 0.0001 across all 240000 floats",
+  "sha256": {
+    "mel-input.f32le": "c3fddd3f8912fb8e879819a0946f2963b31e3db410f63c27e90103e21bfc2f74",
+    "mel-reference.f32le.gz": "cf2879b7f281ef511ebdf11b7a218d4e7bdeeee6ea7bc8d4e5a3e34c1faaf3cc",
+    "token-goldens.json": "763b5766e0f2b1af19027f0fbe3fc1a7b380b4a341dd01cc591a3705408a0a69"
+  }
+}

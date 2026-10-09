@@ -176,7 +176,7 @@ fn bounded_batches_atomic_binding_and_no_audio_at_rest() {
             ..
         }
     ));
-    assert!(error.to_string().contains("STT not available until 5b"));
+    assert!(error.to_string().contains("configure an audio extractor"));
     // Different file content: two successful windows then a failure. Binding
     // must remain entirely the previous six windows, never a partial version.
     model
@@ -553,5 +553,92 @@ fn audio_uses_provider_open_without_whole_file_reads() {
     assert_eq!(
         engine.extract_audio_samples(&result.hits[0]).unwrap().len(),
         16001
+    );
+}
+
+struct SpeechSpy(Arc<AtomicUsize>);
+impl audio::SpeechToText for SpeechSpy {
+    fn implementation(&self) -> &'static str {
+        "test-spy"
+    }
+    fn manifest_sha256(&self) -> String {
+        "test-manifest".into()
+    }
+    fn transcribe(&self, samples: &[f32], _: Option<&str>) -> seyk_core::Result<audio::Transcript> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        assert!(samples.len() <= 480000);
+        Ok(audio::Transcript {
+            text: "private sentinel transcript".into(),
+            language: Some("en".into()),
+            no_speech: false,
+        })
+    }
+}
+#[test]
+fn stt_is_explicit_verified_and_never_cached_or_previewed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clip.wav");
+    let db = dir.path().join("cache.db");
+    std::fs::write(&path, wav(160001, 16000)).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let engine = SearchEngine::builder()
+        .embedder(Arc::new(Model::new("policy1")))
+        .cache(SqliteCache::open(&db).unwrap())
+        .audio_extractor(audio::AudioExtractor::new(SpeechSpy(calls.clone())))
+        .build()
+        .unwrap();
+    engine.index().paths([&path]).execute().unwrap();
+    let hits = engine
+        .search("query")
+        .paths([&path])
+        .mode(SearchMode::Semantic)
+        .limit(20)
+        .execute()
+        .unwrap()
+        .hits;
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| h.preview.is_none()));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut hit = hits[0].clone();
+    hit.locator = ResourceLocator::Time {
+        start_ms: 8000,
+        end_ms: 10001,
+    };
+    let extracted = engine.extract(&hit).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!format!("{extracted:?}").contains("private sentinel"));
+    let provenance = extracted.provenance.unwrap().speech.unwrap();
+    assert_eq!(
+        (
+            provenance.sample_start,
+            provenance.sample_end,
+            provenance.sample_rate
+        ),
+        (128000, 160001, 16000)
+    );
+    assert_eq!(provenance.requested_locator, hit.locator);
+    assert_eq!(provenance.language_detected.as_deref(), Some("en"));
+    assert_eq!(provenance.fidelity, "machine_transcription");
+    hit.locator = ResourceLocator::Time {
+        start_ms: 0,
+        end_ms: 30001,
+    };
+    assert!(matches!(
+        engine.extract(&hit),
+        Err(Error::AudioIntervalTooLong)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    std::fs::write(&path, wav(160002, 16000)).unwrap();
+    assert!(matches!(
+        engine.extract(&hits[0]),
+        Err(Error::StaleResource { .. })
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    drop(engine);
+    let persisted = std::fs::read(db).unwrap();
+    assert!(
+        !persisted
+            .windows(27)
+            .any(|b| b == b"private sentinel transcript")
     );
 }

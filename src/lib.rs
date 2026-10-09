@@ -48,3 +48,12 @@ pub mod embedder {
 }
 #[cfg(feature = "onnx")]
 mod model_download;
+
+/// Opt-in speech backend and explicit provisioning. Runtime is offline.
+#[cfg(feature = "audio-stt")]
+pub mod stt {
+    pub use crate::stt_download::download;
+    pub use seyk_stt::*;
+}
+#[cfg(feature = "audio-stt")]
+mod stt_download;

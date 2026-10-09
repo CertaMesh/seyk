@@ -32,6 +32,8 @@ jobs:
       - run: cargo test --example bench_retrieval --locked
       - run: cargo test --workspace --features audio --locked
       - run: cargo clippy --workspace --all-targets --features audio --locked -- -D warnings
+      - run: cargo test --workspace --features audio-stt --locked
+      - run: cargo clippy --workspace --all-targets --features audio-stt --locked -- -D warnings
       - name: Check standalone dependency boundaries
         run: python scripts/check_embedding_dependencies.py
       - name: Check minimal facade library
@@ -77,3 +79,4 @@ jobs:
       - run: cargo +1.89.0 check --workspace --all-targets --locked
       - run: cargo +1.89.0 build --workspace --locked
       - run: cargo +1.89.0 build --workspace --features audio --locked
+      - run: cargo +1.89.0 check --workspace --all-targets --features audio-stt --locked

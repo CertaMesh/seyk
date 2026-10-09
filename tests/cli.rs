@@ -47,7 +47,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 3);
+    assert_eq!(stats["schema_version"], 4);
     assert_eq!(stats["profiles"], serde_json::json!([]));
 
     binary()
@@ -101,9 +101,22 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
         .collect();
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
     let tools = &responses[1]["result"]["tools"];
-    assert_eq!(tools[0]["name"], "search");
+    let search = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "search")
+        .unwrap();
+    #[cfg(feature = "audio-stt")]
     assert!(
-        tools[0]["inputSchema"]["required"]
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "extract")
+    );
+    assert!(
+        search["inputSchema"]["required"]
             .as_array()
             .unwrap()
             .contains(&Value::from("queries"))
@@ -144,7 +157,13 @@ fn mcp_relays_through_a_daemon_it_starts() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
-    assert_eq!(responses[1]["result"]["tools"][0]["name"], "search");
+    assert!(
+        responses[1]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "search")
+    );
 
     let mut status = binary();
     env(&mut status);
@@ -218,7 +237,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 3);
+    assert_eq!(extracted["schema_version"], 4);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);
