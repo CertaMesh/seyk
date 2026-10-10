@@ -3174,6 +3174,7 @@ dependencies = [
  "ort",
  "rayon",
  "rustfft",
+ "same-file",
  "serde",
  "serde_json",
  "seyk-embed",
