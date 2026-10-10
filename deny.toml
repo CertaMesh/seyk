@@ -1,3 +1,11 @@
+# Ignore only these unmaintained advisories, not vulnerabilities. Revisit when
+# stable upstream releases remove the affected transitive dependencies.
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is required by tokenizers 0.23.2, the latest stable release; the 1.0 rewrite is still a prerelease and changes tokenizer behavior/API." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1 is required by lopdf 0.42.0 through pdf-extract 0.12.1; the latest published pdf-extract and compatible lopdf releases still require it." },
+]
+
 # Symphonia exceptions approved in design pad 11605, decision 1; package + version scoped.
 # Only permissive licence choices are accepted. GPL/AGPL/LGPL/SSPL and MPL
 # cannot pass without an explicit, reviewed exception. Alternative expressions
