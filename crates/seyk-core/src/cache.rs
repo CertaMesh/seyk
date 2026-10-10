@@ -130,6 +130,12 @@ pub struct CacheStats {
     pub location: Option<PathBuf>,
     pub size_bytes: Option<u64>,
     pub profiles: Vec<ProfileStats>,
+    /// Time Machine exclusion verified on macOS; unknown elsewhere or on query failure.
+    #[serde(default)]
+    pub backup_excluded: Option<bool>,
+    /// Advisory detection of known sync roots, not proof that other paths are local.
+    #[serde(default)]
+    pub in_synced_folder: bool,
 }
 
 /// Storage for resource metadata, segment locators and vectors.
@@ -420,6 +426,8 @@ impl EmbeddingCache for MemoryCache {
         Ok(CacheStats {
             location: None,
             size_bytes: None,
+            backup_excluded: None,
+            in_synced_folder: false,
             profiles,
         })
     }
@@ -575,8 +583,14 @@ impl SqliteCache {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         if let Some(dir) = path.parent() {
+            let dir = if dir.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                dir
+            };
             std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
             restrict_permissions(dir, 0o700);
+            super::cache_guards::prepare(dir)?;
         }
         let conn = Connection::open(&path)?;
         restrict_permissions(&path, 0o600);
@@ -1197,6 +1211,14 @@ impl EmbeddingCache for SqliteCache {
         Ok(CacheStats {
             location: Some(self.path.clone()),
             size_bytes: Some(size_bytes),
+            backup_excluded: self.path.parent().and_then(|dir| {
+                super::cache_guards::backup_excluded(if dir.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    dir
+                })
+            }),
+            in_synced_folder: super::cache_guards::in_synced_folder(&self.path),
             profiles,
         })
     }

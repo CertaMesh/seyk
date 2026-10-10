@@ -142,6 +142,7 @@ struct Hit {
 struct Response {
     schema_version: u32,
     hits: Vec<Hit>,
+    cache_status: Option<seyk::CacheStats>,
     segments_searched: usize,
     files: usize,
     segments_embedded: usize,
@@ -158,6 +159,17 @@ impl Hub {
             background,
             watched: Mutex::new(Vec::new()),
         })
+    }
+
+    #[cfg(unix)]
+    pub fn cache_status(&self) -> Result<Option<seyk::CacheStats>> {
+        self.engine
+            .lock()
+            .map_err(|_| anyhow!("engine lock poisoned"))?
+            .as_ref()
+            .map(|engine| engine.with_cache(|cache| cache.stats()))
+            .transpose()
+            .map_err(Into::into)
     }
 
     fn engine(&self) -> Result<Arc<SearchEngine>> {
@@ -394,6 +406,7 @@ impl SeykServer {
         }
         let mut resp = to_response(req.execute()?);
         resp.index = status;
+        resp.cache_status = Some(engine.with_cache(|cache| cache.stats())?);
         Ok(resp)
     }
 }
@@ -510,6 +523,7 @@ fn to_response(r: SearchResults) -> Response {
         segments_embedded: r.stats.sync.segments_embedded,
         took_ms: r.stats.total_ms,
         index: None,
+        cache_status: None,
     }
 }
 
@@ -717,7 +731,9 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 4);
+        assert_eq!(response["schema_version"], 5);
+        assert_eq!(response["cache_status"]["in_synced_folder"], false);
+        assert!(response["cache_status"]["backup_excluded"].is_null());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
             Path::new(response["hits"][0]["path"].as_str().unwrap())

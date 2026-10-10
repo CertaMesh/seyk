@@ -47,8 +47,14 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 4);
+    assert_eq!(stats["schema_version"], 5);
     assert_eq!(stats["profiles"], serde_json::json!([]));
+    assert_eq!(stats["in_synced_folder"], false);
+    #[cfg(target_os = "macos")]
+    assert_eq!(stats["backup_excluded"], true);
+    #[cfg(not(target_os = "macos"))]
+    assert!(stats["backup_excluded"].is_null());
+    assert!(temp.path().join("CACHEDIR.TAG").is_file());
 
     binary()
         .args(["cache", "--cache-path", cache.to_str().unwrap(), "clear"])
@@ -237,7 +243,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 4);
+    assert_eq!(extracted["schema_version"], 5);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);
@@ -271,4 +277,26 @@ fn extract_round_trip_without_a_model() {
     let empty = run(&["extract", "--from-json", "-"], &value.to_string());
     assert!(!empty.status.success());
     assert!(String::from_utf8_lossy(&empty.stderr).contains("no hit at index 0"));
+}
+
+#[test]
+fn synced_cache_warns_on_stderr_and_still_returns_json() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir(temp.path().join(".stfolder")).unwrap();
+    let cache = temp.path().join("nested/cache.sqlite3");
+    let output = binary()
+        .args([
+            "cache",
+            "--cache-path",
+            cache.to_str().unwrap(),
+            "stats",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stats["in_synced_folder"], true);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.matches("inside a known synced folder").count(), 1);
 }
