@@ -542,7 +542,21 @@ the keyword index (a SQLite FTS5 table) stores **which words occur in each passa
 and how often, not their order**. Each field is tokenized and sorted before it
 is indexed. These word frequencies are still sensitive, like embeddings. The
 cache directory is created `0700` and the file `0600`. `seyk cache clear`
-deletes every vector.
+deletes every vector and keyword row, compacts the database with `VACUUM`,
+then checkpoints and truncates its WAL. Schema upgrades also compact and truncate.
+SQLite `secure_delete=ON` zeroes deleted ordinary records; resource replacement
+and removal rebuild the affected profile's keyword index to erase deleted FTS
+postings, then truncate the WAL. Metadata/vector updates and orphan pruning also
+truncate the WAL. After these operations succeed, removed records do not remain
+readable in the current database or `-wal` file (a word still present in another
+live record remains indexed). Rebuilding costs grow with the profile's index size.
+If another connection blocks WAL cleanup, the operation reports an error even
+though its database changes may already be committed; close other cache users
+and run `seyk cache clear` with the same `--cache-path` (if supplied) to complete cleanup. For remnants left by older
+binaries, run `seyk cache clear` once. This is logical file cleanup, not physical
+secure erasure: SSD wear levelling, filesystem snapshots, backups, open reader
+snapshots and crash-interrupted cleanup may retain earlier copies. Use OS disk
+encryption and manage snapshots/backups according to your privacy needs.
 
 Protection against a lost or stolen disk depends on OS disk encryption: check
 `fdesetup status` on macOS (FileVault), `lsblk -f` / `cryptsetup status <mapping>`

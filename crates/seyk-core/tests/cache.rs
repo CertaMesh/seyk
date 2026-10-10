@@ -1487,3 +1487,231 @@ fn v5_migration_keeps_legacy_invalidated_segments_unindexed() {
     assert_eq!(fts_totals(&conn, "a")[0], 1);
     assert_integrity(&conn, "a");
 }
+
+fn raw_contains(database: &Path, needle: &str) -> bool {
+    [
+        database.to_path_buf(),
+        database.with_extension("sqlite3-wal"),
+    ]
+    .iter()
+    .filter_map(|path| match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("{}: {error}", path.display()),
+    })
+    .any(|bytes| {
+        bytes
+            .windows(needle.len())
+            .any(|part| part == needle.as_bytes())
+    })
+}
+
+#[test]
+fn deleted_cache_content_is_absent_from_database_and_wal_while_open() {
+    const SENTINEL: &str = "syntheticprivatequartzsentinel";
+    for operation in [
+        "remove", "replace", "empty", "clear", "touch", "prune", "vector",
+    ] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/note".parse().unwrap();
+        let mut value = resource(&["h"]);
+        if matches!(operation, "touch" | "empty") {
+            value.metadata.media_type = Some(SENTINEL.into());
+            if operation == "empty" {
+                value.segments.clear();
+            }
+        }
+        let body = if matches!(operation, "touch" | "empty" | "prune" | "vector") {
+            "ordinary"
+        } else {
+            SENTINEL
+        };
+        cache.put_resource("p", &id, &write(&value, body)).unwrap();
+        // Thousands of distinct postings force multiple FTS blocks, not just one tiny row.
+        let other: ResourceId = "mem://synthetic/keep".parse().unwrap();
+        let words = (0..3000)
+            .map(|i| format!("word{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        cache
+            .put_resource("p", &other, &write(&resource(&["keep"]), &words))
+            .unwrap();
+        if matches!(operation, "prune" | "vector") {
+            cache
+                .put_embeddings("p", &[(SENTINEL.into(), vec![1.0])])
+                .unwrap();
+        }
+        assert!(raw_contains(&database, SENTINEL), "fixture for {operation}");
+        // Put old content in both the main database and retained WAL frames.
+        let observer = rusqlite::Connection::open(&database).unwrap();
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        match operation {
+            "remove" => cache.remove_resources("p", &[id]).unwrap(),
+            "replace" | "empty" => cache
+                .put_resource("p", &id, &write(&resource(&["next"]), "ordinary"))
+                .unwrap(),
+            "clear" => cache.clear().unwrap(),
+            "touch" => {
+                value.metadata.media_type = None;
+                cache
+                    .touch_resource("p", &id, &value.metadata, &value.version)
+                    .unwrap();
+            }
+            "prune" => {
+                cache.prune_orphans("p").unwrap();
+            }
+            "vector" => {
+                // Sentinel in vector bytes, rather than a key that remains live.
+                cache.prune_orphans("p").unwrap();
+                let bytes = SENTINEL.as_bytes();
+                let vector = bytes
+                    .chunks(4)
+                    .map(|chunk| {
+                        let mut padded = [0; 4];
+                        padded[..chunk.len()].copy_from_slice(chunk);
+                        f32::from_le_bytes(padded)
+                    })
+                    .collect();
+                cache.put_embeddings("p", &[("h".into(), vector)]).unwrap();
+                assert!(raw_contains(&database, SENTINEL));
+                cache
+                    .put_embeddings("p", &[("h".into(), vec![0.0])])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !raw_contains(&database, SENTINEL),
+            "left readable bytes after {operation}"
+        );
+    }
+}
+
+#[test]
+fn clear_reports_a_reader_blocking_wal_truncation() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("cache.sqlite3");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("p", &profile("p")).unwrap();
+    let reader = rusqlite::Connection::open(&database).unwrap();
+    reader
+        .execute_batch("BEGIN; SELECT * FROM profiles;")
+        .unwrap();
+    let error = cache.clear().unwrap_err();
+    assert!(
+        error.to_string().contains("WAL cleanup is blocked"),
+        "{error}"
+    );
+    reader.execute_batch("ROLLBACK").unwrap();
+    cache.clear().unwrap();
+    assert_eq!(
+        fs::metadata(database.with_extension("sqlite3-wal"))
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+#[ignore = "synthetic secure deletion write-cost measurement; no models or user files"]
+fn measure_secure_delete_write_cost() {
+    use std::time::Instant;
+    // Interleave modes so other workers' load does not systematically favour one.
+    for run in 0..5 {
+        for mode in ["OFF", "FAST", "ON"] {
+            let temp = TempDir::new().unwrap();
+            let database = temp.path().join("cache.sqlite3");
+            let mut cache = SqliteCache::open(&database).unwrap();
+            cache.register_profile("p", &profile("p")).unwrap();
+            drop(cache);
+            let mut conn = rusqlite::Connection::open(&database).unwrap();
+            conn.execute_batch(&format!(
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA secure_delete={mode};"
+            ))
+            .unwrap();
+            let body = (0..200)
+                .map(|i| format!("syntheticword{i:04}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let vector = vec![0u8; 768 * 4];
+            let start = Instant::now();
+            let tx = conn.transaction().unwrap();
+            for i in 0..5000 {
+                tx.execute("INSERT INTO segments_fts_p_70(rowid,name,path,heading,body) VALUES(?1,'note','synthetic/note','heading',?2)", rusqlite::params![i+1, body]).unwrap();
+                tx.execute(
+                    "INSERT INTO embeddings VALUES('p',?1,?2)",
+                    rusqlite::params![format!("hash{i:05}"), vector],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+            let insert = start.elapsed();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let start = Instant::now();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("DELETE FROM segments_fts_p_70 WHERE rowid <= 1000; DELETE FROM embeddings WHERE input_hash < 'hash01000';").unwrap();
+            let delete_only = start.elapsed();
+            tx.execute_batch("INSERT INTO segments_fts_p_70(segments_fts_p_70) VALUES('rebuild');")
+                .unwrap();
+            tx.commit().unwrap();
+            let delete_rebuild = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let truncate = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let compact = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("DROP TABLE segments_fts_p_70; DELETE FROM embeddings; DELETE FROM profiles; VACUUM; PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+            let clear = start.elapsed();
+            eprintln!(
+                "SECURE_DELETE {mode} run {run}: 5000 segments x 200 tokens + 5000 768-f32 vectors insert {insert:?}; delete-only 1000 segments/vectors {delete_only:?}; delete 1000 segments/vectors + rebuild 4000 segments {delete_rebuild:?}; truncate {truncate:?}; vacuum+truncate 4000 segments/vectors {compact:?}; clear remaining 4000 segments/vectors+vacuum+truncate {clear:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn migrations_scrub_legacy_free_pages_and_source_order_postings() {
+    const SENTINEL: &str = "syntheticlegacysourcetokensentinel";
+    for version in ["1", "2", "3", "4", "5"] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/legacy".parse().unwrap();
+        cache
+            .put_resource("p", &id, &write(&resource(&["h"]), "ordinary"))
+            .unwrap();
+        drop(cache);
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        conn.execute_batch("PRAGMA secure_delete=OFF; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        common::legacy::downgrade(&conn, version);
+        conn.execute_batch("CREATE TABLE discarded(body TEXT);")
+            .unwrap();
+        conn.execute("INSERT INTO discarded VALUES(?1)", [SENTINEL.repeat(1000)])
+            .unwrap();
+        conn.execute_batch("DROP TABLE discarded;").unwrap();
+        if version == "2" {
+            conn.execute(
+                "INSERT INTO segments_fts(rowid,body) VALUES(999,?1)",
+                [SENTINEL],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("PRAGMA wal_checkpoint(FULL)").unwrap();
+        assert!(raw_contains(&database, SENTINEL));
+        let cache = SqliteCache::open(&database).unwrap();
+        assert!(!raw_contains(&database, SENTINEL), "version {version}");
+        assert_eq!(cache.stats().unwrap().profiles[0].segments, 1);
+    }
+}

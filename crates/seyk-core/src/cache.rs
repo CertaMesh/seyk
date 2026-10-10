@@ -619,6 +619,7 @@ impl SqliteCache {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "secure_delete", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let mut cache = Self { conn, path, guards };
         cache.migrate()?;
@@ -627,6 +628,27 @@ impl SqliteCache {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// TRUNCATE reports a busy reader in its result row, not as a SQL error.
+    /// A committed deletion is not a successful scrub until old WAL frames go.
+    fn truncate_wal(&self) -> Result<()> {
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        if busy != 0 {
+            return Err(Error::Config(
+                "cache deletion committed, but WAL cleanup is blocked by another connection; close other cache users and run seyk cache clear using the same cache path".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn compact(&self) -> Result<()> {
+        self.conn.flush_prepared_statement_cache();
+        self.conn.execute_batch("VACUUM;")?;
+        // VACUUM itself writes WAL frames, so truncation must come last.
+        self.truncate_wal()
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -780,6 +802,9 @@ impl SqliteCache {
             [SCHEMA_VERSION],
         )?;
         tx.commit()?;
+        if version.is_some() {
+            self.compact()?;
+        }
         Ok(())
     }
 }
@@ -869,13 +894,22 @@ fn restrict_permissions(_: &Path, _: u32) {}
 
 /// Remove a resource's keyword rows. FTS rows are not covered by
 /// the foreign-key cascade, so they go first, while their segment rows exist.
-fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Result<()> {
-    tx.prepare_cached(&format!(
-        "DELETE FROM {} WHERE rowid IN
+fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Result<bool> {
+    let deleted = tx
+        .prepare_cached(&format!(
+            "DELETE FROM {} WHERE rowid IN
              (SELECT rowid FROM segments WHERE profile = ?1 AND path = ?2)",
-        fts_table(profile)
-    ))?
-    .execute(params![profile, key])?;
+            fts_table(profile)
+        ))?
+        .execute(params![profile, key])?;
+    Ok(deleted != 0)
+}
+
+/// FTS5 normally retains deleted postings as tombstones. Rebuild from live,
+/// order-free content to remove them without changing the FTS file format.
+fn rebuild_fts(tx: &rusqlite::Transaction, profile: &str) -> Result<()> {
+    let table = fts_table(profile);
+    tx.execute_batch(&format!("INSERT INTO {table}({table}) VALUES('rebuild');"))?;
     Ok(())
 }
 
@@ -999,8 +1033,8 @@ impl EmbeddingCache for SqliteCache {
     ) -> Result<()> {
         let key = resource_key(path);
         let tx = self.conn.transaction()?;
-        delete_fts_rows(&tx, profile, &key)?;
-        tx.execute(
+        let deleted = delete_fts_rows(&tx, profile, &key)?;
+        let replaced = tx.execute(
             "DELETE FROM resources WHERE profile = ?1 AND path = ?2",
             params![profile, key],
         )?;
@@ -1050,7 +1084,13 @@ impl EmbeddingCache for SqliteCache {
                 ])?;
             }
         }
+        if deleted {
+            rebuild_fts(&tx, profile)?;
+        }
         tx.commit()?;
+        if deleted || replaced != 0 {
+            self.truncate_wal()?;
+        }
         Ok(())
     }
 
@@ -1065,7 +1105,7 @@ impl EmbeddingCache for SqliteCache {
             "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7, media_type = ?8 WHERE profile = ?1 AND path = ?2",
             params![profile, resource_key(path), metadata.modified_ns, metadata.size_bytes as i64, serde_json::to_string(version).map_err(json_err)?, metadata.content_hash, metadata.modality.to_string(), metadata.media_type],
         )?;
-        Ok(())
+        self.truncate_wal()
     }
 
     fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
@@ -1077,17 +1117,21 @@ impl EmbeddingCache for SqliteCache {
         )? {
             return Ok(());
         }
+        let mut deleted = false;
         {
             let mut stmt =
                 tx.prepare_cached("DELETE FROM resources WHERE profile = ?1 AND path = ?2")?;
             for p in paths {
                 let key = resource_key(p);
-                delete_fts_rows(&tx, profile, &key)?;
+                deleted |= delete_fts_rows(&tx, profile, &key)?;
                 stmt.execute(params![profile, key])?;
             }
         }
+        if deleted {
+            rebuild_fts(&tx, profile)?;
+        }
         tx.commit()?;
-        Ok(())
+        self.truncate_wal()
     }
 
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>> {
@@ -1114,7 +1158,7 @@ impl EmbeddingCache for SqliteCache {
             }
         }
         tx.commit()?;
-        Ok(())
+        self.truncate_wal()
     }
 
     fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
@@ -1203,6 +1247,7 @@ impl EmbeddingCache for SqliteCache {
                  SELECT 1 FROM segments s WHERE s.profile = embeddings.profile AND s.input_hash = embeddings.input_hash)",
             [profile],
         )?;
+        self.truncate_wal()?;
         Ok(n as u64)
     }
 
@@ -1251,10 +1296,7 @@ impl EmbeddingCache for SqliteCache {
         }
         tx.execute_batch("DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
         tx.commit()?;
-        self.conn.flush_prepared_statement_cache();
-        self.conn
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
-        Ok(())
+        self.compact()
     }
 }
 
