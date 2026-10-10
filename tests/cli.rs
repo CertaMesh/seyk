@@ -14,12 +14,13 @@ fn binary() -> Command {
     // Once also prevents parallel tests from competing on that first launch.
     static READY: std::sync::Once = std::sync::Once::new();
     READY.call_once(|| {
-        Command::cargo_bin("seyk")
+        let output = Command::cargo_bin("seyk")
             .unwrap()
             .arg("--version")
-            .assert()
-            .success()
-            .stdout("seyk 0.1.0\n");
+            .timeout(std::time::Duration::from_secs(120))
+            .ok()
+            .expect("CLI readiness probe (--version) must succeed within 120 s");
+        assert_eq!(output.stdout, b"seyk 0.1.0\n");
     });
     Command::cargo_bin("seyk").unwrap()
 }
@@ -210,7 +211,7 @@ fn missing_model_is_a_helpful_failure_and_invalid_dimensions_are_rejected() {
 }
 
 /// Exercise an MCP session as a client: initialize, await readiness, then list
-/// tools. EOF is a disconnect, so never close stdin with replies still pending.
+/// tools. Defensively keep stdin open until the pending replies arrive.
 #[cfg(feature = "mcp")]
 fn mcp_handshake(command: &mut std::process::Command) -> [Value; 2] {
     use std::io::{BufRead, BufReader, Write};
@@ -244,11 +245,28 @@ fn mcp_handshake(command: &mut std::process::Command) -> [Value; 2] {
             }
         }
     });
-    let response = |id| {
-        let line = receive
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .expect("MCP response missing within operation deadline")
-            .unwrap();
+    let mut response = |id| {
+        use std::sync::mpsc::RecvTimeoutError;
+        let line = match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => line.expect("reading MCP child stdout failed"),
+            Err(RecvTimeoutError::Disconnected) => panic!(
+                "MCP child exited or closed stdout before response {id}; status: {:?}",
+                session
+                    .0
+                    .try_wait()
+                    .expect("checking MCP child status failed")
+            ),
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(status) = session
+                    .0
+                    .try_wait()
+                    .expect("checking MCP child status failed")
+                {
+                    panic!("MCP child exited before response {id}: {status}");
+                }
+                panic!("MCP response {id} timed out within the 20 s operation deadline");
+            }
+        };
         let value: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(value["id"], id);
         assert!(value.get("error").is_none(), "{value}");
@@ -271,6 +289,17 @@ fn mcp_handshake(command: &mut std::process::Command) -> [Value; 2] {
     drop(session);
     reader.join().unwrap();
     [initialized, tools]
+}
+
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+#[should_panic(expected = "MCP child exited")]
+fn mcp_early_child_exit_has_a_distinct_diagnostic() {
+    let mut command = std::process::Command::new("/bin/sh");
+    // Consume initialize before exiting so the failure is the missing reply,
+    // rather than a write to an already closed stdin pipe.
+    command.args(["-c", "read -r initialize; exit 7"]);
+    mcp_handshake(&mut command);
 }
 
 /// The MCP server answers the handshake and lists its tool before any model is

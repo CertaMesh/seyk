@@ -700,6 +700,11 @@ implementation than torchvision's). It changes individual pixels by at most 0.06
 
 ## Testing
 
+To reproduce cold CLI startup failures under load, use
+[`scripts/test/flaky_tests.py`](scripts/test/flaky_tests.py) with `--cold-cli`.
+Build commands, measured rates, and the investigation are in the
+[flaky-test handoff](docs/handoffs/2026-10-10-flaky-tests-4425-4461.md).
+
 ```bash
 cargo test --workspace             # no model needed: segmentation, cache, CLI, ranking
 cargo test --workspace --release -- --ignored  # model-backed tests; image parity needs reference files
