@@ -137,12 +137,16 @@ def inputs(ds):
     if kind == "irpapers":
         def pages():
             for row in csv_rows(raw(ds, "docs.csv")):
-                require(row["transcription"].strip(), "missing IRPAPERS transcription")
+                require(None not in row and all(value is not None for value in row.values()), "malformed IRPAPERS row")
                 # pdf_id_x is the physical PDF ID; pdf_id_y comes from the OCR join.
                 paper = row["pdf_id_x"]
                 if row["pdf_id_y"]:
                     require(float(row["pdf_id_y"]) == int(paper), "IRPAPERS PDF join mismatch")
-                yield page_id(paper, row["page_number"]), (row["pdf_title"] + "\n\n" + row["transcription"]).encode(), "txt"
+                docid = page_id(paper, row["page_number"])
+                # Validate the row even when its transcription is empty. None
+                # retains its identity for raw-row counts and qrel validation.
+                content = (row["pdf_title"] + "\n\n" + row["transcription"]).encode()
+                yield docid, content if row["transcription"].strip() else None, "txt"
         return pages(), queries, qrels
     require(kind == "irpapers-pdf", "unknown adapter")
     def pdfs():
@@ -168,12 +172,16 @@ def materialize(ds):
     meta.mkdir(parents=True, exist_ok=True)
     # Remove completion marker first: failed materialization cannot be run.
     confined(meta / "manifest.json").unlink(missing_ok=True)
-    mapping, ids, inventory = {}, set(), {}
+    mapping, ids, inventory, skipped = {}, set(), {}, set()
     for docid, content, extension in docs:
         require(docid not in ids and not any(c in docid for c in "\t\r\n"), "duplicate or invalid doc ID")
         ids.add(docid)
         key = blake3.blake3(docid.encode()).hexdigest()[:16]
-        require(key not in mapping, "opaque key collision")
+        require(key not in mapping and key not in skipped, "opaque key collision")
+        if content is None:
+            require(cfg["kind"] == "irpapers", "missing document content")
+            skipped.add(key)
+            continue
         mapping[key] = docid
         name = key + "." + extension
         path = confined(corpus / name)
@@ -181,15 +189,17 @@ def materialize(ds):
         if not path.exists() or path.read_bytes() != content:
             path.write_bytes(content)
         inventory[name] = blake3.blake3(content).hexdigest()
-    require(len(mapping) == cfg["documents"], "unexpected document count")
+    require(len(ids) == cfg["documents"], "unexpected document count")
     require({p.name for p in corpus.iterdir()} == set(inventory), "stale files in corpus; use a fresh dataset directory")
     qids = {q["qid"] for q in queries}
     require(len(qids) == len(queries) == cfg["queries"], "unexpected/duplicate queries")
     require(qids == {q for q, _, _ in qrels}, "query/qrels mismatch")
     require(len({(q,d) for q,d,_ in qrels}) == len(qrels), "duplicate qrel")
+    skipped_qrels = 0
     for q, doc, relevance in qrels:
         target = doc.split("#")[0] if ds == "irpapers-pdf" else doc
         require(target in ids and relevance >= 0, "qrel references missing document or invalid grade")
+        skipped_qrels += blake3.blake3(target.encode()).hexdigest()[:16] in skipped
     with confined(meta / "docmap.tsv").open("w", newline="") as f:
         writer = csv.writer(f, delimiter="\t", lineterminator="\n")
         writer.writerow(["key", "docid"])
@@ -202,8 +212,13 @@ def materialize(ds):
         writer.writerow(["query-id", "corpus-id", "score"])
         writer.writerows(sorted(qrels))
     metadata_hashes = {name: blake3.blake3((meta / name).read_bytes()).hexdigest() for name in ("docmap.tsv", "queries.jsonl", "qrels.tsv")}
-    write_json(meta / "manifest.json", {"dataset":ds, "source":cfg, "files":inventory, "metadata_blake3":metadata_hashes})
-    print(f"materialized {ds}: {len(mapping)} documents, {len(queries)} queries")
+    manifest = {"dataset":ds, "source":cfg, "files":inventory, "metadata_blake3":metadata_hashes}
+    if cfg["kind"] == "irpapers":
+        manifest["empty_transcriptions"] = {"skipped_page_keys":sorted(skipped), "skipped_pages":len(skipped),
+                                            "qrels_targeting_skipped_pages":skipped_qrels,
+                                            "raw_rows":len(ids), "materialized_pages":len(mapping)}
+    write_json(meta / "manifest.json", manifest)
+    print(f"materialized {ds}: {len(mapping)} documents, {len(queries)} queries; {len(skipped)} skipped pages, {skipped_qrels} qrels targeting skipped pages")
 
 
 def gold(ds):
@@ -304,10 +319,12 @@ def score(ds, paths):
                        "queries_under_100_resources":sum(len(r["ranked"])<100 for r in rows_by_mode[m].values())} for m in per_mode}
     result = {"dataset":ds, "smoke":ds=="nanoscifact", "metrics":per_mode, "diagnostics":diagnostics,
               "environment":envs, "completion":completions, "scoring":f"ir_measures=={version('ir-measures')}; pytrec_eval (pytrec-eval-terrier)=={version('pytrec-eval-terrier')}; graded linear nDCG; relevance >= 1"}
+    result["empty_transcriptions"] = manifest.get("empty_transcriptions", {"skipped_pages":0, "qrels_targeting_skipped_pages":0})
     write_json(out, result)
     log = confined(out.with_suffix(".queries.jsonl"))
     log.write_text("".join(json.dumps(row, sort_keys=True)+"\n" for row in join))
     print(out)
+    print(f"skipped pages: {result['empty_transcriptions']['skipped_pages']}; qrels targeting skipped pages: {result['empty_transcriptions']['qrels_targeting_skipped_pages']}")
 
 
 def determinism(left, right):
@@ -329,8 +346,12 @@ def determinism(left, right):
 def report(paths):
     print("| Dataset | Mode | Precision / dims | nDCG@10 | MRR@10 | R@1 | R@5 | R@10 | R@20 | R@100 |")
     print("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    skip_notes = []
     for path in paths:
         r = json.loads(confined(path).read_text())
+        if r["dataset"] == "irpapers":
+            skipped = r["empty_transcriptions"]
+            skip_notes.append(f"IRPAPERS skipped pages: {skipped['skipped_pages']}; qrels targeting skipped pages: {skipped['qrels_targeting_skipped_pages']}")
         for mode, metrics_ in r["metrics"].items():
             env = r["environment"][mode]
             profile = f"{env.get('precision', '?')}/{env.get('dimension', '?')}"
@@ -338,6 +359,8 @@ def report(paths):
             for view, values in views.items():
                 label = r["dataset"] + (" smoke" if r["smoke"] else "") + (" " + view if view else "")
                 print("| " + label + " | " + mode + " | " + profile + " | " + " | ".join(f"{values[str(m)]:.4f}" for m in METRICS) + " |")
+    for note in skip_notes:
+        print("\n" + note)
     print("\nPublished references (different systems): SciFact BM25/TAS-B nDCG@10 .665/.643; NFCorpus .325/.319; IRPAPERS text hybrid R@1/5/20 .46/.78/.91. NanoSciFact is smoke only.")
 
 
@@ -368,7 +391,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(len({q["qid"] for q in queries}), 2)
         self.assertEqual([r[1] for r in qrels], ["7#2", "7#2"])
 
-    def test_irpapers_text_schema_and_join(self):
+    def test_irpapers_text_skip_materialization_score_and_validation(self):
         ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = Path(directory)
@@ -395,9 +418,72 @@ class Tests(unittest.TestCase):
                                               ("7#2", b"Title\n\nSecond page", "txt")])
                 self.assertEqual(len({q["qid"] for q in queries}), 2)
                 self.assertTrue(all(r[1] == "7#2" for r in qrels))
+                rows[1]["transcription"] = " \n\t"
+                rows.append(dict(zip(fields, ["7", "", "3", "Title", "", "not decoded"])))
+                write_docs()
+                cfg = {"kind":"irpapers", "documents":3, "queries":2,
+                       "files":[{"name":name, "sha256":sha256(raw_dir/name)} for name in ("docs.csv", "queries.csv")]}
+                with mock.patch(__name__+".config", return_value=cfg), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    materialize("irpapers")
+                    manifest, docmap, gold_qrels = gold("irpapers")
+                    skipped = manifest["empty_transcriptions"]
+                    self.assertEqual(skipped, {"skipped_page_keys":sorted(blake3.blake3(d.encode()).hexdigest()[:16] for d in ("7#2", "7#3")),
+                                               "skipped_pages":2, "qrels_targeting_skipped_pages":2,
+                                               "raw_rows":3, "materialized_pages":1})
+                    self.assertEqual(set(docmap.values()), {"7#1"})
+                    self.assertEqual(len(list((root/"corpus/irpapers").iterdir())), 1)
+                    self.assertEqual(len(gold_qrels), 2)
+                    env = {"type":"env", "schema":1, "dataset":"irpapers", "dataset_manifest":manifest,
+                           "git_sha":"test", "profile_id":"test", "depth":200, "lexical_weight":None,
+                           "manifest_blake3":"test", "run_id":"test", "threads":1, "dirty":False}
+                    run = root/"run.jsonl"
+                    run_rows = [{"type":"query", "qid":q["qid"], "mode":"lexical", "ranked":hits, "ranked_pages":None}
+                                for q, hits in zip(queries, ([{"key":next(iter(docmap)), "rank":1}], []))]
+                    run.write_text("".join(json.dumps(r)+"\n" for r in [env, *run_rows, {"type":"complete", "queries":2}]))
+                    score("irpapers", [run])
+                    result_path = root/"results/irpapers/test.json"
+                    result = json.loads(result_path.read_text())
+                    self.assertTrue(all(value == 0 for value in result["metrics"]["lexical"].values()))
+                    self.assertEqual(result["empty_transcriptions"], skipped)
+                    self.assertEqual(result["diagnostics"]["lexical"]["queries_without_result"], 1)
+                    report([result_path])
+                    self.assertIn("skipped pages: 2; qrels targeting skipped pages: 2", stdout.getvalue())
+                    cfg["documents"] = 2
+                    with self.assertRaisesRegex(ValueError, "unexpected document count"):
+                        materialize("irpapers")
+                    cfg["documents"] = 3
+                    rows[2]["page_number"] = "2"
+                    write_docs()
+                    cfg["files"][0]["sha256"] = sha256(raw_dir/"docs.csv")
+                    with self.assertRaisesRegex(ValueError, "duplicate or invalid doc ID"):
+                        materialize("irpapers")
+                    rows[2]["page_number"] = "3"
+                    rows[1]["page_number"] = "4"
+                    write_docs()
+                    cfg["files"][0]["sha256"] = sha256(raw_dir/"docs.csv")
+                    with self.assertRaisesRegex(ValueError, "qrel references missing document"):
+                        materialize("irpapers")
+                    rows[1]["page_number"] = "2"
                 rows[1]["pdf_id_y"] = "7.5"
                 write_docs()
                 with self.assertRaises(ValueError): list(inputs("irpapers")[0])
+                rows[1]["pdf_id_y"] = ""
+                rows[1]["page_number"] = "0"
+                write_docs()
+                with self.assertRaisesRegex(ValueError, "invalid one-based paper/page"):
+                    list(inputs("irpapers")[0])
+                rows[1]["page_number"] = "2"
+                write_docs()
+                with (raw_dir/"docs.csv").open("a") as f:
+                    f.write("7,,4,Title\n")
+                with self.assertRaisesRegex(ValueError, "malformed IRPAPERS row"):
+                    list(inputs("irpapers")[0])
+
+    def test_qrel_on_skipped_page_preserves_metric_denominators(self):
+        qrels = [ir.Qrel("answerable", "7#1", 1), ir.Qrel("skipped", "7#2", 1)]
+        for skipped_ranking in ([], ["7#1"]):
+            values = metrics(qrels, {"answerable":["7#1"], "skipped":skipped_ranking})
+            self.assertTrue(all(value == 0.5 for value in values.values()))
 
     def test_materialize_score_report_and_integrity(self):
         ROOT.mkdir(parents=True, exist_ok=True)

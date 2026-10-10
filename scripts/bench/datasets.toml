@@ -50,7 +50,7 @@ sha256 = "85861ef816cafe12520d2aa264a530b187b0a372862005da93baed31bcd7fb44"
 kind = "irpapers"
 revision = "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
 license = "MIT dataset; source paper rights retained"
-documents = 3230
+documents = 3230 # Raw docs.csv rows, including pages skipped for empty transcription.
 queries = 180
 
 [[irpapers.files]]
