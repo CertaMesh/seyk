@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+mod materialize;
+
 use rayon::prelude::*;
 
 use ort::session::Session;
@@ -715,8 +717,10 @@ impl EmbeddingGemma2 {
 /// ONNX Runtime refuses external weight files that resolve outside the
 /// directory of the `.onnx` file. The Hugging Face cache stores every file as a
 /// symlink into a shared blob store, which trips that check. In that case,
-/// hard-link the resolved files side by side in a private directory (falling
-/// back to a copy across filesystems). Plain directories are used as they are.
+/// materialize the resolved files side by side in a cache directory. Links are
+/// created without clobbering; replacement copies are verified and published
+/// atomically, so competing callers never write through a source hard link.
+/// Plain directories are used as they are.
 fn onnx_dir_without_symlinks(dir: &Path, config: &GemmaConfig) -> Result<PathBuf> {
     onnx_files_without_symlinks(dir, config.files(), "")
 }
@@ -751,16 +755,7 @@ fn onnx_files_without_symlinks(
             .canonicalize()
             .map_err(|e| io_error(src.join(f), e))?;
         let target = dst.join(f);
-        let real_len = std::fs::metadata(&real)
-            .map_err(|e| io_error(&real, e))?
-            .len();
-        if std::fs::metadata(&target).is_ok_and(|m| m.len() == real_len) {
-            continue;
-        }
-        let _ = std::fs::remove_file(&target);
-        if std::fs::hard_link(&real, &target).is_err() {
-            std::fs::copy(&real, &target).map_err(|e| io_error(&target, e))?;
-        }
+        materialize::publish(&real, &target)?;
     }
     Ok(dst)
 }
