@@ -50,6 +50,7 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros
 schemars = { version = "1", optional = true }
 
 [dev-dependencies]
+seyk-core = { path = "crates/seyk-core", features = ["test-support"] }
 flate2 = "1"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tempfile = "3"
@@ -75,6 +76,8 @@ name = "eval_corpus"
 required-features = ["onnx"]
 
 [profile.release]
+# Debug test-support instrumentation must never enter packaged binaries.
+debug-assertions = false
 lto = "thin"
 codegen-units = 1
 

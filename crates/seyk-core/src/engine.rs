@@ -261,6 +261,8 @@ impl SearchEngineBuilder {
             embedder,
             cache: Mutex::new(cache),
             indexing: Mutex::new(()),
+            #[cfg(all(feature = "test-support", debug_assertions))]
+            lease_observer: Mutex::new(None),
             segmenter: self.segmenter,
             profile,
             profile_id,
@@ -286,6 +288,8 @@ pub struct SearchEngine {
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
     indexing: Mutex<()>,
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    lease_observer: Mutex<Option<LeaseObserver>>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
     profile_id: String,
@@ -293,7 +297,60 @@ pub struct SearchEngine {
     max_audio_duration_secs: u64,
 }
 
+/// Test-only observations at the indexing lease boundary.
+#[cfg(all(feature = "test-support", debug_assertions))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaseEvent {
+    /// A real try_lock failed while another pass held the lease.
+    Contended,
+    Acquired,
+}
+
+#[cfg(all(feature = "test-support", debug_assertions))]
+type LeaseObserver = Arc<dyn Fn(LeaseEvent) + Send + Sync>;
+
 impl SearchEngine {
+    /// Install a test observer. It must not start indexing on this engine.
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    pub fn observe_indexing_lease(&self, observer: LeaseObserver) {
+        *self
+            .lease_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(observer);
+    }
+
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    fn observe_lease(&self, event: LeaseEvent) {
+        let observer = self
+            .lease_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(observer) = observer {
+            observer(event);
+        }
+    }
+
+    fn acquire_indexing_lease(&self) -> Result<MutexGuard<'_, ()>> {
+        // One mutex path in every build; only observations are test-specific.
+        let guard = match self.indexing.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                #[cfg(all(feature = "test-support", debug_assertions))]
+                self.observe_lease(LeaseEvent::Contended);
+                self.indexing
+                    .lock()
+                    .map_err(|_| Error::Config("indexing lock poisoned".into()))?
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(Error::Config("indexing lock poisoned".into()));
+            }
+        };
+        #[cfg(all(feature = "test-support", debug_assertions))]
+        self.observe_lease(LeaseEvent::Acquired);
+        Ok(guard)
+    }
+
     pub fn builder() -> SearchEngineBuilder {
         SearchEngineBuilder {
             provider: Arc::new(FsProvider),
@@ -1456,10 +1513,7 @@ impl<'e> SearchRequest<'e> {
             });
         }
         let mut sync = if self.sync {
-            let indexing = engine
-                .indexing
-                .lock()
-                .map_err(|_| Error::Config("indexing lock poisoned".into()))?;
+            let indexing = engine.acquire_indexing_lease()?;
             engine.sync(&indexing, &resources, self.progress)?
         } else {
             SyncStats {
@@ -1984,10 +2038,7 @@ impl<'e> IndexRequest<'e> {
                 resources: resources.len(),
             });
         }
-        let indexing = engine
-            .indexing
-            .lock()
-            .map_err(|_| Error::Config("indexing lock poisoned".into()))?;
+        let indexing = engine.acquire_indexing_lease()?;
         let mut sync = engine.sync(&indexing, &resources, self.progress)?;
 
         let pid = engine.profile_id.as_str();

@@ -1,3 +1,6 @@
+// Observation hooks are intentionally absent from optimized release builds.
+#![cfg(debug_assertions)]
+
 mod common;
 
 use std::fs;
@@ -9,9 +12,9 @@ use std::time::Duration;
 use common::FakeEmbedder;
 use seyk_core::segment::{TextSegmenter, TextSegmenterConfig};
 use seyk_core::{
-    Dimension, EmbeddingCache, FsProvider, MemoryCache, ProgressEvent, ProvidedResource,
-    ResourceId, ResourceProvider, ResourceScope, ResourceVersion, Result, SearchEngine, SearchMode,
-    SqliteCache,
+    Dimension, EmbeddingCache, FsProvider, LeaseEvent, MemoryCache, ProgressEvent,
+    ProvidedResource, ResourceId, ResourceProvider, ResourceScope, ResourceVersion, Result,
+    SearchEngine, SearchMode, SqliteCache,
 };
 use tempfile::TempDir;
 
@@ -94,15 +97,9 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
             release.wait("A release");
         }
     };
-    let (started_tx, started_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
-    let progress_b = |event| {
-        if matches!(event, ProgressEvent::Discovered { .. }) {
-            started_tx.send(()).unwrap();
-        }
-    };
+    let (lease_tx, lease_rx) = mpsc::channel();
 
-    let completed_while_a_pending = thread::scope(|scope| {
+    thread::scope(|scope| {
         let pass_a = scope.spawn(|| {
             engine
                 .index()
@@ -112,44 +109,41 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
                 .unwrap()
         });
         published.wait("A publication");
-        let pass_b = scope.spawn(|| {
-            match competing {
-                CompetingPass::Search => {
-                    engine
-                        .search("library")
-                        .paths([b.path()])
-                        .progress(&progress_b)
-                        .execute()
-                        .unwrap();
-                }
-                CompetingPass::Index | CompetingPass::Delete => {
-                    let report = engine
-                        .index()
-                        .paths([b.path()])
-                        .progress(&progress_b)
-                        .execute()
-                        .unwrap();
-                    if matches!(competing, CompetingPass::Delete) {
-                        assert_eq!(report.resources_removed, 1);
-                    }
+        engine.observe_indexing_lease(Arc::new(move |event| {
+            lease_tx.send(event).unwrap();
+        }));
+        let pass_b = scope.spawn(|| match competing {
+            CompetingPass::Search => {
+                engine
+                    .search("library")
+                    .paths([b.path()])
+                    .execute()
+                    .unwrap();
+            }
+            CompetingPass::Index | CompetingPass::Delete => {
+                let report = engine.index().paths([b.path()]).execute().unwrap();
+                if matches!(competing, CompetingPass::Delete) {
+                    assert_eq!(report.resources_removed, 1);
                 }
             }
-            done_tx.send(()).unwrap();
         });
-        // B has discovered its disjoint root and is about to acquire the lease.
-        // On the old engine it completes and prunes A's pending vector. On the
-        // fixed engine it must wait. The timeout bounds that exclusion check;
-        // the signals pin A's pending-vector interval. Discovery alone does not
-        // prove B was scheduled past its callback before the timeout.
-        let started = started_rx.recv_timeout(Duration::from_secs(5));
-        let completed = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        // Observe a failed try_lock, not merely discovery or elapsed time.
+        let event = lease_rx.recv_timeout(Duration::from_secs(5));
         release.notify();
-        assert!(started.is_ok(), "competing pass never reached discovery");
+        assert_eq!(
+            event.expect("competing pass never contended for the lease"),
+            LeaseEvent::Contended
+        );
         let report = pass_a.join().unwrap();
         pass_b.join().unwrap();
+        assert_eq!(
+            lease_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            LeaseEvent::Acquired
+        );
+        // Later serial passes no longer need an observer.
+        engine.observe_indexing_lease(Arc::new(|_| {}));
         assert_eq!(report.sync.segments_embedded, 2);
         assert_eq!(report.sync.resources_updated, 1);
-        completed
     });
 
     // An unchanged re-index does not repair missing vectors: it skips A.
@@ -177,7 +171,6 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
     };
     assert_eq!(profile.segments, expected);
     assert_eq!(profile.embeddings, expected);
-    assert!(!completed_while_a_pending, "B bypassed the indexing lease");
 }
 
 #[test]
@@ -259,21 +252,22 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
     fs::remove_file(b_file).unwrap();
     provider.armed.store(true, Ordering::SeqCst);
 
-    let (started_tx, started_rx) = mpsc::channel();
+    let (lease_tx, lease_rx) = mpsc::channel();
     let (published_tx, published_rx) = mpsc::channel();
     let release_a = Signal::default();
-    let progress_a = |event| match event {
-        ProgressEvent::Discovered { .. } => started_tx.send(()).unwrap(),
-        ProgressEvent::Embedding { done: 1, total: 1 } => {
+    let progress_a = |event| {
+        if matches!(event, ProgressEvent::Embedding { done: 1, total: 1 }) {
             published_tx.send(()).unwrap();
             release_a.wait("A release");
         }
-        _ => {}
     };
-    let published_during_deletion = thread::scope(|scope| {
+    thread::scope(|scope| {
         // B has finished sync but not deletion. A must still wait for B's lease.
         let pass_b = scope.spawn(|| engine.index().paths([b.path()]).execute().unwrap());
         provider.entered.wait("deletion entry");
+        engine.observe_indexing_lease(Arc::new(move |event| {
+            lease_tx.send(event).unwrap();
+        }));
         let pass_a = scope.spawn(|| {
             engine
                 .index()
@@ -282,22 +276,23 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
                 .execute()
                 .unwrap()
         });
-        let started = started_rx.recv_timeout(Duration::from_secs(5));
-        let published = published_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        let event = lease_rx.recv_timeout(Duration::from_secs(5));
         provider.release.notify();
         let removed = pass_b.join().unwrap().resources_removed;
-        // Without the lease A has already published; with it, A starts now.
-        let publication = if published {
-            Ok(())
-        } else {
-            published_rx.recv_timeout(Duration::from_secs(5))
-        };
+        let publication = published_rx.recv_timeout(Duration::from_secs(5));
         release_a.notify();
         pass_a.join().unwrap();
-        assert!(started.is_ok());
+        assert_eq!(
+            event.expect("competing pass never contended for the lease"),
+            LeaseEvent::Contended
+        );
+        assert_eq!(
+            lease_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            LeaseEvent::Acquired
+        );
+        engine.observe_indexing_lease(Arc::new(|_| {}));
         assert!(publication.is_ok());
         assert_eq!(removed, 1);
-        published
     });
 
     let unchanged = engine.index().paths([a.path()]).execute().unwrap();
@@ -312,7 +307,6 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
     assert_eq!(found.hits.len(), 1, "deletion pruned A's pending vector");
     let stats = engine.with_cache(|cache| cache.stats()).unwrap();
     assert_eq!(stats.profiles[0].embeddings, 1);
-    assert!(!published_during_deletion, "lease ended before deletion");
 }
 
 #[test]

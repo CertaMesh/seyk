@@ -56,3 +56,6 @@ pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource
 pub mod audio;
 
 mod cache_guards;
+
+#[cfg(all(feature = "test-support", debug_assertions))]
+pub use engine::LeaseEvent;

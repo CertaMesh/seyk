@@ -8,6 +8,8 @@ description = "Local search, evidence and cache engine"
 
 [features]
 default = []
+# Observation hooks for debug tests; compiled out of release even if enabled.
+test-support = []
 audio = ["dep:symphonia"]
 pdf = ["dep:pdf-extract", "dep:flate2"]
 pdf-render = ["pdf", "dep:hayro"]
@@ -31,6 +33,7 @@ dirs = "6"
 url = "2.5.8"
 
 [dev-dependencies]
+seyk-core = { path = ".", features = ["test-support"] }
 tempfile = "3"
 criterion = { version = "0.8", default-features = false }
 

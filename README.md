@@ -358,6 +358,9 @@ same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
 Windows `seyk mcp` always runs standalone.
 
+See [MCP indexing and inline search latency](docs/mcp.md) for how inline sync
+can wait behind a watcher indexing another root.
+
 **Privacy.** Seyk itself sends nothing anywhere, but a cloud-hosted agent sends
 the passages it reads to its provider. Point the server only at folders you are
 happy for that agent to read.
