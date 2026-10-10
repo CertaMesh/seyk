@@ -1183,7 +1183,11 @@ mod tests {
                 let started = Instant::now();
                 let observations = Arc::new(Mutex::new(Vec::new()));
                 let recorded = observations.clone();
+                let inline_thread = std::thread::current().id();
                 engine.observe_indexing_lease(Arc::new(move |event| {
+                    if std::thread::current().id() != inline_thread {
+                        return;
+                    }
                     recorded.lock().unwrap().push((event, started.elapsed()));
                     if event == LeaseEvent::Contended {
                         release_tx.send(()).unwrap();
@@ -1202,6 +1206,7 @@ mod tests {
                     assert_eq!(observed.len(), 1);
                     Duration::ZERO
                 } else {
+                    assert_eq!(observed.len(), 2);
                     assert_eq!(observed[0].0, LeaseEvent::Contended);
                     assert_eq!(observed[1].0, LeaseEvent::Acquired);
                     observed[1].1 - observed[0].1

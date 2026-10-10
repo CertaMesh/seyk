@@ -313,40 +313,42 @@ impl SearchEngine {
     /// Install a test observer. It must not start indexing on this engine.
     #[cfg(all(feature = "test-support", debug_assertions))]
     pub fn observe_indexing_lease(&self, observer: LeaseObserver) {
-        *self.lease_observer.lock().unwrap() = Some(observer);
+        *self
+            .lease_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(observer);
     }
 
     #[cfg(all(feature = "test-support", debug_assertions))]
     fn observe_lease(&self, event: LeaseEvent) {
-        let observer = self.lease_observer.lock().unwrap().clone();
+        let observer = self
+            .lease_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Some(observer) = observer {
             observer(event);
         }
     }
 
     fn acquire_indexing_lease(&self) -> Result<MutexGuard<'_, ()>> {
+        // One mutex path in every build; only observations are test-specific.
+        let guard = match self.indexing.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                #[cfg(all(feature = "test-support", debug_assertions))]
+                self.observe_lease(LeaseEvent::Contended);
+                self.indexing
+                    .lock()
+                    .map_err(|_| Error::Config("indexing lock poisoned".into()))?
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(Error::Config("indexing lock poisoned".into()));
+            }
+        };
         #[cfg(all(feature = "test-support", debug_assertions))]
-        {
-            // The real mutex remains held through exactly the same interval.
-            let guard = match self.indexing.try_lock() {
-                Ok(guard) => guard,
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    self.observe_lease(LeaseEvent::Contended);
-                    self.indexing
-                        .lock()
-                        .map_err(|_| Error::Config("indexing lock poisoned".into()))?
-                }
-                Err(std::sync::TryLockError::Poisoned(_)) => {
-                    return Err(Error::Config("indexing lock poisoned".into()));
-                }
-            };
-            self.observe_lease(LeaseEvent::Acquired);
-            Ok(guard)
-        }
-        #[cfg(not(all(feature = "test-support", debug_assertions)))]
-        self.indexing
-            .lock()
-            .map_err(|_| Error::Config("indexing lock poisoned".into()))
+        self.observe_lease(LeaseEvent::Acquired);
+        Ok(guard)
     }
 
     pub fn builder() -> SearchEngineBuilder {

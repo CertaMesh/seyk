@@ -23,6 +23,6 @@ Reproduce with:
 cargo test --bin seyk measure_disjoint_watcher_inline_sync -- --ignored --nocapture
 ```
 
-Every sample prints its load beside latency and lease wait. Document this behavior and keep the lease
-intact; bounded cross-root latency would require a separately evaluated finer
-GC/lease design.
+Every sample prints its load beside latency and lease wait. Searches that sync
+inline can wait behind indexing on another root. A maximum wait time would
+require a separately evaluated finer GC/lease design.

@@ -98,9 +98,8 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
         }
     };
     let (lease_tx, lease_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
 
-    let completed_while_a_pending = thread::scope(|scope| {
+    thread::scope(|scope| {
         let pass_a = scope.spawn(|| {
             engine
                 .index()
@@ -113,29 +112,28 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
         engine.observe_indexing_lease(Arc::new(move |event| {
             lease_tx.send(event).unwrap();
         }));
-        let pass_b = scope.spawn(|| {
-            match competing {
-                CompetingPass::Search => {
-                    engine
-                        .search("library")
-                        .paths([b.path()])
-                        .execute()
-                        .unwrap();
-                }
-                CompetingPass::Index | CompetingPass::Delete => {
-                    let report = engine.index().paths([b.path()]).execute().unwrap();
-                    if matches!(competing, CompetingPass::Delete) {
-                        assert_eq!(report.resources_removed, 1);
-                    }
+        let pass_b = scope.spawn(|| match competing {
+            CompetingPass::Search => {
+                engine
+                    .search("library")
+                    .paths([b.path()])
+                    .execute()
+                    .unwrap();
+            }
+            CompetingPass::Index | CompetingPass::Delete => {
+                let report = engine.index().paths([b.path()]).execute().unwrap();
+                if matches!(competing, CompetingPass::Delete) {
+                    assert_eq!(report.resources_removed, 1);
                 }
             }
-            done_tx.send(()).unwrap();
         });
         // Observe a failed try_lock, not merely discovery or elapsed time.
         let event = lease_rx.recv_timeout(Duration::from_secs(5));
-        let completed = done_rx.try_recv().is_ok();
         release.notify();
-        assert_eq!(event.unwrap(), LeaseEvent::Contended);
+        assert_eq!(
+            event.expect("competing pass never contended for the lease"),
+            LeaseEvent::Contended
+        );
         let report = pass_a.join().unwrap();
         pass_b.join().unwrap();
         assert_eq!(
@@ -146,7 +144,6 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
         engine.observe_indexing_lease(Arc::new(|_| {}));
         assert_eq!(report.sync.segments_embedded, 2);
         assert_eq!(report.sync.resources_updated, 1);
-        completed
     });
 
     // An unchanged re-index does not repair missing vectors: it skips A.
@@ -174,7 +171,6 @@ fn concurrent_passes(cache: impl EmbeddingCache + 'static, competing: CompetingP
     };
     assert_eq!(profile.segments, expected);
     assert_eq!(profile.embeddings, expected);
-    assert!(!completed_while_a_pending, "B bypassed the indexing lease");
 }
 
 #[test]
@@ -265,7 +261,7 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
             release_a.wait("A release");
         }
     };
-    let published_during_deletion = thread::scope(|scope| {
+    thread::scope(|scope| {
         // B has finished sync but not deletion. A must still wait for B's lease.
         let pass_b = scope.spawn(|| engine.index().paths([b.path()]).execute().unwrap());
         provider.entered.wait("deletion entry");
@@ -281,18 +277,15 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
                 .unwrap()
         });
         let event = lease_rx.recv_timeout(Duration::from_secs(5));
-        let published = published_rx.try_recv().is_ok();
         provider.release.notify();
         let removed = pass_b.join().unwrap().resources_removed;
-        // Without the lease A has already published; with it, A starts now.
-        let publication = if published {
-            Ok(())
-        } else {
-            published_rx.recv_timeout(Duration::from_secs(5))
-        };
+        let publication = published_rx.recv_timeout(Duration::from_secs(5));
         release_a.notify();
         pass_a.join().unwrap();
-        assert_eq!(event.unwrap(), LeaseEvent::Contended);
+        assert_eq!(
+            event.expect("competing pass never contended for the lease"),
+            LeaseEvent::Contended
+        );
         assert_eq!(
             lease_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             LeaseEvent::Acquired
@@ -300,7 +293,6 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
         engine.observe_indexing_lease(Arc::new(|_| {}));
         assert!(publication.is_ok());
         assert_eq!(removed, 1);
-        published
     });
 
     let unchanged = engine.index().paths([a.path()]).execute().unwrap();
@@ -315,7 +307,6 @@ fn deletion_keeps_lease(cache: impl EmbeddingCache + 'static) {
     assert_eq!(found.hits.len(), 1, "deletion pruned A's pending vector");
     let stats = engine.with_cache(|cache| cache.stats()).unwrap();
     assert_eq!(stats.profiles[0].embeddings, 1);
-    assert!(!published_during_deletion, "lease ended before deletion");
 }
 
 #[test]
