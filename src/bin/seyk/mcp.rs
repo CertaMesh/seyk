@@ -45,6 +45,7 @@ pub struct Hub {
     /// `false` turns background indexing off; searches then embed inline.
     background: bool,
     watched: Mutex<Vec<(PathBuf, Arc<Mutex<IndexStatus>>)>>,
+    diagnostics: Mutex<std::collections::HashMap<PathBuf, WatcherDiagnostics>>,
 }
 
 /// One agent session: the folders it may search, and the watchers covering them.
@@ -68,6 +69,7 @@ pub enum IndexStatus {
         segments_total: usize,
     },
     Ready,
+
     /// The last pass failed; the watcher still runs and retries on the next change.
     PassFailed {
         error: String,
@@ -76,6 +78,103 @@ pub enum IndexStatus {
     Stopped {
         error: String,
     },
+}
+
+const MAX_PAGE_DIAGNOSTICS: usize = 128;
+
+/// Diagnostics from the last completed watcher pass, separate from its state.
+#[derive(Debug, Clone, Default, Serialize)]
+struct IndexDiagnostics {
+    skipped: Vec<seyk::SkippedCount>,
+    page_diagnostics: Vec<seyk::PageDiagnostic>,
+    /// Total before the page-detail cap; counts are never truncated.
+    pages_total: usize,
+}
+
+#[derive(Default)]
+struct WatcherDiagnostics {
+    skipped: Vec<seyk::SkippedResource>,
+    page_counts: std::collections::HashMap<ResourceId, usize>,
+    pages: Vec<seyk::PageDiagnostic>,
+}
+
+impl WatcherDiagnostics {
+    fn from_sync(sync: &seyk::SyncStats) -> Self {
+        let mut page_counts = std::collections::HashMap::new();
+        for page in &sync.page_diagnostics {
+            *page_counts.entry(page.resource.clone()).or_insert(0usize) += 1;
+        }
+        Self {
+            skipped: sync.skipped.clone(),
+            page_counts,
+            pages: sync
+                .page_diagnostics
+                .iter()
+                .take(MAX_PAGE_DIAGNOSTICS)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    fn confined(&self, roots: &[PathBuf]) -> IndexDiagnostics {
+        let allowed = |resource: &ResourceId| {
+            resource
+                .to_file_path()
+                .is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
+        };
+        let mut counts = std::collections::BTreeMap::new();
+        for entry in self.skipped.iter().filter(|entry| allowed(&entry.resource)) {
+            *counts
+                .entry((entry.code, entry.reason.clone()))
+                .or_insert(0usize) += 1;
+        }
+        IndexDiagnostics {
+            skipped: counts
+                .into_iter()
+                .map(|((code, reason), count)| seyk::SkippedCount {
+                    code,
+                    reason,
+                    count,
+                })
+                .collect(),
+            page_diagnostics: self
+                .pages
+                .iter()
+                .filter(|page| allowed(&page.resource))
+                .cloned()
+                .collect(),
+            pages_total: self
+                .page_counts
+                .iter()
+                .filter(|(resource, _)| allowed(resource))
+                .map(|(_, count)| count)
+                .sum(),
+        }
+    }
+}
+
+fn combine_diagnostics(records: impl IntoIterator<Item = IndexDiagnostics>) -> IndexDiagnostics {
+    let mut result = IndexDiagnostics::default();
+    let mut counts = std::collections::BTreeMap::new();
+    for record in records {
+        result.pages_total += record.pages_total;
+        for count in record.skipped {
+            *counts.entry((count.code, count.reason)).or_insert(0usize) += count.count;
+        }
+        let remaining = MAX_PAGE_DIAGNOSTICS.saturating_sub(result.page_diagnostics.len());
+        result
+            .page_diagnostics
+            .extend(record.page_diagnostics.into_iter().take(remaining));
+    }
+    result.skipped = counts
+        .into_iter()
+        .map(|((code, reason), count)| seyk::SkippedCount {
+            code,
+            reason,
+            count,
+        })
+        .collect();
+    result
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -144,6 +243,10 @@ struct Response {
     hits: Vec<Hit>,
     segments_searched: usize,
     files: usize,
+    skipped: Vec<seyk::SkippedCount>,
+    page_diagnostics: Vec<seyk::PageDiagnostic>,
+    page_diagnostics_total: usize,
+    index_diagnostics: IndexDiagnostics,
     segments_embedded: usize,
     took_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,6 +260,7 @@ impl Hub {
             factory,
             background,
             watched: Mutex::new(Vec::new()),
+            diagnostics: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -279,7 +383,15 @@ impl Hub {
             Some(&progress),
             |pass| {
                 set(match pass {
-                    Ok(_) => IndexStatus::Ready,
+                    Ok(report) => {
+                        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+                            diagnostics.insert(
+                                root.to_path_buf(),
+                                WatcherDiagnostics::from_sync(&report.sync),
+                            );
+                        }
+                        IndexStatus::Ready
+                    }
                     Err(e) => IndexStatus::PassFailed {
                         error: e.to_string(),
                     },
@@ -366,6 +478,28 @@ impl SeykServer {
         Ok(combine(states))
     }
 
+    fn diagnostics(&self) -> Result<IndexDiagnostics> {
+        let records = self
+            .hub
+            .diagnostics
+            .lock()
+            .map_err(|_| anyhow!("index diagnostics lock poisoned"))?;
+        let mut matching: Vec<_> = records
+            .iter()
+            .filter(|(root, _)| {
+                self.roots
+                    .iter()
+                    .any(|session| session.starts_with(root) || root.starts_with(session))
+            })
+            .collect();
+        matching.sort_by_key(|(root, _)| *root);
+        Ok(combine_diagnostics(
+            matching
+                .into_iter()
+                .map(|(_, record)| record.confined(&self.roots)),
+        ))
+    }
+
     fn run_search(&self, p: SearchParams) -> Result<Response> {
         let queries: Vec<String> = p
             .queries
@@ -415,6 +549,7 @@ impl SeykServer {
         }
         let mut resp = to_response(req.execute()?);
         resp.index = status;
+        resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
     }
 }
@@ -528,6 +663,16 @@ fn to_response(r: SearchResults) -> Response {
         hits,
         segments_searched: r.stats.segments_searched,
         files: r.stats.sync.resources_discovered,
+        skipped: r.stats.sync.skipped_counts,
+        page_diagnostics_total: r.stats.sync.page_diagnostics.len(),
+        page_diagnostics: r
+            .stats
+            .sync
+            .page_diagnostics
+            .into_iter()
+            .take(MAX_PAGE_DIAGNOSTICS)
+            .collect(),
+        index_diagnostics: IndexDiagnostics::default(),
         segments_embedded: r.stats.sync.segments_embedded,
         took_ms: r.stats.total_ms,
         index: None,
@@ -601,6 +746,10 @@ pub fn serve_standalone(
         Ok(())
     })
 }
+
+#[cfg(all(test, feature = "pdf"))]
+#[path = "../../../crates/seyk-core/tests/support/pdf_fixture.rs"]
+mod pdf_fixture;
 
 #[cfg(test)]
 mod tests {
@@ -823,7 +972,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 5);
+        assert_eq!(response["schema_version"], 6);
         assert!(response.get("cache_status").is_none());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
@@ -963,6 +1112,40 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn failed_pdf_watcher_stays_ready_and_replays_diagnostics_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bad.pdf"),
+            super::pdf_fixture::malformed_cmap(true),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("good.txt"), "garden basil").unwrap();
+        let hub = Hub::new(Box::new(fake_engine), true);
+        let server = SeykServer::new(vec![dir.path().into()], hub.clone()).unwrap();
+        wait_for(&server, |state| matches!(state, IndexStatus::Ready));
+        let replay = hub
+            .engine()
+            .unwrap()
+            .index()
+            .paths([dir.path()])
+            .execute()
+            .unwrap();
+        assert_eq!(replay.sync.resources_unchanged, 2);
+        assert_eq!(replay.sync.resources_updated, 0);
+        assert_eq!(replay.sync.page_diagnostics.len(), 1);
+        let response = serde_json::to_value(search(&server, "basil")).unwrap();
+        assert_eq!(response["index"]["state"], "ready");
+        assert_eq!(response["index_diagnostics"]["pages_total"], 1);
+        assert_eq!(response["index_diagnostics"]["skipped"][0]["count"], 1);
+        assert_eq!(
+            response["index_diagnostics"]["page_diagnostics"][0]["code"],
+            "pdf_parser_panicked"
+        );
+        assert!(response["page_diagnostics"].as_array().unwrap().is_empty());
+    }
+
     #[test]
     fn failed_model_load_stops_background_indexing() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1023,6 +1206,71 @@ mod tests {
             combine(vec![indexing(1, 4), Stopped { error: "x".into() }]),
             Some(Stopped { .. })
         ));
+    }
+
+    #[test]
+    fn combined_diagnostics_merge_counts_and_cap_pages_without_changing_ready() {
+        let diagnostic = || IndexDiagnostics {
+            skipped: vec![seyk::SkippedCount {
+                code: seyk::SkipCode::PdfParserPanicked,
+                reason: "PDF parser panicked".into(),
+                count: 2,
+            }],
+            page_diagnostics: (1..=200)
+                .map(|page| seyk::PageDiagnostic {
+                    code: seyk::SkipCode::PdfParserPanicked,
+                    resource: "mem://pdf".parse().unwrap(),
+                    page,
+                    reason: "PDF parser panicked".into(),
+                })
+                .collect(),
+            pages_total: 200,
+        };
+        let combined = combine_diagnostics([diagnostic(), diagnostic()]);
+        assert_eq!(combined.skipped.len(), 1);
+        assert_eq!(combined.skipped[0].count, 4);
+        assert_eq!(combined.pages_total, 400);
+        assert_eq!(combined.page_diagnostics.len(), MAX_PAGE_DIAGNOSTICS);
+        assert_eq!(
+            serde_json::to_value(combine(vec![IndexStatus::Ready, IndexStatus::Ready])).unwrap()["state"],
+            "ready"
+        );
+    }
+
+    #[test]
+    fn watcher_diagnostics_are_confined_to_session_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let allowed = dir.path().join("allowed");
+        let sibling = dir.path().join("sibling");
+        let diagnostic = |path: PathBuf, reason: &str| seyk::PageDiagnostic {
+            code: seyk::SkipCode::PdfParserPanicked,
+            resource: ResourceId::from_path(path).unwrap(),
+            page: 1,
+            reason: reason.into(),
+        };
+        let pages = vec![
+            diagnostic(allowed.join("bad.pdf"), "allowed"),
+            diagnostic(sibling.join("secret.pdf"), "hidden"),
+        ];
+        let skipped = pages
+            .iter()
+            .map(|page| seyk::SkippedResource {
+                code: page.code,
+                resource: page.resource.clone(),
+                path: page.resource.to_file_path(),
+                reason: page.reason.clone(),
+            })
+            .collect();
+        let snapshot = WatcherDiagnostics::from_sync(&seyk::SyncStats {
+            skipped,
+            page_diagnostics: pages,
+            ..Default::default()
+        });
+        let confined = snapshot.confined(&[allowed]);
+        assert_eq!(confined.pages_total, 1);
+        assert_eq!(confined.page_diagnostics.len(), 1);
+        assert_eq!(confined.skipped.len(), 1);
+        assert!(!serde_json::to_string(&confined).unwrap().contains("hidden"));
     }
 
     fn stopped() -> IndexStatus {

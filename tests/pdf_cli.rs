@@ -51,6 +51,7 @@ fn real_binary_extract_contains_panics_and_preserves_public_text() {
             .output()
             .unwrap();
         no_leak(&output);
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("internal failure"));
         if matches!(kind, Kind::Plain | Kind::Tint) {
             assert!(
                 output.status.success(),
@@ -197,5 +198,47 @@ fn real_binary_scan_render_path_never_leaks_hidden_markers() {
         } else {
             assert_eq!(report["sync"]["segments_embedded"], 1);
         }
+    }
+}
+
+#[test]
+fn real_binary_cmap_panics_have_no_hook_stderr_spam() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.pdf");
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "cmap-cli"))
+        .build()
+        .unwrap();
+    for bad_length in [false, true] {
+        std::fs::write(&path, pdf(&[fixture::PUBLIC], Kind::Plain)).unwrap();
+        let mut result = engine.search("basil").paths([&path]).execute().unwrap();
+        let bytes = fixture::malformed_cmap(bad_length);
+        std::fs::write(&path, &bytes).unwrap();
+        result.hits[0].metadata.content_hash = blake3::hash(&bytes).to_hex().to_string();
+        result.hits[0].metadata.size_bytes = bytes.len() as u64;
+        let mut envelope = serde_json::to_value(result).unwrap();
+        envelope["schema_version"] = 6.into();
+        let json = dir.path().join("hit.json");
+        std::fs::write(&json, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_seyk"))
+            .args(["extract", "--from-json"])
+            .arg(&json)
+            .output()
+            .unwrap();
+        no_leak(&output);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("PDF parser panicked"));
+        assert!(!stderr.contains("internal failure"));
+        assert!(!stderr.contains("panicked at"));
+        let reason = if bad_length {
+            "bad length of hexstring"
+        } else {
+            "unexpected entry in unicode map"
+        };
+        assert!(stderr.contains(reason));
+        // The explicit CLI diagnostic is one line, with no hook backtrace/banner.
+        assert_eq!(stderr.lines().count(), 1);
     }
 }

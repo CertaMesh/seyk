@@ -184,8 +184,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4` or `5`, not a bare hit. The extraction document uses
-version 5 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5` or `6`, not a bare hit. The extraction document uses
+version 6 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -282,11 +282,38 @@ cache, so keep a copy if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
 `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream
-diagnostics can contain document data. Seyk core installs no logger or panic
-hook. It converts unwinding PDF parser panics to sanitized errors, but an
-application's panic hook runs first and must not print payloads. The CLI
-installs a fixed-message, file-and-line-only hook. Neither mechanism contains
+diagnostics can contain document data. Seyk core installs no logger. On the first
+PDF parse, core installs one permanent panic dispatcher with `OnceLock`, capturing
+the previous hook. Per-parse RAII guards change only thread-local suppression:
+parser panics are recorded as sanitized diagnostics without printing, while
+unrelated threads delegate to the captured hook. A component installing a later
+hook replaces the dispatcher; parser panics are still caught but may then print.
+Seyk never removes or overwrites that later hook. If the first parse starts
+during unwinding, dispatcher installation is deferred until a normal parse;
+that first parse can use the existing hook and may print. Neither mechanism contains
 aborts, out-of-memory failures, hangs or hostile allocation behaviour.
+
+PDF parser failures are isolated per page: valid pages keep their original page
+numbers, and failed pages appear in `sync.page_diagnostics` with typed `code`
+and sanitized `reason`. If every page fails, the resource also appears in
+`sync.skipped`; `sync.skipped_counts` groups resource counts by code and reason.
+CLI summaries group skips by code (at most five groups). MCP reports inline
+diagnostics and watcher diagnostics in a separate `index_diagnostics` field;
+`index.state` keeps its existing values, including `ready`. Protocol version 6 adds
+these diagnostic fields; the cache schema remains unchanged. MCP page details are
+capped at 128 entries, with the total reported separately.
+
+An unchanged PDF is not re-parsed or rewritten after a deterministic failure.
+Page diagnostics are replayed from an engine-local map keyed by resource and
+preparation descriptor. They are not persisted: a fresh process reports them
+only for resources it actually parses, and cannot replay failures from an
+already-fresh persistent cache. Changed bytes or preparation versions trigger
+a new parse.
+
+Raw lopdf text fallback is deferred: lopdf 0.42 prefers Encoding over ToUnicode
+and silently substitutes standard encoding after some font errors. That can
+produce incorrect evidence. Page isolation recovers unaffected pages without
+guessing glyph mappings. Subprocess isolation remains tracked in Solo #4374.
 
 ### Scores and tags
 
@@ -437,7 +464,7 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 5`.
+CLI JSON objects and MCP search responses include `schema_version: 6`.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -632,7 +659,7 @@ by stats and MCP daemon status's `cache_status` (`null` until the daemon opens
 its cache, or if stats fail). Search responses do not include cache status.
 These snapshots do not reflect subsequent directory changes until reopen and
 are distinct from inherited Time Machine exclusions. Protocol version 5 adds
-these fields; extraction still accepts search documents from versions 2–5.
+these fields; extraction still accepts search documents from versions 2–6.
 
 ## Supported resources
 

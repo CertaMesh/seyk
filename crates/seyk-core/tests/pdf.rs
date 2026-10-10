@@ -113,9 +113,9 @@ fn errors_and_limits_do_not_stop_the_rest_of_the_corpus() {
         .paths([dir.path()])
         .execute()
         .unwrap();
-    assert_eq!(result.stats.sync.skipped.len(), 4);
-    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
-    assert_eq!(result.hits.len(), 1);
+    assert_eq!(result.stats.sync.skipped.len(), 3);
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
+    assert_eq!(result.hits.len(), 2);
     assert!(
         result
             .stats
@@ -128,7 +128,7 @@ fn errors_and_limits_do_not_stop_the_rest_of_the_corpus() {
         result
             .stats
             .sync
-            .skipped
+            .page_diagnostics
             .iter()
             .any(|s| s.reason.contains("panicked"))
     );
@@ -290,7 +290,8 @@ fn corrupt_streams_reject_the_whole_resource_and_keep_other_files() {
             .build()
             .unwrap();
         let result = fresh.search("basil").paths([dir.path()]).execute().unwrap();
-        assert_eq!(result.stats.sync.resources_updated, 1);
+        // Both bindings are stored: searchable text and an empty failed PDF.
+        assert_eq!(result.stats.sync.resources_updated, 2);
         assert_eq!(result.stats.sync.segments_embedded, 1);
         assert_eq!(result.stats.sync.skipped.len(), 1);
         assert!(result.stats.sync.page_diagnostics.is_empty());
@@ -322,4 +323,154 @@ fn omitted_contents_is_a_legitimately_empty_page() {
         engine.extract(&result.hits[0]).unwrap().text,
         "garden basil"
     );
+}
+
+#[test]
+fn malformed_cmaps_are_typed_failures_and_other_documents_remain_searchable() {
+    let dir = tempfile::tempdir().unwrap();
+    for bad_length in [false, true] {
+        std::fs::write(
+            dir.path().join(format!("bad-{bad_length}.pdf")),
+            fixture::malformed_cmap(bad_length),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("good.pdf"),
+        pdf(&["garden basil"], Kind::Plain),
+    )
+    .unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "cmap"))
+        .build()
+        .unwrap();
+    let result = engine
+        .search("basil")
+        .paths([dir.path()])
+        .mode(SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert_eq!(result.stats.sync.resources_discovered, 3);
+    assert_eq!(result.stats.sync.skipped.len(), 2);
+    assert_eq!(result.stats.sync.skipped_counts.len(), 2);
+    for count in &result.stats.sync.skipped_counts {
+        assert_eq!(count.count, 1);
+        assert_eq!(count.code, seyk_core::SkipCode::PdfParserPanicked);
+    }
+    let reasons: Vec<_> = result
+        .stats
+        .sync
+        .skipped_counts
+        .iter()
+        .map(|count| count.reason.as_str())
+        .collect();
+    assert!(reasons.contains(&"PDF parser panicked: bad length of hexstring"));
+    assert!(reasons.contains(&"PDF parser panicked: unexpected entry in unicode map"));
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(
+        engine.extract(&result.hits[0]).unwrap().text,
+        "garden basil"
+    );
+}
+
+#[test]
+fn isolated_failed_page_keeps_later_page_locator_and_verified_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.pdf");
+    std::fs::write(
+        &path,
+        pdf(
+            &["first garden", "broken", "third basil"],
+            Kind::BrokenSecond,
+        ),
+    )
+    .unwrap();
+    let model = Arc::new(FakeEmbedder::new(Dimension::D128, "isolation"));
+    let engine = SearchEngine::builder()
+        .shared_embedder(model.clone())
+        .build()
+        .unwrap();
+    let result = engine
+        .search("basil")
+        .paths([&path])
+        .mode(SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert!(result.stats.sync.skipped.is_empty());
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
+    assert_eq!(result.stats.sync.page_diagnostics[0].page, 2);
+    assert_eq!(
+        result.stats.sync.page_diagnostics[0].code,
+        seyk_core::SkipCode::PdfParserPanicked
+    );
+    assert_eq!(result.hits.len(), 1);
+    assert!(matches!(
+        result.hits[0].locator,
+        ResourceLocator::PageText { page: 3, .. }
+    ));
+    assert_eq!(engine.extract(&result.hits[0]).unwrap().text, "third basil");
+    let embedded = model.resource_count();
+    let next = engine.index().paths([&path]).execute().unwrap();
+    assert_eq!(model.resource_count(), embedded);
+    assert_eq!(next.sync.resources_updated, 0);
+    assert_eq!(next.sync.resources_unchanged, 1);
+    assert_eq!(next.sync.page_diagnostics.len(), 1);
+}
+
+#[test]
+fn unchanged_cmap_failures_replay_without_cache_writes_or_scrub_debt() {
+    for bad_length in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.pdf");
+        let cache_path = dir.path().join("cache.db");
+        std::fs::write(&path, fixture::malformed_cmap(bad_length)).unwrap();
+        let build = || {
+            SearchEngine::builder()
+                .embedder(FakeEmbedder::new(Dimension::D128, "replay"))
+                .cache(SqliteCache::open(&cache_path).unwrap())
+                .build()
+                .unwrap()
+        };
+        let engine = build();
+        let first = engine.index().paths([&path]).execute().unwrap();
+        assert_eq!(first.sync.resources_updated, 1);
+        assert_eq!(first.sync.page_diagnostics.len(), 1);
+        engine.scrub_cache().unwrap();
+        assert!(
+            !engine
+                .with_cache(|cache| cache.stats())
+                .unwrap()
+                .scrub_pending
+        );
+        let observer = rusqlite::Connection::open(&cache_path).unwrap();
+        observer.execute_batch("CREATE TABLE writes (n INTEGER NOT NULL); INSERT INTO writes VALUES(0);
+            CREATE TRIGGER count_insert AFTER INSERT ON resources BEGIN UPDATE writes SET n=n+1; END;
+            CREATE TRIGGER count_update AFTER UPDATE ON resources BEGIN UPDATE writes SET n=n+1; END;
+            CREATE TRIGGER count_delete AFTER DELETE ON resources BEGIN UPDATE writes SET n=n+1; END;").unwrap();
+        let second = engine.index().paths([&path]).execute().unwrap();
+        assert_eq!(second.sync.resources_unchanged, 1);
+        assert_eq!(second.sync.resources_updated, 0);
+        assert_eq!(second.sync.page_diagnostics, first.sync.page_diagnostics);
+        assert_eq!(second.sync.skipped_counts, first.sync.skipped_counts);
+        assert_eq!(
+            observer
+                .query_row("SELECT n FROM writes", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let markers: i64 = observer.query_row("SELECT count(*) FROM meta WHERE key='wal_scrub_pending' OR key GLOB 'fts_scrub_pending:*'", [], |row| row.get(0)).unwrap();
+        assert_eq!(markers, 0);
+        drop(engine);
+        let fresh = build();
+        let cached = fresh.index().paths([&path]).execute().unwrap();
+        assert_eq!(cached.sync.resources_unchanged, 1);
+        assert!(cached.sync.page_diagnostics.is_empty());
+        assert!(cached.sync.skipped.is_empty());
+        // A changed descriptor invalidates the replay record and parses again.
+        std::fs::write(&path, pdf(&["garden basil"], Kind::Plain)).unwrap();
+        let changed = fresh.index().paths([&path]).execute().unwrap();
+        assert_eq!(changed.sync.resources_updated, 1);
+        assert!(changed.sync.page_diagnostics.is_empty());
+    }
 }

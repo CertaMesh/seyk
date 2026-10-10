@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 5;
+const JSON_SCHEMA_VERSION: u32 = 6;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -791,9 +791,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=5)
+        Some(2..=6)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4 or 5");
+        bail!("expected search JSON schema_version 2, 3, 4, 5 or 6");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -1065,6 +1065,21 @@ fn format_sync(s: &SyncStats) -> String {
     );
     if !s.skipped.is_empty() {
         out.push_str(&format!(", {} skipped", s.skipped.len()));
+        let mut counts = std::collections::BTreeMap::new();
+        for count in &s.skipped_counts {
+            *counts.entry(count.code).or_insert(0usize) += count.count;
+        }
+        for (code, count) in counts.iter().take(5) {
+            let code = match code {
+                seyk::SkipCode::PdfParserPanicked => "pdf_parser_panicked",
+                seyk::SkipCode::PdfParseFailed => "pdf_parse_failed",
+                seyk::SkipCode::Other => "other",
+            };
+            out.push_str(&format!("; {count}: {code}"));
+        }
+        if counts.len() > 5 {
+            out.push_str("; further codes omitted");
+        }
     }
     if !s.page_diagnostics.is_empty() {
         out.push_str(&format!(", {} pages not indexed", s.page_diagnostics.len()));
@@ -1375,7 +1390,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 5);
+        assert_eq!(v["schema_version"], 6);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1395,12 +1410,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 5);
+        assert_eq!(value["schema_version"], 6);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            5
+            6
         );
     }
 
@@ -1431,7 +1446,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 5);
+        assert_eq!(value["schema_version"], 6);
         assert!(
             value["hits"]
                 .as_array()
@@ -1449,6 +1464,53 @@ mod tests {
         assert!(read_search_hit(malformed.to_string().as_bytes(), 0).is_err());
     }
     #[test]
+    fn summary_counts_every_skipped_reason_even_when_details_are_capped() {
+        let mut r = results();
+        r.stats.sync.skipped_counts = vec![seyk::SkippedCount {
+            code: seyk::SkipCode::PdfParserPanicked,
+            reason: "PDF parser panicked".into(),
+            count: 7,
+        }];
+        r.stats.sync.skipped = (0..7)
+            .map(|i| seyk::SkippedResource {
+                code: seyk::SkipCode::PdfParserPanicked,
+                resource: format!("mem://pdf/{i}").parse().unwrap(),
+                path: None,
+                reason: "PDF parser panicked".into(),
+            })
+            .collect();
+        let summary = format_summary(&r);
+        assert!(summary.contains("7 skipped; 7: pdf_parser_panicked"));
+        assert_eq!(summary.matches("  skipped ").count(), 5);
+    }
+
+    #[test]
+    fn sync_summary_groups_codes_without_inlining_resource_reasons() {
+        let stats = SyncStats {
+            skipped: (0..100)
+                .map(|i| seyk::SkippedResource {
+                    code: seyk::SkipCode::Other,
+                    resource: format!("mem://{i}").parse().unwrap(),
+                    path: None,
+                    reason: format!("private long path {i}"),
+                })
+                .collect(),
+            skipped_counts: (0..100)
+                .map(|i| seyk::SkippedCount {
+                    code: seyk::SkipCode::Other,
+                    count: 1,
+                    reason: format!("private long path {i}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let summary = format_sync(&stats);
+        assert!(summary.contains("100 skipped; 100: other"));
+        assert!(!summary.contains("private"));
+        assert!(summary.len() < 150);
+    }
+
+    #[test]
     fn pdf_page_diagnostics_are_not_skipped_resources() {
         let resource: ResourceId = "mem://mixed".parse().unwrap();
         let report = IndexReport {
@@ -1456,6 +1518,7 @@ mod tests {
                 resources_discovered: 1,
                 resources_updated: 1,
                 page_diagnostics: vec![seyk::PageDiagnostic {
+                    code: seyk::SkipCode::Other,
                     resource,
                     page: 2,
                     reason: "no usable embedded text".into(),

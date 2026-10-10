@@ -648,7 +648,14 @@ Upstream log messages and panic payloads can contain content. The root binary
 and core install no log logger. The binary's panic hook emits only a fixed message
 and file:line, and every PDF parse catches unwinding panics into a sanitized
 per-resource error. Library callers must filter the `pdf_extract` logger target
-to Off and install a payload-safe panic hook themselves; core never installs one.
+to Off. Core lazily installs one permanent dispatcher with `OnceLock`, capturing the
+previous hook. Per-parse RAII guards change only thread-local suppression and
+record sanitized panic reasons; unrelated threads delegate to the captured hook.
+Guard drop restores thread-local state even during unwinding. First installation
+is deferred if a parse starts while unwinding, because Rust forbids set_hook
+then; the existing hook may print until the dispatcher is installed. A later external
+hook replaces the dispatcher: catch_unwind still catches parser panics, but they
+may print. Seyk never removes or overwrites a hook installed after its own.
 This does not contain aborts, OOM or hangs. A non-UTF-8 Type-4 stream is rejected
 explicitly: without a logger, the upstream log argument's UTF-8 unwrap is never
 evaluated. A separate malformed operator exercises a real parser panic.
@@ -698,6 +705,25 @@ parameters fail explicitly. flate2 was already in the locked graph; core now
 uses its checked decoder directly. No upstream fork or package update is needed.
 The PDF-only preparation descriptor advances to strict-v2 so cached PDFs are
 revalidated; existing text/image profiles and hashes remain unchanged.
+
+The current PDF preparation path isolates decoder failures/panics per physical
+page; invalid UTF-8 text is a page failure too. Document-wide validation and
+output-cap failures still reject the whole resource. A deterministic whole-PDF
+failure stores an empty binding for the verified source version; partial failures
+store only valid pages, without shifting page numbers.
+
+Unchanged deterministic PDF failures keep the normal preparation descriptor. An
+engine-local map keyed by (resource, descriptor) replays page diagnostics and
+whole-resource failures for watchers/MCP without parsing, put_resource, FTS rewrites
+or new scrub markers. Changed bytes or preparation versions invalidate reuse.
+Diagnostics are not persisted: a fresh process reports failures only on a parse,
+and cannot replay an already-fresh persistent cache's previous failures.
+MCP preserves the existing `index.state` values, including `ready`, and exposes
+last-pass watcher diagnostics separately in `index_diagnostics`. Counts merge
+by (code, reason); page details are capped at 128 with `pages_total` retaining the
+total. Inline response page details have the same cap and a separate
+`page_diagnostics_total`. CLI skip summaries group by code and show at most five
+codes. Benchmark diagnostics print codes, counts and opaque resource hashes only.
 
 Page diagnostics now have their own SyncStats field and are emitted only after
 a successful resource commit. CLI summaries distinguish those pages from skipped
@@ -777,8 +803,10 @@ recall limitation, not an assertion of document fidelity.
 No logger is installed. Library applications with logging must filter
 `pdf_extract`, `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off because
 upstream diagnostics can contain source data. Renderer loading and rendering
-catch unwinding panics into sanitized errors; the CLI's existing payload-free
-panic hook runs first. Core installs no panic hook, and catch_unwind does not
+catch unwinding panics into sanitized errors under the same thread-local suppression guard
+as text parsing. The permanent dispatcher delegates unrelated panics to its captured
+hook; a later external hook replaces it and may print parser panics. Seyk never
+removes or overwrites that later hook. catch_unwind does not
 contain aborts, OOM or hangs. Tests exercise an unwind inside Hayro through a
 panicking font callback and real CLI output capture for hidden-marker render
 fixtures, in addition to the parser leak regressions.

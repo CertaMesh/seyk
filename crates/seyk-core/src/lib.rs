@@ -3,11 +3,14 @@
 //! With `pdf`, applications installing a `log` logger MUST filter `pdf_extract`
 //! to Off. With `pdf-render`, also filter `hayro_interpret`, `hayro_syntax` and
 //! `hayro_font` to Off: upstream diagnostics can contain document bytes. This crate installs
-//! neither a logger nor a panic hook. PDF panics become errors via catch_unwind,
-//! but the application's panic hook still runs first; use a payload-free hook.
+//! no logger. PDF panics become errors via catch_unwind. A permanent dispatcher is
+//! installed lazily once; RAII guards suppress and record parser panics only on
+//! the parsing thread, delegating other threads to the captured previous hook.
+//! Later external hooks replace it and may print; Seyk never removes or overwrites them.
+//! First installation is deferred during unwinding, so that parse may also print.
 //! With `audio`, Symphonia probe, construction, packet reads and decode panics
-//! likewise become payload-free `UnsupportedAudio` errors; the same panic-hook
-//! requirement applies. ALAC frame allocations are checked before construction.
+//! likewise become payload-free `UnsupportedAudio` errors; applications must use
+//! a payload-free panic hook for audio. ALAC frame allocations are checked before construction.
 //! Unwinding does not contain aborts, OOM, hangs or excessive parser allocations.
 
 pub mod cache;
@@ -40,7 +43,7 @@ pub use embedding::{Dimension, Embedding};
 pub use engine::{
     IndexReport, IndexRequest, MatchSignals, PageDiagnostic, ProgressEvent, ProgressFn,
     SearchEngine, SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults,
-    SearchStats, SkippedResource, SyncStats, expand_tilde, make_preview,
+    SearchStats, SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
 pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};

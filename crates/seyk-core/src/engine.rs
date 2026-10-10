@@ -87,9 +87,29 @@ pub struct SearchHit {
     pub query_index: usize,
 }
 
+/// Stable classification independent of dependency error messages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipCode {
+    #[default]
+    Other,
+    PdfParseFailed,
+    PdfParserPanicked,
+}
+
+/// Number of resources skipped for one typed reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedCount {
+    pub code: SkipCode,
+    pub reason: String,
+    pub count: usize,
+}
+
 /// A resource that was found but could not be searched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedResource {
+    #[serde(default)]
+    pub code: SkipCode,
     pub resource: ResourceId,
     #[serde(
         default,
@@ -100,9 +120,11 @@ pub struct SkippedResource {
     pub reason: String,
 }
 
-/// A page omitted from a resource that was otherwise indexed successfully.
+/// A page omitted after a parse or preparation failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageDiagnostic {
+    #[serde(default)]
+    pub code: SkipCode,
     pub resource: ResourceId,
     pub page: u32,
     pub reason: String,
@@ -117,6 +139,8 @@ pub struct SyncStats {
     /// New or changed since last seen.
     pub resources_updated: usize,
     pub skipped: Vec<SkippedResource>,
+    #[serde(default)]
+    pub skipped_counts: Vec<SkippedCount>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_diagnostics: Vec<PageDiagnostic>,
     /// Segments newly sent to the model.
@@ -265,6 +289,7 @@ impl SearchEngineBuilder {
             embedder,
             cache: Arc::new(Mutex::new(cache)),
             indexing: Arc::new(Mutex::new(())),
+            pdf_diagnostics: Mutex::new(HashMap::new()),
             scrubber_started: AtomicBool::new(false),
             #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
@@ -294,6 +319,7 @@ pub struct SearchEngine {
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
     indexing: Arc<Mutex<()>>,
+    pdf_diagnostics: Mutex<HashMap<(ResourceId, String), PdfDiagnostics>>,
     scrubber_started: AtomicBool,
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
@@ -695,6 +721,7 @@ impl SearchEngine {
                     ));
                 } else {
                     stats.resources_unchanged += 1;
+                    self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
                 }
                 continue;
             }
@@ -824,6 +851,7 @@ impl SearchEngine {
                 metadata.modified_ns = r.modified_ns;
                 self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                 stats.resources_unchanged += 1;
+                self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
                 continue;
             }
             let metadata = ResourceMetadata {
@@ -848,8 +876,8 @@ impl SearchEngine {
                     jobs: Vec::new(),
                     page_diagnostics: Vec::new(),
                 };
-                if let Some(reason) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
-                    stats.skipped.push(skip(&r.id, reason));
+                if let Some(entry) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
+                    stats.skipped.push(entry);
                 }
                 continue;
             }
@@ -924,6 +952,7 @@ impl SearchEngine {
         if stats.resources_updated > 0 {
             self.with_cache(|c| c.prune_orphans(pid))?;
         }
+        stats.skipped_counts = skipped_counts(&stats.skipped);
         Ok(stats)
     }
 
@@ -1053,6 +1082,48 @@ impl SearchEngine {
         cfg!(feature = "pdf-render") && self.embedder.supports(crate::Modality::Image)
     }
 
+    fn replay_pdf_diagnostics(
+        &self,
+        resource: &ResourceId,
+        descriptor: &str,
+        stats: &mut SyncStats,
+    ) -> Result<()> {
+        let diagnostics = self
+            .pdf_diagnostics
+            .lock()
+            .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?;
+        if let Some(record) = diagnostics.get(&(resource.clone(), descriptor.to_owned())) {
+            stats.page_diagnostics.extend(record.pages.clone());
+            if let Some(skipped) = &record.skipped {
+                stats.skipped.push(skipped.clone());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "pdf")]
+    fn remember_pdf_diagnostics(
+        &self,
+        target: &Pending,
+        skipped: Option<SkippedResource>,
+    ) -> Result<()> {
+        let mut diagnostics = self
+            .pdf_diagnostics
+            .lock()
+            .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?;
+        diagnostics.retain(|(resource, _), _| resource != &target.resource);
+        if !target.page_diagnostics.is_empty() || skipped.is_some() {
+            diagnostics.insert(
+                (target.resource.clone(), target.descriptor_hash.clone()),
+                PdfDiagnostics {
+                    pages: target.page_diagnostics.clone(),
+                    skipped,
+                },
+            );
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "pdf")]
     fn sync_pdf(
         &self,
@@ -1061,20 +1132,52 @@ impl SearchEngine {
         mut target: Pending,
         stats: &mut SyncStats,
         progress: Option<ProgressFn>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<SkippedResource>> {
         let pages = match crate::pdf::read_pages(&bytes, &r.id) {
             Ok(pages) => pages,
-            Err(error) => return Ok(Some(pdf_reason(error))),
+            Err(error) => {
+                let entry = pdf_skip(&r.id, error);
+                self.commit_media_resource(&target, &[], stats)?;
+                self.remember_pdf_diagnostics(&target, Some(entry.clone()))?;
+                return Ok(Some(entry));
+            }
         };
+        // Failed pages never shift later page numbers or become rendered text.
+        // If every page failed, retain resource-level failure semantics as well.
+        let all_failed = pages.iter().all(|page| page.error.is_some());
+        let mut first_failure = None;
+        let mut valid_pages = Vec::new();
+        for page in pages {
+            if let Some(error) = page.error {
+                let entry = pdf_skip(&r.id, error);
+                let reason = entry.reason.clone();
+                target.page_diagnostics.push(PageDiagnostic {
+                    code: entry.code,
+                    resource: r.id.clone(),
+                    page: page.page,
+                    reason: reason.clone(),
+                });
+                first_failure.get_or_insert(entry);
+            } else {
+                valid_pages.push(page);
+            }
+        }
+        if all_failed {
+            self.commit_media_resource(&target, &[], stats)?;
+            self.remember_pdf_diagnostics(&target, first_failure.clone())?;
+            stats.page_diagnostics.extend(target.page_diagnostics);
+            return Ok(first_failure);
+        }
         #[cfg(feature = "pdf-render")]
         let mut renderer = None;
         let capacity = self.batch_size.min(4);
         let mut batch = Vec::with_capacity(capacity);
         let mut records = Vec::new();
-        for page in pages {
+        for page in valid_pages {
             if crate::pdf::usable(&page.text) {
                 if !self.embedder.supports(crate::Modality::Text) {
                     target.page_diagnostics.push(PageDiagnostic {
+                        code: SkipCode::Other,
                         resource: r.id.clone(),
                         page: page.page,
                         reason: "embedded text is not supported by this embedder".into(),
@@ -1100,7 +1203,7 @@ impl SearchEngine {
                         && let Some(reason) =
                             self.flush_media_batch(&mut batch, &mut records, stats, progress)?
                     {
-                        return Ok(Some(reason));
+                        return Ok(Some(skip(&r.id, reason)));
                     }
                 }
             } else if self.pdf_images() {
@@ -1109,7 +1212,7 @@ impl SearchEngine {
                     if renderer.is_none() {
                         renderer = match crate::pdf::render::PageRenderer::new(&bytes, &r.id) {
                             Ok(renderer) => Some(renderer),
-                            Err(error) => return Ok(Some(pdf_reason(error))),
+                            Err(error) => return Ok(Some(pdf_skip(&r.id, error))),
                         };
                     }
                     match renderer
@@ -1122,18 +1225,21 @@ impl SearchEngine {
                         }
                         Err(Error::PdfRender { reason, .. }) => {
                             target.page_diagnostics.push(PageDiagnostic {
+                                code: SkipCode::Other,
                                 resource: r.id.clone(),
                                 page: page.page,
                                 reason: reason.into(),
                             });
                             continue;
                         }
-                        Err(error) => return Ok(Some(pdf_reason(error))),
+                        Err(error) => return Ok(Some(pdf_skip(&r.id, error))),
                     }
                 }
             } else {
                 target.page_diagnostics.push(PageDiagnostic {
-                    resource: r.id.clone(), page: page.page,
+                    code: SkipCode::Other,
+                    resource: r.id.clone(),
+                    page: page.page,
                     reason: if cfg!(feature = "pdf-render") {
                         "no usable embedded text; image embedding is disabled"
                     } else {
@@ -1145,13 +1251,14 @@ impl SearchEngine {
                 && let Some(reason) =
                     self.flush_media_batch(&mut batch, &mut records, stats, progress)?
             {
-                return Ok(Some(reason));
+                return Ok(Some(skip(&r.id, reason)));
             }
         }
         if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
-            return Ok(Some(reason));
+            return Ok(Some(skip(&r.id, reason)));
         }
         self.commit_media_resource(&target, &records, stats)?;
+        self.remember_pdf_diagnostics(&target, None)?;
         stats.page_diagnostics.extend(target.page_diagnostics);
         Ok(None)
     }
@@ -1369,13 +1476,31 @@ impl SearchEngine {
 }
 
 #[cfg(feature = "pdf")]
-fn pdf_reason(error: Error) -> String {
-    match error {
-        Error::PdfParse { reason, .. } => format!("PDF parse failed: {reason}"),
+fn pdf_skip(resource: &ResourceId, error: Error) -> SkippedResource {
+    let code = match &error {
+        Error::ParserPanicked { .. } => SkipCode::PdfParserPanicked,
+        Error::PdfParse { .. } | Error::PdfPageDecode { .. } => SkipCode::PdfParseFailed,
+        _ => SkipCode::Other,
+    };
+    let reason = match error {
+        Error::PdfParse { reason, .. } | Error::PdfPageDecode { reason, .. } => {
+            format!("PDF parse failed: {reason}")
+        }
         Error::PdfRender { reason, .. } => format!("PDF rendering failed: {reason}"),
-        Error::ParserPanicked { .. } => "PDF parser panicked".into(),
+        Error::ParserPanicked { reason, .. } => format!("PDF parser panicked: {reason}"),
         other => other.to_string(),
+    };
+    SkippedResource {
+        code,
+        resource: resource.clone(),
+        path: resource.to_file_path(),
+        reason,
     }
+}
+
+struct PdfDiagnostics {
+    pages: Vec<PageDiagnostic>,
+    skipped: Option<SkippedResource>,
 }
 
 struct Pending {
@@ -1498,11 +1623,30 @@ fn strip_link_targets(text: &str) -> String {
 }
 
 fn skip(resource: &ResourceId, reason: impl Into<String>) -> SkippedResource {
+    let reason = reason.into();
     SkippedResource {
+        code: SkipCode::Other,
         resource: resource.clone(),
         path: resource.to_file_path(),
-        reason: reason.into(),
+        reason,
     }
+}
+
+fn skipped_counts(skipped: &[SkippedResource]) -> Vec<SkippedCount> {
+    let mut counts = std::collections::BTreeMap::new();
+    for entry in skipped {
+        *counts
+            .entry((entry.code, entry.reason.clone()))
+            .or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|((code, reason), count)| SkippedCount {
+            code,
+            reason,
+            count,
+        })
+        .collect()
 }
 
 fn input_hash(parts: &[&str]) -> String {
@@ -1692,6 +1836,8 @@ impl<'e> SearchRequest<'e> {
                 wanted.remove(&r.id);
             }
         }
+
+        sync.skipped_counts = skipped_counts(&sync.skipped);
 
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
@@ -2212,6 +2358,14 @@ impl<'e> IndexRequest<'e> {
             Ok(gone.len())
         })?;
 
+        if !gone.is_empty() {
+            engine
+                .pdf_diagnostics
+                .lock()
+                .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?
+                .retain(|(resource, _), _| !gone.contains(resource));
+        }
+        sync.skipped_counts = skipped_counts(&sync.skipped);
         Ok(IndexReport {
             sync,
             resources_removed: removed,
@@ -2368,6 +2522,38 @@ mod tests {
         waits
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn pdf_skip_codes_come_from_variants_not_display_text() {
+        let resource = "mem://typed".parse().unwrap();
+        assert_eq!(
+            pdf_skip(
+                &resource,
+                Error::ParserPanicked {
+                    resource: resource.clone(),
+                    reason: "arbitrary sanitized reason"
+                }
+            )
+            .code,
+            SkipCode::PdfParserPanicked
+        );
+        assert_eq!(
+            pdf_skip(
+                &resource,
+                Error::PdfPageDecode {
+                    resource: resource.clone(),
+                    reason: "arbitrary sanitized reason"
+                }
+            )
+            .code,
+            SkipCode::PdfParseFailed
+        );
+        assert_eq!(
+            skip(&resource, "PDF parser panicked: forged string").code,
+            SkipCode::Other
+        );
     }
 
     #[test]
