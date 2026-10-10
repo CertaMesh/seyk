@@ -68,6 +68,10 @@ pub enum IndexStatus {
         segments_total: usize,
     },
     Ready,
+    ReadyWithDiagnostics {
+        skipped: Vec<seyk::SkippedCount>,
+        page_diagnostics: Vec<seyk::PageDiagnostic>,
+    },
     /// The last pass failed; the watcher still runs and retries on the next change.
     PassFailed {
         error: String,
@@ -144,6 +148,8 @@ struct Response {
     hits: Vec<Hit>,
     segments_searched: usize,
     files: usize,
+    skipped: Vec<seyk::SkippedCount>,
+    page_diagnostics: Vec<seyk::PageDiagnostic>,
     segments_embedded: usize,
     took_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -279,7 +285,17 @@ impl Hub {
             Some(&progress),
             |pass| {
                 set(match pass {
-                    Ok(_) => IndexStatus::Ready,
+                    Ok(report) => {
+                        if report.sync.skipped.is_empty() && report.sync.page_diagnostics.is_empty()
+                        {
+                            IndexStatus::Ready
+                        } else {
+                            IndexStatus::ReadyWithDiagnostics {
+                                skipped: report.sync.skipped_counts.clone(),
+                                page_diagnostics: report.sync.page_diagnostics.clone(),
+                            }
+                        }
+                    }
                     Err(e) => IndexStatus::PassFailed {
                         error: e.to_string(),
                     },
@@ -428,7 +444,8 @@ fn combine(states: Vec<IndexStatus>) -> Option<IndexStatus> {
         PassFailed { .. } => 1,
         LoadingModel => 2,
         Indexing { .. } => 3,
-        Ready => 4,
+        ReadyWithDiagnostics { .. } => 4,
+        Ready => 5,
     };
     let worst = states.iter().min_by_key(|s| rank(s))?.clone();
     Some(match worst {
@@ -443,6 +460,24 @@ fn combine(states: Vec<IndexStatus>) -> Option<IndexStatus> {
             Indexing {
                 segments_done: done,
                 segments_total: total,
+            }
+        }
+        ReadyWithDiagnostics { .. } => {
+            let mut skipped = Vec::new();
+            let mut page_diagnostics = Vec::new();
+            for state in states {
+                if let ReadyWithDiagnostics {
+                    skipped: counts,
+                    page_diagnostics: pages,
+                } = state
+                {
+                    skipped.extend(counts);
+                    page_diagnostics.extend(pages);
+                }
+            }
+            ReadyWithDiagnostics {
+                skipped,
+                page_diagnostics,
             }
         }
         other => other,
@@ -528,6 +563,8 @@ fn to_response(r: SearchResults) -> Response {
         hits,
         segments_searched: r.stats.segments_searched,
         files: r.stats.sync.resources_discovered,
+        skipped: r.stats.sync.skipped_counts,
+        page_diagnostics: r.stats.sync.page_diagnostics,
         segments_embedded: r.stats.sync.segments_embedded,
         took_ms: r.stats.total_ms,
         index: None,
@@ -823,7 +860,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 5);
+        assert_eq!(response["schema_version"], 6);
         assert!(response.get("cache_status").is_none());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
@@ -1022,6 +1059,27 @@ mod tests {
         assert!(matches!(
             combine(vec![indexing(1, 4), Stopped { error: "x".into() }]),
             Some(Stopped { .. })
+        ));
+    }
+
+    #[test]
+    fn combined_ready_status_keeps_typed_failure_counts() {
+        let diagnostic = || IndexStatus::ReadyWithDiagnostics {
+            skipped: vec![seyk::SkippedCount {
+                code: seyk::SkipCode::PdfParserPanicked,
+                reason: "PDF parser panicked".into(),
+                count: 2,
+            }],
+            page_diagnostics: Vec::new(),
+        };
+        let state = combine(vec![IndexStatus::Ready, diagnostic()]).unwrap();
+        let json = serde_json::to_value(state).unwrap();
+        assert_eq!(json["state"], "ready_with_diagnostics");
+        assert_eq!(json["skipped"][0]["code"], "pdf_parser_panicked");
+        assert_eq!(json["skipped"][0]["count"], 2);
+        assert!(matches!(
+            combine(vec![diagnostic(), IndexStatus::LoadingModel]),
+            Some(IndexStatus::LoadingModel)
         ));
     }
 

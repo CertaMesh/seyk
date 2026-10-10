@@ -87,9 +87,29 @@ pub struct SearchHit {
     pub query_index: usize,
 }
 
+/// Stable classification independent of dependency error messages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipCode {
+    #[default]
+    Other,
+    PdfParseFailed,
+    PdfParserPanicked,
+}
+
+/// Number of resources skipped for one typed reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedCount {
+    pub code: SkipCode,
+    pub reason: String,
+    pub count: usize,
+}
+
 /// A resource that was found but could not be searched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedResource {
+    #[serde(default)]
+    pub code: SkipCode,
     pub resource: ResourceId,
     #[serde(
         default,
@@ -100,9 +120,11 @@ pub struct SkippedResource {
     pub reason: String,
 }
 
-/// A page omitted from a resource that was otherwise indexed successfully.
+/// A page omitted after a parse or preparation failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageDiagnostic {
+    #[serde(default)]
+    pub code: SkipCode,
     pub resource: ResourceId,
     pub page: u32,
     pub reason: String,
@@ -117,6 +139,8 @@ pub struct SyncStats {
     /// New or changed since last seen.
     pub resources_updated: usize,
     pub skipped: Vec<SkippedResource>,
+    #[serde(default)]
+    pub skipped_counts: Vec<SkippedCount>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_diagnostics: Vec<PageDiagnostic>,
     /// Segments newly sent to the model.
@@ -924,6 +948,7 @@ impl SearchEngine {
         if stats.resources_updated > 0 {
             self.with_cache(|c| c.prune_orphans(pid))?;
         }
+        stats.skipped_counts = skipped_counts(&stats.skipped);
         Ok(stats)
     }
 
@@ -1066,15 +1091,40 @@ impl SearchEngine {
             Ok(pages) => pages,
             Err(error) => return Ok(Some(pdf_reason(error))),
         };
+        // Failed pages never shift later page numbers or become rendered text.
+        // If every page failed, retain resource-level failure semantics as well.
+        let all_failed = pages.iter().all(|page| page.error.is_some());
+        let mut first_failure = None;
+        let mut valid_pages = Vec::new();
+        for page in pages {
+            if let Some(error) = page.error {
+                let reason = pdf_reason(error);
+                let entry = skip(&r.id, reason.clone());
+                target.page_diagnostics.push(PageDiagnostic {
+                    code: entry.code,
+                    resource: r.id.clone(),
+                    page: page.page,
+                    reason: reason.clone(),
+                });
+                first_failure.get_or_insert(reason);
+            } else {
+                valid_pages.push(page);
+            }
+        }
+        if all_failed {
+            stats.page_diagnostics.extend(target.page_diagnostics);
+            return Ok(first_failure);
+        }
         #[cfg(feature = "pdf-render")]
         let mut renderer = None;
         let capacity = self.batch_size.min(4);
         let mut batch = Vec::with_capacity(capacity);
         let mut records = Vec::new();
-        for page in pages {
+        for page in valid_pages {
             if crate::pdf::usable(&page.text) {
                 if !self.embedder.supports(crate::Modality::Text) {
                     target.page_diagnostics.push(PageDiagnostic {
+                        code: SkipCode::Other,
                         resource: r.id.clone(),
                         page: page.page,
                         reason: "embedded text is not supported by this embedder".into(),
@@ -1122,6 +1172,7 @@ impl SearchEngine {
                         }
                         Err(Error::PdfRender { reason, .. }) => {
                             target.page_diagnostics.push(PageDiagnostic {
+                                code: SkipCode::Other,
                                 resource: r.id.clone(),
                                 page: page.page,
                                 reason: reason.into(),
@@ -1133,7 +1184,9 @@ impl SearchEngine {
                 }
             } else {
                 target.page_diagnostics.push(PageDiagnostic {
-                    resource: r.id.clone(), page: page.page,
+                    code: SkipCode::Other,
+                    resource: r.id.clone(),
+                    page: page.page,
                     reason: if cfg!(feature = "pdf-render") {
                         "no usable embedded text; image embedding is disabled"
                     } else {
@@ -1150,6 +1203,15 @@ impl SearchEngine {
         }
         if let Some(reason) = self.flush_media_batch(&mut batch, &mut records, stats, progress)? {
             return Ok(Some(reason));
+        }
+        // Retry incomplete parses on later passes so the diagnostic cannot
+        // disappear behind a freshness-only cache hit. Known vectors are reused.
+        if target
+            .page_diagnostics
+            .iter()
+            .any(|d| d.code != SkipCode::Other)
+        {
+            target.descriptor_hash.push_str(";incomplete-parse");
         }
         self.commit_media_resource(&target, &records, stats)?;
         stats.page_diagnostics.extend(target.page_diagnostics);
@@ -1498,11 +1560,37 @@ fn strip_link_targets(text: &str) -> String {
 }
 
 fn skip(resource: &ResourceId, reason: impl Into<String>) -> SkippedResource {
+    let reason = reason.into();
+    let code = if reason == "PDF parser panicked" {
+        SkipCode::PdfParserPanicked
+    } else if reason.starts_with("PDF parse failed: ") {
+        SkipCode::PdfParseFailed
+    } else {
+        SkipCode::Other
+    };
     SkippedResource {
+        code,
         resource: resource.clone(),
         path: resource.to_file_path(),
-        reason: reason.into(),
+        reason,
     }
+}
+
+fn skipped_counts(skipped: &[SkippedResource]) -> Vec<SkippedCount> {
+    let mut counts = std::collections::BTreeMap::new();
+    for entry in skipped {
+        *counts
+            .entry((entry.code, entry.reason.clone()))
+            .or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|((code, reason), count)| SkippedCount {
+            code,
+            reason,
+            count,
+        })
+        .collect()
 }
 
 fn input_hash(parts: &[&str]) -> String {
@@ -2212,6 +2300,7 @@ impl<'e> IndexRequest<'e> {
             Ok(gone.len())
         })?;
 
+        sync.skipped_counts = skipped_counts(&sync.skipped);
         Ok(IndexReport {
             sync,
             resources_removed: removed,

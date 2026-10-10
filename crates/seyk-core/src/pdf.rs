@@ -2,8 +2,8 @@
 //!
 //! Applications with a logger must filter `pdf_extract` to Off, plus
 //! `hayro_interpret`, `hayro_syntax` and `hayro_font` with `pdf-render`. This module
-//! catches unwinding parser panics without exposing their payload, but installs
-//! no panic hook. The caller's hook must also avoid payloads. Abort, OOM and
+//! catches unwinding parser panics with a scoped, thread-local hook guard that
+//! delegates unrelated panics to the previous hook. Abort, OOM and
 //! parser hangs are not contained. `pdf-render` adds CPU page rendering with
 //! bundled fallback fonts and no system-font lookup. No OCR is performed.
 
@@ -16,7 +16,7 @@ pub const TEXT_VERSION: &str = "pdf-extract-0.12.1;plain-v1";
 pub const MAX_PAGES: usize = 512;
 pub const MAX_PAGE_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_DOCUMENT_TEXT_BYTES: usize = 32 * 1024 * 1024;
-pub(crate) const PREPARATION_VERSION: &str = "pdf-text-v2-strict;512p;1MiB-page;32MiB-doc";
+pub(crate) const PREPARATION_VERSION: &str = "pdf-text-v3-page-isolation;512p;1MiB-page;32MiB-doc";
 
 #[cfg(feature = "pdf-render")]
 #[path = "pdf/render.rs"]
@@ -27,6 +27,7 @@ pub use render::{RENDER_VERSION, render_page};
 pub(crate) struct PageText {
     pub page: u32,
     pub text: String,
+    pub error: Option<Error>,
 }
 
 fn failure(source: &ResourceId, reason: &'static str) -> Error {
@@ -39,6 +40,7 @@ fn failure(source: &ResourceId, reason: &'static str) -> Error {
 /// All parser work, including document loading and destruction, stays inside
 /// this boundary. Error strings/panic payloads from upstream are never exposed.
 fn guarded<T>(source: &ResourceId, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _silence = panic_hook::Guard::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
         Err(Error::ParserPanicked {
             resource: source.clone(),
@@ -206,6 +208,9 @@ fn decode(doc: &Document, source: &ResourceId, page: u32) -> Result<String> {
     String::from_utf8(text.bytes).map_err(|_| failure(source, "decoded text is not UTF-8"))
 }
 
+#[path = "pdf/panic_hook.rs"]
+mod panic_hook;
+
 fn pages(doc: &Document, source: &ResourceId) -> Result<Vec<u32>> {
     let expected = doc
         .catalog()
@@ -237,12 +242,22 @@ pub(crate) fn read_pages(bytes: &[u8], source: &ResourceId) -> Result<Vec<PageTe
         let mut total = 0usize;
         let mut result = Vec::new();
         for page in pages(&doc, source)? {
-            let text = decode(&doc, source, page)?;
+            let (text, error) = match guarded(source, || decode(&doc, source, page)) {
+                Ok(text) => (text, None),
+                Err(
+                    error @ (Error::ParserPanicked { .. }
+                    | Error::PdfParse {
+                        reason: "page decoding failed",
+                        ..
+                    }),
+                ) => (String::new(), Some(error)),
+                Err(error) => return Err(error),
+            };
             total += text.len();
             if total > MAX_DOCUMENT_TEXT_BYTES {
                 return Err(failure(source, "document text exceeds 32 MiB"));
             }
-            result.push(PageText { page, text });
+            result.push(PageText { page, text, error });
         }
         Ok(result)
     })
@@ -344,6 +359,27 @@ pub(crate) mod fixture;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_made_cmaps_reproduce_both_upstream_panics() {
+        let source = "mem://synthetic/cmap".parse().unwrap();
+        for (bad_length, message) in [
+            (false, "unexpected entry in unicode map"),
+            (true, "bad length of hexstring"),
+        ] {
+            let bytes = fixture::malformed_cmap(bad_length);
+            let doc = document(&bytes, &source).unwrap();
+            let _silence = panic_hook::Guard::new();
+            let payload =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&doc, &source, 1)))
+                    .unwrap_err();
+            let actual = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+            assert_eq!(actual, Some(message));
+        }
+    }
 
     #[test]
     fn page_and_document_output_caps_reject_without_truncation() {

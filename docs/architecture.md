@@ -648,7 +648,8 @@ Upstream log messages and panic payloads can contain content. The root binary
 and core install no log logger. The binary's panic hook emits only a fixed message
 and file:line, and every PDF parse catches unwinding panics into a sanitized
 per-resource error. Library callers must filter the `pdf_extract` logger target
-to Off and install a payload-safe panic hook themselves; core never installs one.
+to Off. Core temporarily installs a thread-scoped suppressing hook that delegates
+unrelated panics and restores the previous hook after concurrent parses finish.
 This does not contain aborts, OOM or hangs. A non-UTF-8 Type-4 stream is rejected
 explicitly: without a logger, the upstream log argument's UTF-8 unwrap is never
 evaluated. A separate malformed operator exercises a real parser panic.
@@ -777,8 +778,8 @@ recall limitation, not an assertion of document fidelity.
 No logger is installed. Library applications with logging must filter
 `pdf_extract`, `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off because
 upstream diagnostics can contain source data. Renderer loading and rendering
-catch unwinding panics into sanitized errors; the CLI's existing payload-free
-panic hook runs first. Core installs no panic hook, and catch_unwind does not
+catch unwinding panics into sanitized errors under the same scoped hook guard
+as text parsing. Unrelated panics use the previous hook; catch_unwind does not
 contain aborts, OOM or hangs. Tests exercise an unwind inside Hayro through a
 panicking font callback and real CLI output capture for hidden-marker render
 fixtures, in addition to the parser leak regressions.

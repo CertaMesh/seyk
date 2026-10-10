@@ -120,3 +120,46 @@ pub fn pdf(texts: &[&str], kind: Kind) -> Vec<u8> {
     .unwrap();
     pdf
 }
+
+/// Self-made minimal ToUnicode fixtures. No source corpus bytes are used.
+/// One map overlaps an unknown FontAwesome glyph; the other has a three-byte
+/// bfrange destination, triggering adobe-cmap-parser's length panic.
+pub fn malformed_cmap(bad_length: bool) -> Vec<u8> {
+    let cmap = if bad_length {
+        b"1 beginbfrange <41> <41> <000041> endbfrange".as_slice()
+    } else {
+        b"1 beginbfchar <41> <0041> endbfchar".as_slice()
+    };
+    let font = if bad_length {
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>"
+    } else {
+        "<< /Type /Font /Subtype /Type1 /BaseFont /FontAwesome /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /UnknownSyntheticGlyph] >> /ToUnicode 6 0 R >>"
+    };
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec(),
+        font.as_bytes().to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        stream(b"BT /F1 12 Tf 72 720 Td (A) Tj ET", ""),
+        stream(cmap, ""),
+    ];
+    let mut bytes = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        writeln!(bytes, "{} 0 obj", i + 1).unwrap();
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    writeln!(bytes, "xref\n0 7\n0000000000 65535 f ").unwrap();
+    for offset in offsets {
+        writeln!(bytes, "{offset:010} 00000 n ").unwrap();
+    }
+    writeln!(
+        bytes,
+        "trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+    )
+    .unwrap();
+    bytes
+}

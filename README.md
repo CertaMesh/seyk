@@ -184,8 +184,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4` or `5`, not a bare hit. The extraction document uses
-version 5 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5` or `6`, not a bare hit. The extraction document uses
+version 6 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -282,10 +282,10 @@ cache, so keep a copy if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
 `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream
-diagnostics can contain document data. Seyk core installs no logger or panic
-hook. It converts unwinding PDF parser panics to sanitized errors, but an
-application's panic hook runs first and must not print payloads. The CLI
-installs a fixed-message, file-and-line-only hook. Neither mechanism contains
+diagnostics can contain document data. Seyk core installs no logger. Its scoped
+panic-hook guard silences PDF parser panics only on the parsing thread and
+delegates unrelated panics to the previous hook, restoring it after the last
+concurrent parse. Applications must not replace their hook during a parse. Neither mechanism contains
 aborts, out-of-memory failures, hangs or hostile allocation behaviour.
 
 ### Scores and tags
@@ -437,7 +437,7 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 5`.
+CLI JSON objects and MCP search responses include `schema_version: 6`.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -632,7 +632,7 @@ by stats and MCP daemon status's `cache_status` (`null` until the daemon opens
 its cache, or if stats fail). Search responses do not include cache status.
 These snapshots do not reflect subsequent directory changes until reopen and
 are distinct from inherited Time Machine exclusions. Protocol version 5 adds
-these fields; extraction still accepts search documents from versions 2–5.
+these fields; extraction still accepts search documents from versions 2–6.
 
 ## Supported resources
 
@@ -828,3 +828,16 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
+
+PDF parser failures are isolated per page: valid pages keep their original page
+numbers, and failed pages appear in `sync.page_diagnostics` with typed `code`
+and sanitized `reason`. If every page fails, the resource also appears in
+`sync.skipped`; `sync.skipped_counts` groups resource counts by code and reason.
+CLI summaries show these counts, and MCP reports them for inline searches and
+background watcher status (`ready_with_diagnostics`). Protocol version 6 adds
+these diagnostic fields; the cache schema remains unchanged.
+
+Raw lopdf text fallback is deferred: lopdf 0.42 prefers Encoding over ToUnicode
+and silently substitutes standard encoding after some font errors. That can
+produce incorrect evidence. Page isolation recovers unaffected pages without
+guessing glyph mappings. Subprocess isolation remains tracked in Solo #4374.

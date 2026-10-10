@@ -113,9 +113,9 @@ fn errors_and_limits_do_not_stop_the_rest_of_the_corpus() {
         .paths([dir.path()])
         .execute()
         .unwrap();
-    assert_eq!(result.stats.sync.skipped.len(), 4);
-    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
-    assert_eq!(result.hits.len(), 1);
+    assert_eq!(result.stats.sync.skipped.len(), 3);
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
+    assert_eq!(result.hits.len(), 2);
     assert!(
         result
             .stats
@@ -128,7 +128,7 @@ fn errors_and_limits_do_not_stop_the_rest_of_the_corpus() {
         result
             .stats
             .sync
-            .skipped
+            .page_diagnostics
             .iter()
             .any(|s| s.reason.contains("panicked"))
     );
@@ -322,4 +322,88 @@ fn omitted_contents_is_a_legitimately_empty_page() {
         engine.extract(&result.hits[0]).unwrap().text,
         "garden basil"
     );
+}
+
+#[test]
+fn malformed_cmaps_are_typed_failures_and_other_documents_remain_searchable() {
+    let dir = tempfile::tempdir().unwrap();
+    for bad_length in [false, true] {
+        std::fs::write(
+            dir.path().join(format!("bad-{bad_length}.pdf")),
+            fixture::malformed_cmap(bad_length),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("good.pdf"),
+        pdf(&["garden basil"], Kind::Plain),
+    )
+    .unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "cmap"))
+        .build()
+        .unwrap();
+    let result = engine
+        .search("basil")
+        .paths([dir.path()])
+        .mode(SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert_eq!(result.stats.sync.resources_discovered, 3);
+    assert_eq!(result.stats.sync.skipped.len(), 2);
+    assert_eq!(result.stats.sync.skipped_counts.len(), 1);
+    assert_eq!(result.stats.sync.skipped_counts[0].count, 2);
+    assert_eq!(
+        result.stats.sync.skipped_counts[0].code,
+        seyk_core::SkipCode::PdfParserPanicked
+    );
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(
+        engine.extract(&result.hits[0]).unwrap().text,
+        "garden basil"
+    );
+}
+
+#[test]
+fn isolated_failed_page_keeps_later_page_locator_and_verified_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.pdf");
+    std::fs::write(
+        &path,
+        pdf(
+            &["first garden", "broken", "third basil"],
+            Kind::BrokenSecond,
+        ),
+    )
+    .unwrap();
+    let model = Arc::new(FakeEmbedder::new(Dimension::D128, "isolation"));
+    let engine = SearchEngine::builder()
+        .shared_embedder(model.clone())
+        .build()
+        .unwrap();
+    let result = engine
+        .search("basil")
+        .paths([&path])
+        .mode(SearchMode::Lexical)
+        .execute()
+        .unwrap();
+    assert!(result.stats.sync.skipped.is_empty());
+    assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
+    assert_eq!(result.stats.sync.page_diagnostics[0].page, 2);
+    assert_eq!(
+        result.stats.sync.page_diagnostics[0].code,
+        seyk_core::SkipCode::PdfParserPanicked
+    );
+    assert_eq!(result.hits.len(), 1);
+    assert!(matches!(
+        result.hits[0].locator,
+        ResourceLocator::PageText { page: 3, .. }
+    ));
+    assert_eq!(engine.extract(&result.hits[0]).unwrap().text, "third basil");
+    let embedded = model.resource_count();
+    let next = engine.index().paths([&path]).execute().unwrap();
+    assert_eq!(model.resource_count(), embedded);
+    assert_eq!(next.sync.resources_updated, 1);
+    assert_eq!(next.sync.page_diagnostics.len(), 1);
 }
