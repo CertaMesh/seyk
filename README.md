@@ -144,6 +144,7 @@ seyk mcp ~/notes
 
 # Inspect or wipe the cache
 seyk cache stats
+seyk cache scrub  # erase deleted postings/WAL frames, preserving live records
 seyk cache clear
 ```
 
@@ -541,8 +542,59 @@ as sensitive. Embeddings can leak information about the text they came from, and
 the keyword index (a SQLite FTS5 table) stores **which words occur in each passage
 and how often, not their order**. Each field is tokenized and sorted before it
 is indexed. These word frequencies are still sensitive, like embeddings. The
-cache directory is created `0700` and the file `0600`. `seyk cache clear`
-deletes every vector.
+cache directory is created `0700` and the file `0600`. SQLite
+`secure_delete=ON` zeroes deleted ordinary records in updated pages; zeroing of
+the main database and removal of historical WAL images complete at the next
+scrub's checked checkpoint. Removed ordinary records and keyword postings are
+**erased after the next scrub**, not necessarily when a file is removed or
+replaced. A scrub runs FTS5 `optimize` for each pending profile, then checks a
+WAL TRUNCATE checkpoint. Forensic tests with the bundled SQLite verify removal
+of readable prefix-compressed suffixes, not just whole token strings. A word
+still present in another live record remains indexed. Scrub cost depends on the profile's index size.
+
+A scrub happens at the end of a one-shot `seyk index` or `seyk search` command,
+when cleanup is pending. Watcher, daemon and MCP use a background worker after
+about **60 seconds with no further changes**; it never scrubs inline in an MCP
+request or during an indexing pass. A running scrub holds the cache mutex, so
+a concurrent search can be delayed by the scrub's duration. Further writes,
+including fresh inserts while cleanup is already pending, postpone it. Continuous
+changes can delay scrubbing indefinitely. The worker retries blocked cleanup at roughly 60-second
+intervals. It sleeps until the quiet-period/retry deadline, or checks every 60
+seconds when idle to notice other processes' writes, rather than polling every
+second. Observing another process's write starts a fresh quiet period. If cleanup
+is pending, a short-lived MCP process or `seyk index --watch` stopped within about
+60 seconds of its last change leaves the scrub pending; there is no scrub on exit.
+Engine drop wakes an idle worker immediately. An active scrub may finish its
+current iteration; drop does not cancel or join it.
+
+Run `seyk cache scrub` to scrub immediately without deleting live records.
+`seyk cache clear` deletes the entire index, runs `VACUUM`, and truncates the WAL,
+including cleanup-marker frames. Schema migrations also mark compaction pending;
+VACUUM is performed by the next scrub. Fresh inserts, unchanged metadata touches,
+identical vectors and zero-row deletions do not request a scrub or an explicit
+checkpoint. Core/library index and search APIs defer scrubbing; integrations can
+call `SearchEngine::scrub_cache`, `EmbeddingCache::scrub`, or start the idle worker.
+
+Pending profile scrub, WAL cleanup and migration/clear compaction are durable
+`meta` keys, with no cache schema or profile change. They survive interruption; pending work stays recorded until the scrub's
+checked TRUNCATE succeeds. If a reader
+blocks it, the marker stays and a warning is emitted; sync and search still
+succeed. Old content may remain readable in the database's stale FTS blocks and
+in the WAL until the scrub completes. Once other readers close, rerun
+`seyk cache scrub` using the same `--cache-path` (if supplied), or rerun the
+one-shot command. Clear is a fallback, not the required cleanup-only retry.
+Human `cache stats` reports pending scrubbing. Cache stats JSON keeps its
+existing shape and omits `scrub_pending`; use human `cache stats` or the library
+status field to check for pending scrubbing.
+
+After a completed scrub, removed records do not remain readable in the current
+database or `-wal` file. Scrubbing can leave new WAL frames containing only live
+cleanup metadata; clear also truncates these housekeeping frames. For remnants
+left by older binaries, run `seyk cache clear` once. This is logical file cleanup,
+not physical secure erasure: SSD wear levelling, filesystem snapshots, backups,
+open reader snapshots and crash-interrupted cleanup may retain earlier copies.
+Use OS disk encryption and manage snapshots/backups according to your privacy
+needs.
 
 Protection against a lost or stolen disk depends on OS disk encryption: check
 `fdesetup status` on macOS (FileVault), `lsblk -f` / `cryptsetup status <mapping>`

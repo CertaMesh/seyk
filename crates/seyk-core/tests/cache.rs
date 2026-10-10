@@ -1487,3 +1487,521 @@ fn v5_migration_keeps_legacy_invalidated_segments_unindexed() {
     assert_eq!(fts_totals(&conn, "a")[0], 1);
     assert_integrity(&conn, "a");
 }
+
+fn raw_contains(database: &Path, needle: &str) -> bool {
+    [
+        database.to_path_buf(),
+        database.with_extension("sqlite3-wal"),
+    ]
+    .iter()
+    .filter_map(|path| match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("{}: {error}", path.display()),
+    })
+    .any(|bytes| {
+        bytes
+            .windows(needle.len())
+            .any(|part| part == needle.as_bytes())
+    })
+}
+
+#[test]
+fn deleted_cache_content_is_absent_from_database_and_wal_while_open() {
+    const SENTINEL: &str = "syntheticprivatequartzsentinel";
+    for operation in [
+        "remove", "replace", "empty", "clear", "touch", "prune", "vector",
+    ] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/note".parse().unwrap();
+        let mut value = resource(&["h"]);
+        if matches!(operation, "touch" | "empty") {
+            value.metadata.media_type = Some(SENTINEL.into());
+            if operation == "empty" {
+                value.segments.clear();
+            }
+        }
+        let body = if matches!(operation, "touch" | "empty" | "prune" | "vector") {
+            "ordinary"
+        } else {
+            SENTINEL
+        };
+        cache.put_resource("p", &id, &write(&value, body)).unwrap();
+        // Thousands of distinct postings force multiple FTS blocks, not just one tiny row.
+        let other: ResourceId = "mem://synthetic/keep".parse().unwrap();
+        let words = (0..3000)
+            .map(|i| format!("word{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        cache
+            .put_resource("p", &other, &write(&resource(&["keep"]), &words))
+            .unwrap();
+        if matches!(operation, "prune" | "vector") {
+            cache
+                .put_embeddings("p", &[(SENTINEL.into(), vec![1.0])])
+                .unwrap();
+        }
+        assert!(raw_contains(&database, SENTINEL), "fixture for {operation}");
+        // Put old content in both the main database and retained WAL frames.
+        let observer = rusqlite::Connection::open(&database).unwrap();
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        match operation {
+            "remove" => cache.remove_resources("p", &[id]).unwrap(),
+            "replace" | "empty" => cache
+                .put_resource("p", &id, &write(&resource(&["next"]), "ordinary"))
+                .unwrap(),
+            "clear" => cache.clear().unwrap(),
+            "touch" => {
+                value.metadata.media_type = None;
+                cache
+                    .touch_resource("p", &id, &value.metadata, &value.version)
+                    .unwrap();
+            }
+            "prune" => {
+                cache.prune_orphans("p").unwrap();
+            }
+            "vector" => {
+                // Sentinel in vector bytes, rather than a key that remains live.
+                cache.prune_orphans("p").unwrap();
+                let bytes = SENTINEL.as_bytes();
+                let vector = bytes
+                    .chunks(4)
+                    .map(|chunk| {
+                        let mut padded = [0; 4];
+                        padded[..chunk.len()].copy_from_slice(chunk);
+                        f32::from_le_bytes(padded)
+                    })
+                    .collect();
+                cache.put_embeddings("p", &[("h".into(), vector)]).unwrap();
+                assert!(raw_contains(&database, SENTINEL));
+                cache
+                    .put_embeddings("p", &[("h".into(), vec![0.0])])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(!cache.scrub().unwrap().pending);
+        assert!(
+            !raw_contains(&database, SENTINEL),
+            "left readable bytes after {operation} scrub"
+        );
+    }
+}
+
+#[test]
+fn clear_reports_a_reader_blocking_wal_truncation() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("cache.sqlite3");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("p", &profile("p")).unwrap();
+    let reader = rusqlite::Connection::open(&database).unwrap();
+    reader
+        .execute_batch("BEGIN; SELECT * FROM profiles;")
+        .unwrap();
+    let error = cache.clear().unwrap_err();
+    assert!(
+        matches!(error, seyk_core::Error::CacheCleanupPending),
+        "{error}"
+    );
+    reader.execute_batch("ROLLBACK").unwrap();
+    cache.clear().unwrap();
+    assert_eq!(
+        fs::metadata(database.with_extension("sqlite3-wal"))
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+#[ignore = "synthetic secure deletion write-cost measurement; no models or user files"]
+fn measure_secure_delete_write_cost() {
+    use std::time::Instant;
+    // Interleave modes so other workers' load does not systematically favour one.
+    for run in 0..5 {
+        for mode in ["OFF", "FAST", "ON"] {
+            let temp = TempDir::new().unwrap();
+            let database = temp.path().join("cache.sqlite3");
+            let mut cache = SqliteCache::open(&database).unwrap();
+            cache.register_profile("p", &profile("p")).unwrap();
+            drop(cache);
+            let mut conn = rusqlite::Connection::open(&database).unwrap();
+            conn.execute_batch(&format!(
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA secure_delete={mode};"
+            ))
+            .unwrap();
+            let body = (0..200)
+                .map(|i| format!("syntheticword{i:04}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let vector = vec![0u8; 768 * 4];
+            let start = Instant::now();
+            let tx = conn.transaction().unwrap();
+            for i in 0..5000 {
+                tx.execute("INSERT INTO segments_fts_p_70(rowid,name,path,heading,body) VALUES(?1,'note','synthetic/note','heading',?2)", rusqlite::params![i+1, body]).unwrap();
+                tx.execute(
+                    "INSERT INTO embeddings VALUES('p',?1,?2)",
+                    rusqlite::params![format!("hash{i:05}"), vector],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+            let insert = start.elapsed();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let start = Instant::now();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("DELETE FROM segments_fts_p_70 WHERE rowid <= 1000; DELETE FROM embeddings WHERE input_hash < 'hash01000';").unwrap();
+            let delete_only = start.elapsed();
+            tx.execute_batch("INSERT INTO segments_fts_p_70(segments_fts_p_70) VALUES('rebuild');")
+                .unwrap();
+            tx.commit().unwrap();
+            let delete_rebuild = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let truncate = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let compact = start.elapsed();
+            let start = Instant::now();
+            conn.execute_batch("DROP TABLE segments_fts_p_70; DELETE FROM embeddings; DELETE FROM profiles; VACUUM; PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+            let clear = start.elapsed();
+            eprintln!(
+                "SECURE_DELETE {mode} run {run}: 5000 segments x 200 tokens + 5000 768-f32 vectors insert {insert:?}; delete-only 1000 segments/vectors {delete_only:?}; delete 1000 segments/vectors + rebuild 4000 segments {delete_rebuild:?}; truncate {truncate:?}; vacuum+truncate 4000 segments/vectors {compact:?}; clear remaining 4000 segments/vectors+vacuum+truncate {clear:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn migrations_scrub_legacy_free_pages_and_source_order_postings() {
+    const SENTINEL: &str = "syntheticlegacysourcetokensentinel";
+    for version in ["1", "2", "3", "4", "5"] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/legacy".parse().unwrap();
+        cache
+            .put_resource("p", &id, &write(&resource(&["h"]), "ordinary"))
+            .unwrap();
+        drop(cache);
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        conn.execute_batch("PRAGMA secure_delete=OFF; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        common::legacy::downgrade(&conn, version);
+        conn.execute_batch("CREATE TABLE discarded(body TEXT);")
+            .unwrap();
+        conn.execute("INSERT INTO discarded VALUES(?1)", [SENTINEL.repeat(1000)])
+            .unwrap();
+        conn.execute_batch("DROP TABLE discarded;").unwrap();
+        if version == "2" {
+            conn.execute(
+                "INSERT INTO segments_fts(rowid,body) VALUES(999,?1)",
+                [SENTINEL],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("PRAGMA wal_checkpoint(FULL)").unwrap();
+        assert!(raw_contains(&database, SENTINEL));
+        let mut cache = SqliteCache::open(&database).unwrap();
+        assert!(cache.stats().unwrap().scrub_pending);
+        assert!(!cache.scrub().unwrap().pending);
+        assert!(!raw_contains(&database, SENTINEL), "version {version}");
+        assert_eq!(cache.stats().unwrap().profiles[0].segments, 1);
+    }
+}
+
+fn synthetic_sync_engine(database: &Path) -> SearchEngine {
+    SearchEngine::builder()
+        .embedder(FakeEmbedder::new(Dimension::D128, "scrub-sync"))
+        .cache(SqliteCache::open(database).unwrap())
+        .segmenter(TextSegmenter::new(TextSegmenterConfig {
+            min_chars: 0,
+            target_chars: 4096,
+            max_chars: 8192,
+            overlap_chars: 0,
+        }))
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn one_explicit_scrub_for_any_number_of_changed_and_deleted_resources() {
+    for count in [1, 7, 50] {
+        let temp = TempDir::new().unwrap();
+        let notes = temp.path().join("notes");
+        fs::create_dir(&notes).unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        for i in 0..count + 1 {
+            fs::write(
+                notes.join(format!("note{i}.txt")),
+                "syntheticquartzsentinel old",
+            )
+            .unwrap();
+        }
+        let engine = synthetic_sync_engine(&database);
+        engine.index().paths([&notes]).execute().unwrap();
+        assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+        for i in 0..count {
+            fs::write(
+                notes.join(format!("note{i}.txt")),
+                "new synthetic ordinary passage",
+            )
+            .unwrap();
+        }
+        fs::remove_file(notes.join(format!("note{count}.txt"))).unwrap();
+        let report = engine.index().paths([&notes]).execute().unwrap();
+        assert_eq!(report.sync.resources_updated, count);
+        assert_eq!(report.resources_removed, 1);
+        assert!(engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+        assert!(
+            raw_contains(&database, "quartzsentinel"),
+            "sync must defer FTS erasure"
+        );
+        let cleanup = engine.scrub_cache().unwrap();
+        assert_eq!(cleanup.profiles_scrubbed, 1);
+        assert!(!cleanup.pending);
+        assert!(!raw_contains(&database, "quartzsentinel"));
+        engine.index().paths([&notes]).execute().unwrap();
+        assert!(engine.scrub_cache().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn reader_does_not_fail_fresh_noop_or_destructive_sync_and_scrub_retries() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    fs::create_dir(&notes).unwrap();
+    let database = temp.path().join("cache.sqlite3");
+    let engine = synthetic_sync_engine(&database);
+    let reader = rusqlite::Connection::open(&database).unwrap();
+    reader
+        .execute_batch("BEGIN; SELECT * FROM profiles;")
+        .unwrap();
+    fs::write(notes.join("note.txt"), "syntheticreadersentinel old").unwrap();
+    let fresh = engine.index().paths([&notes]).execute().unwrap();
+    assert_eq!(fresh.sync.resources_updated, 1);
+    assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+    let unchanged = engine.index().paths([&notes]).execute().unwrap();
+    assert_eq!(unchanged.sync.resources_unchanged, 1);
+    assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+    fs::write(notes.join("note.txt"), "updated synthetic ordinary passage").unwrap();
+    let changed = engine.index().paths([&notes]).execute().unwrap();
+    assert_eq!(changed.sync.resources_updated, 1);
+    assert!(engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+    let blocked = engine.scrub_cache().unwrap();
+    assert_eq!(blocked.profiles_scrubbed, 1);
+    assert!(blocked.pending);
+    let pending_profiles: i64 = rusqlite::Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM meta WHERE key GLOB 'fts_scrub_pending:*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        pending_profiles, 1,
+        "profile marker stays until checked TRUNCATE succeeds"
+    );
+    assert!(raw_contains(&database, "syntheticreadersentinel"));
+    engine.index().paths([&notes]).execute().unwrap();
+    reader.execute_batch("ROLLBACK").unwrap();
+    engine.index().paths([&notes]).execute().unwrap();
+    assert!(
+        engine.with_cache(|c| c.stats()).unwrap().scrub_pending,
+        "sync alone does not scrub"
+    );
+    let retry = engine.scrub_cache().unwrap();
+    assert_eq!(retry.profiles_scrubbed, 1);
+    assert!(!retry.pending);
+    assert!(!raw_contains(&database, "readersentinel"));
+}
+
+#[test]
+fn noop_writes_with_a_reader_do_not_checkpoint_or_request_cleanup() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("cache.sqlite3");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("p", &profile("p")).unwrap();
+    let id: ResourceId = "mem://synthetic/noop".parse().unwrap();
+    let value = resource(&["h"]);
+    cache
+        .put_resource("p", &id, &write(&value, "ordinary"))
+        .unwrap();
+    cache
+        .put_embeddings("p", &[("h".into(), vec![1.0])])
+        .unwrap();
+    let reader = rusqlite::Connection::open(&database).unwrap();
+    reader
+        .execute_batch("BEGIN; SELECT * FROM profiles;")
+        .unwrap();
+    let wal = database.with_extension("sqlite3-wal");
+    let before = fs::metadata(&wal).unwrap().len();
+    cache
+        .touch_resource("p", &id, &value.metadata, &value.version)
+        .unwrap();
+    cache
+        .put_embeddings("p", &[("h".into(), vec![1.0])])
+        .unwrap();
+    cache
+        .remove_resources("p", &["mem://synthetic/missing".parse().unwrap()])
+        .unwrap();
+    assert_eq!(cache.prune_orphans("p").unwrap(), 0);
+    assert_eq!(fs::metadata(&wal).unwrap().len(), before);
+    assert!(!cache.stats().unwrap().scrub_pending);
+    assert!(cache.scrub().unwrap().is_empty());
+}
+
+#[test]
+fn migration_compaction_pending_is_retried_after_reader_closes() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("cache.sqlite3");
+    let mut cache = SqliteCache::open(&database).unwrap();
+    cache.register_profile("p", &profile("p")).unwrap();
+    drop(cache);
+    let reader = rusqlite::Connection::open(&database).unwrap();
+    common::legacy::downgrade(&reader, "5");
+    reader
+        .execute_batch("PRAGMA secure_delete=OFF; CREATE TABLE discarded(body TEXT)")
+        .unwrap();
+    reader
+        .execute(
+            "INSERT INTO discarded VALUES(?1)",
+            ["syntheticcompactsentinel".repeat(1000)],
+        )
+        .unwrap();
+    reader
+        .execute_batch(
+            "DROP TABLE discarded; PRAGMA wal_checkpoint(FULL); BEGIN; SELECT * FROM meta;",
+        )
+        .unwrap();
+    assert!(raw_contains(&database, "syntheticcompactsentinel"));
+    let mut cache = SqliteCache::open(&database).unwrap();
+    assert!(cache.stats().unwrap().scrub_pending);
+    let flag: String = reader
+        .query_row(
+            "SELECT value FROM meta WHERE key='schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(flag, "5", "reader retains its old snapshot");
+    assert!(cache.scrub().unwrap().pending);
+    drop(cache);
+    reader.execute_batch("ROLLBACK").unwrap();
+    let mut cache = SqliteCache::open(&database).unwrap();
+    assert!(cache.stats().unwrap().scrub_pending);
+    assert!(!cache.scrub().unwrap().pending);
+    assert!(!cache.stats().unwrap().scrub_pending);
+    assert!(!raw_contains(&database, "syntheticcompactsentinel"));
+    let flag: i64 = reader
+        .query_row(
+            "SELECT count(*) FROM meta WHERE key='compact_pending'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(flag, 0);
+}
+
+fn file_contains(path: &Path, needle: &str) -> bool {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("{}: {e}", path.display()),
+    };
+    bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+#[test]
+fn forensic_scrub_erases_compressed_suffixes_from_database_and_wal_separately() {
+    const TERMS: [&str; 3] = [
+        "syntheticprivatequartzsentinel",
+        "privatequartzsentinel",
+        "quartzsentinel",
+    ];
+    for operation in ["remove", "replace"] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let wal = database.with_extension("sqlite3-wal");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/note".parse().unwrap();
+        cache
+            .put_resource("p", &id, &write(&resource(&["h"]), TERMS[0]))
+            .unwrap();
+        let words = (0..3000)
+            .map(|i| format!("word{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        cache
+            .put_resource(
+                "p",
+                &"mem://synthetic/keep".parse().unwrap(),
+                &write(&resource(&["keep"]), &words),
+            )
+            .unwrap();
+        let observer = rusqlite::Connection::open(&database).unwrap();
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        for file in [&database, &wal] {
+            for term in TERMS {
+                assert!(
+                    file_contains(file, term),
+                    "fixture {}: {term}",
+                    file.display()
+                );
+            }
+        }
+        if operation == "remove" {
+            cache.remove_resources("p", &[id]).unwrap();
+        } else {
+            cache
+                .put_resource("p", &id, &write(&resource(&["new"]), "ordinary"))
+                .unwrap();
+        }
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        // Negative control: the old full-string DB test passes, despite readable stale suffixes.
+        assert!(!file_contains(&database, TERMS[0]));
+        for term in &TERMS[1..] {
+            assert!(
+                file_contains(&database, term),
+                "negative DB control must fail erasure: {term}"
+            );
+            assert!(
+                file_contains(&wal, term),
+                "negative WAL control must fail erasure: {term}"
+            );
+        }
+        assert!(cache.stats().unwrap().scrub_pending);
+        let report = cache.scrub().unwrap();
+        assert_eq!(report.profiles_scrubbed, 1);
+        assert!(!report.pending);
+        for file in [&database, &wal] {
+            for term in TERMS {
+                assert!(
+                    !file_contains(file, term),
+                    "scrub {}: {term}",
+                    file.display()
+                );
+            }
+        }
+        assert!(!cache.stats().unwrap().scrub_pending);
+        assert_eq!(
+            cache.stats().unwrap().profiles[0].resources,
+            if operation == "remove" { 1 } else { 2 }
+        );
+    }
+}

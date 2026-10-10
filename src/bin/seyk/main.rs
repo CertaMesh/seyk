@@ -251,6 +251,8 @@ enum CacheAction {
     },
     /// Delete every cached embedding.
     Clear,
+    /// Erase deleted keyword postings and old WAL frames without clearing live records.
+    Scrub,
 }
 
 #[cfg(all(feature = "mcp", unix))]
@@ -375,6 +377,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )?;
                 eprint!("{}", format_summary(&results));
             }
+            out.flush()?;
+            drop(out);
+            report_scrub(engine.scrub_cache());
             Ok(ExitCode::SUCCESS)
         }
         Command::Extract {
@@ -487,6 +492,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 print!("{}", format_index_report(&result));
             }
+            std::io::stdout().flush()?;
+            report_scrub(engine.scrub_cache());
             Ok(ExitCode::SUCCESS)
         }
         Command::Cache { action, cache_path } => {
@@ -501,8 +508,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 }
                 CacheAction::Clear => {
-                    cache.clear()?;
+                    match cache.clear() {
+                        Ok(()) => {}
+                        Err(seyk::Error::CacheCleanupPending) => scrub_warning(),
+                        Err(error) => return Err(error.into()),
+                    }
                     println!("Cleared {}", cache.path().display());
+                }
+                CacheAction::Scrub => {
+                    let report = cache.scrub()?;
+                    if report.pending {
+                        scrub_warning();
+                    } else {
+                        println!("Scrubbed {}", cache.path().display());
+                    }
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -1121,6 +1140,23 @@ fn format_index_report(r: &IndexReport) -> String {
     out
 }
 
+fn scrub_warning() {
+    eprintln!(
+        "warning: cache scrub pending; run seyk cache scrub once other readers close (using the same cache path), or rerun the one-shot command"
+    );
+}
+
+// Cleanup must never turn a successful one-shot sync or search into a failure.
+fn report_scrub(result: seyk::Result<seyk::cache::CacheCleanup>) {
+    match result {
+        Ok(report) if report.pending => scrub_warning(),
+        Err(error) => {
+            eprintln!("warning: cache scrub pending: {error}; run seyk cache scrub to retry")
+        }
+        _ => {}
+    }
+}
+
 fn format_cache_stats(stats: &CacheStats) -> String {
     let mut out = String::new();
     if let Some(p) = &stats.location {
@@ -1148,6 +1184,11 @@ fn format_cache_stats(stats: &CacheStats) -> String {
             "  {} files, {} segments, {} vectors\n",
             p.resources, p.segments, p.embeddings
         ));
+    }
+    if stats.scrub_pending {
+        out.push_str(
+            "  warning: cache scrub pending; run seyk cache scrub once other readers close\n",
+        );
     }
     out
 }

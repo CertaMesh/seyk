@@ -180,6 +180,7 @@ impl Hub {
             return Ok(e.clone());
         }
         let e = Arc::new((self.factory)()?);
+        e.start_cache_scrubber();
         *slot = Some(e.clone());
         Ok(e)
     }
@@ -764,6 +765,51 @@ mod tests {
             assert_eq!(status.backup_excluded, initial.backup_excluded);
             assert_eq!(status.in_synced_folder, initial.in_synced_folder);
         }
+    }
+
+    #[test]
+    fn inline_mcp_sync_leaves_scrub_pending_and_never_runs_it_in_the_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let notes = temp.path().join("notes");
+        std::fs::create_dir(&notes).unwrap();
+        let file = notes.join("note.txt");
+        std::fs::write(&file, "syntheticprivatequartzsentinel old passage").unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let factory_path = database.clone();
+        let hub = Hub::new(
+            Box::new(move || {
+                engine_with_cache(
+                    Arc::new(AtomicUsize::new(0)),
+                    seyk::SqliteCache::open(&factory_path)?,
+                )
+            }),
+            false,
+        );
+        let server = SeykServer::new(vec![notes], hub.clone()).unwrap();
+        search(&server, "old passage");
+        assert!(
+            !hub.engine()
+                .unwrap()
+                .with_cache(|c| c.stats())
+                .unwrap()
+                .scrub_pending
+        );
+        std::fs::write(&file, "new ordinary synthetic passage with different bytes").unwrap();
+        let response = search(&server, "ordinary passage");
+        assert_eq!(response.segments_embedded, 1);
+        assert!(
+            hub.engine()
+                .unwrap()
+                .with_cache(|c| c.stats())
+                .unwrap()
+                .scrub_pending
+        );
+        let wal = std::fs::read(database.with_extension("sqlite3-wal")).unwrap();
+        assert!(
+            wal.windows("quartzsentinel".len())
+                .any(|w| w == b"quartzsentinel")
+        );
+        assert!(!hub.engine().unwrap().scrub_cache().unwrap().pending);
     }
 
     #[test]

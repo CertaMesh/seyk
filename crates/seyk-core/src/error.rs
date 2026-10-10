@@ -46,6 +46,11 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error(
+        "cache changes committed, but scrub is pending; run seyk cache scrub once other readers close (using the same cache path), or rerun the one-shot command; cache clear is a fallback"
+    )]
+    CacheCleanupPending,
+
     #[error("cache error: {0}")]
     Cache(#[from] rusqlite::Error),
 

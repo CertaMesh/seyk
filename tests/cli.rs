@@ -103,6 +103,82 @@ fn relative_cache_path_does_not_exclude_unrelated_siblings() {
 }
 
 #[test]
+fn cache_scrub_preserves_live_records_and_stats_json_shape_without_a_model() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    let file = notes.join("note.txt");
+    std::fs::write(&file, "syntheticprivatequartzsentinel old").unwrap();
+    let cache = temp.path().join("cache.sqlite3");
+    let engine = seyk::SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(
+            seyk::Dimension::D128,
+            "scrub-cli",
+        ))
+        .cache(seyk::SqliteCache::open(&cache).unwrap())
+        .build()
+        .unwrap();
+    engine.index().paths([&notes]).execute().unwrap();
+    std::fs::write(&file, "new ordinary synthetic passage").unwrap();
+    engine.index().paths([&notes]).execute().unwrap();
+    drop(engine);
+    binary()
+        .args(["cache", "--cache-path", cache.to_str().unwrap(), "stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cache scrub pending"));
+    let output = binary()
+        .args([
+            "cache",
+            "--cache-path",
+            cache.to_str().unwrap(),
+            "stats",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let before: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(before["schema_version"].is_u64());
+    assert!(before.get("scrub_pending").is_none());
+    assert!(before.get("cleanup_pending").is_none());
+    binary()
+        .args(["cache", "--cache-path", cache.to_str().unwrap(), "scrub"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scrubbed"));
+    let output = binary()
+        .args([
+            "cache",
+            "--cache-path",
+            cache.to_str().unwrap(),
+            "stats",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let after: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(before["schema_version"], after["schema_version"]);
+    assert_eq!(
+        before["profiles"], after["profiles"],
+        "scrub preserves live cache records"
+    );
+    assert_eq!(
+        before.as_object().unwrap().keys().collect::<Vec<_>>(),
+        after.as_object().unwrap().keys().collect::<Vec<_>>()
+    );
+    use seyk::EmbeddingCache;
+    assert!(
+        !seyk::SqliteCache::open(&cache)
+            .unwrap()
+            .stats()
+            .unwrap()
+            .scrub_pending
+    );
+}
+
+#[test]
 fn missing_model_is_a_helpful_failure_and_invalid_dimensions_are_rejected() {
     let temp = TempDir::new().unwrap();
     binary()
