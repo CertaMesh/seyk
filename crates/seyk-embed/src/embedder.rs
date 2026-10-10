@@ -83,6 +83,7 @@ pub trait Embedder: Send + Sync {
     /// input's cache key without invalidating other modalities' vectors.
     /// Resolve this before cache admission, even if inference is unnecessary.
     /// Backends may lazily read model assets here; failed preparation is retryable.
+    /// Once successful, the identity must remain stable until the model is reloaded.
     fn input_identity(&self, _modality: Modality) -> Result<&str> {
         Ok("")
     }

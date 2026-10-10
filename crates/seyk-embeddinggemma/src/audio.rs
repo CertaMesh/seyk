@@ -58,16 +58,7 @@ impl AudioEncoder {
         for name in FILES {
             hash.update(name.as_bytes());
             let path = self.dir.join(name);
-            let mut file = std::fs::File::open(&path).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    Error::ModelNotFound(
-                        "audio encoder is missing; run seyk model download --audio, then retry"
-                            .into(),
-                    )
-                } else {
-                    io_error(&path, error)
-                }
-            })?;
+            let mut file = regular_audio_file(&path)?;
             let mut buf = [0; 65536];
             loop {
                 let n = file
@@ -84,6 +75,42 @@ impl AudioEncoder {
         }
         Ok(hash.finalize().to_hex().to_string())
     }
+}
+
+fn regular_audio_file(path: &Path) -> Result<std::fs::File> {
+    let map_error = |error: std::io::Error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Error::ModelNotFound(
+                "audio encoder is missing; run seyk model download --audio, then retry".into(),
+            )
+        } else {
+            io_error(path, error)
+        }
+    };
+    let not_regular = || {
+        Error::ModelNotFound(format!(
+            "audio encoder asset is not a regular file: {}",
+            path.display()
+        ))
+    };
+    // Follow symlinks, but reject special targets before opening on all platforms.
+    if !std::fs::metadata(path).map_err(map_error)?.is_file() {
+        return Err(not_regular());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A regular target may be replaced by a FIFO after the metadata check.
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(map_error)?;
+    // Check the opened handle (fstat/S_ISREG on Unix), not the path again.
+    if !file.metadata().map_err(map_error)?.is_file() {
+        return Err(not_regular());
+    }
+    Ok(file)
 }
 
 pub struct Features {
@@ -265,7 +292,7 @@ mod identity_tests {
         assert!(encoder.identity().is_err());
         assert!(encoder.identity.get().is_none());
         // A readable graph followed by an unreadable asset must not publish a
-        // partial digest. A directory produces a read error on these platforms.
+        // partial digest. A directory must be rejected before reading.
         std::fs::create_dir(dir.path().join(FILES[1])).unwrap();
         assert!(encoder.identity().is_err());
         assert!(encoder.identity.get().is_none());
@@ -273,6 +300,79 @@ mod identity_tests {
         std::fs::write(dir.path().join(FILES[1]), b"weights-v1").unwrap();
         assert_eq!(encoder.identity().unwrap(), GOLDEN);
         assert_eq!(encoder.hash_passes.load(Ordering::Relaxed), 4);
+    }
+
+    #[cfg(unix)]
+    fn bounded(test: impl FnOnce() + Send + 'static) {
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            test();
+            send.send(()).unwrap();
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("special-file identity preparation must finish within two seconds");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fifo_without_writer_fails_promptly_and_regular_replacement_retries() {
+        use std::os::unix::{ffi::OsStrExt, fs::symlink};
+        bounded(|| {
+            for name in FILES {
+                for through_symlink in [false, true] {
+                    let dir = tempfile::tempdir().unwrap();
+                    files(dir.path());
+                    let path = dir.path().join(name);
+                    std::fs::remove_file(&path).unwrap();
+                    let fifo = if through_symlink {
+                        dir.path().join("fifo")
+                    } else {
+                        path.clone()
+                    };
+                    let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+                    // No writer is ever opened, so a blocking open would hang.
+                    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+                    if through_symlink {
+                        symlink(&fifo, &path).unwrap();
+                    }
+                    let encoder = AudioEncoder::new(dir.path());
+                    assert!(
+                        matches!(encoder.identity(), Err(Error::ModelNotFound(message)) if message.contains("not a regular file"))
+                    );
+                    assert!(encoder.identity.get().is_none());
+                    std::fs::remove_file(&fifo).unwrap();
+                    let bytes: &[u8] = if name == FILES[0] {
+                        b"graph-v1"
+                    } else {
+                        b"weights-v1"
+                    };
+                    std::fs::write(&fifo, bytes).unwrap();
+                    assert_eq!(encoder.identity().unwrap(), GOLDEN);
+                    assert_eq!(encoder.hash_passes.load(Ordering::Relaxed), 2);
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn device_targets_fail_promptly_without_publishing_identity() {
+        bounded(|| {
+            for name in FILES {
+                let dir = tempfile::tempdir().unwrap();
+                files(dir.path());
+                let path = dir.path().join(name);
+                std::fs::remove_file(&path).unwrap();
+                std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+                let encoder = AudioEncoder::new(dir.path());
+                assert!(
+                    matches!(encoder.identity(), Err(Error::ModelNotFound(message)) if message.contains("not a regular file"))
+                );
+                assert!(encoder.identity.get().is_none());
+            }
+        });
     }
 
     #[test]

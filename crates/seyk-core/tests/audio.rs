@@ -477,6 +477,9 @@ fn changed_during_decode_leaves_no_binding_and_no_slice() {
         fn identity(&self) -> &ModelIdentity {
             self.inner.identity()
         }
+        fn input_identity(&self, modality: Modality) -> seyk_embed::Result<&str> {
+            self.inner.input_identity(modality)
+        }
         fn supports(&self, m: Modality) -> bool {
             self.inner.supports(m)
         }
@@ -835,9 +838,26 @@ fn same_size_encoder_tamper_is_not_admitted_by_either_cache_path() {
     }
     // A failed identity cannot admit cached audio. A subsequent explicit search
     // can retry, while text resources in the same search remain usable.
-    std::fs::remove_file(&weights).unwrap();
     let text = dir.path().join("text.txt");
     std::fs::write(&text, "synthetic text remains searchable").unwrap();
+    let priming = SearchEngine::builder()
+        .embedder(model.clone())
+        .cache(SqliteCache::open(&db).unwrap())
+        .build()
+        .unwrap();
+    let text_id = ResourceId::from_path(std::fs::canonicalize(&text).unwrap()).unwrap();
+    assert!(
+        priming
+            .search("query")
+            .paths([&text])
+            .execute()
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.resource == text_id)
+    );
+    drop(priming);
+    std::fs::remove_file(&weights).unwrap();
     let missing = Arc::new(LazyPolicy::new(&weights));
     let engine = SearchEngine::builder()
         .embedder(missing.clone())
@@ -852,6 +872,7 @@ fn same_size_encoder_tamper_is_not_admitted_by_either_cache_path() {
             .execute()
             .unwrap();
         assert!(result.hits.iter().all(|hit| hit.resource != id));
+        assert!(result.hits.iter().any(|hit| hit.resource == text_id));
         assert!(
             result
                 .stats

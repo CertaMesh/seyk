@@ -3129,6 +3129,7 @@ dependencies = [
  "dirs",
  "fast_image_resize",
  "image",
+ "libc",
  "ort",
  "rayon",
  "rustfft",

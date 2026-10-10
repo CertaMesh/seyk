@@ -1053,6 +1053,7 @@ impl SearchEngine {
         let mut batch = Vec::new();
         let mut records = Vec::new();
         let capacity = self.batch_size.min(4);
+        let identity = self.embedder.input_identity(crate::Modality::Audio)?;
         let result = crate::audio::windows_verified(
             source,
             &r.id,
@@ -1061,7 +1062,6 @@ impl SearchEngine {
                 let mut hash = blake3::Hasher::new();
                 hash.update(b"audio-input-v1");
                 hash.update(crate::audio::PREPARATION.as_bytes());
-                let identity = self.embedder.input_identity(crate::Modality::Audio)?;
                 hash.update(&(identity.len() as u64).to_le_bytes());
                 hash.update(identity.as_bytes());
                 hash.update(&(samples.len() as u64).to_le_bytes());
