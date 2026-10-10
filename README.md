@@ -564,6 +564,8 @@ seconds when idle to notice other processes' writes, rather than polling every
 second. Observing another process's write starts a fresh quiet period. If cleanup
 is pending, a short-lived MCP process or `seyk index --watch` stopped within about
 60 seconds of its last change leaves the scrub pending; there is no scrub on exit.
+Engine drop wakes an idle worker immediately. An active scrub may finish its
+current iteration; drop does not cancel or join it.
 
 Run `seyk cache scrub` to scrub immediately without deleting live records.
 `seyk cache clear` deletes the entire index, runs `VACUUM`, and truncates the WAL,

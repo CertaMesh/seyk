@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, MutexGuard,
+    Arc, Condvar, Mutex, MutexGuard,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
@@ -268,6 +268,7 @@ impl SearchEngineBuilder {
             scrubber_started: AtomicBool::new(false),
             #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
+            scrubber_stop: Arc::new(ScrubStop::default()),
             segmenter: self.segmenter,
             profile,
             profile_id,
@@ -296,6 +297,7 @@ pub struct SearchEngine {
     scrubber_started: AtomicBool,
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
+    scrubber_stop: Arc<ScrubStop>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
     profile_id: String,
@@ -314,6 +316,60 @@ pub enum LeaseEvent {
 
 #[cfg(all(feature = "test-support", debug_assertions))]
 type LeaseObserver = Arc<dyn Fn(LeaseEvent) + Send + Sync>;
+// Shared only by the engine and worker; contains no engine/cache references.
+#[derive(Default)]
+struct ScrubStop {
+    state: Mutex<ScrubStopState>,
+    wake: Condvar,
+}
+
+#[derive(Default)]
+struct ScrubStopState {
+    stopped: bool,
+    #[cfg(test)]
+    waiting: bool,
+}
+
+impl ScrubStop {
+    fn wait(&self, delay: std::time::Duration) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        #[cfg(test)]
+        let state = {
+            let mut state = state;
+            state.waiting = true;
+            self.wake.notify_all();
+            state
+        };
+        let Ok((state, _)) = self.wake.wait_timeout_while(state, delay, |s| !s.stopped) else {
+            return false;
+        };
+        #[cfg(test)]
+        let state = {
+            let mut state = state;
+            state.waiting = false;
+            state
+        };
+        !state.stopped
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.state.lock().map_or(true, |state| state.stopped)
+    }
+
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.stopped = true;
+        self.wake.notify_all();
+    }
+}
+
+impl Drop for SearchEngine {
+    fn drop(&mut self) {
+        self.scrubber_stop.stop();
+    }
+}
 
 impl SearchEngine {
     /// Install a test observer. It must not start indexing on this engine.
@@ -507,9 +563,15 @@ impl SearchEngine {
 
     /// Start one idle-time worker for watcher/daemon/MCP use. It holds weak
     /// references and never runs in a request. On engine drop it stops after its
-    /// current iteration; drop does not cancel or join an in-flight scrub.
+    /// current iteration and wakes any idle deadline wait immediately. Drop does
+    /// not cancel or join an in-flight scrub.
     pub fn start_cache_scrubber(&self) {
+        self.spawn_cache_scrubber();
+    }
+
+    fn spawn_cache_scrubber(&self) -> Option<std::thread::JoinHandle<()>> {
         let cache = Arc::downgrade(&self.cache);
+        let stop = self.scrubber_stop.clone();
         self.start_cache_scrubber_with(
             move || {
                 let delay = {
@@ -521,8 +583,7 @@ impl SearchEngine {
                     };
                     cache.scrub_delay(std::time::Duration::from_secs(60))
                 }; // Release strong references and the mutex before sleeping.
-                std::thread::sleep(delay);
-                true
+                stop.wait(delay)
             },
             |cache| match cache.scrub_if_idle(std::time::Duration::from_secs(60)) {
                 Ok(Some(report)) if report.pending => eprintln!(
@@ -531,7 +592,7 @@ impl SearchEngine {
                 Err(error) => eprintln!("warning: cache scrub pending: {error}"),
                 _ => {}
             },
-        );
+        )
     }
 
     // Injectable ticks and work make worker ownership/locking tests deterministic.
@@ -546,8 +607,12 @@ impl SearchEngine {
         }
         let cache = Arc::downgrade(&self.cache);
         let indexing = Arc::downgrade(&self.indexing);
+        let stop = self.scrubber_stop.clone();
         Some(std::thread::spawn(move || {
-            while tick() {
+            while !stop.is_stopped() && tick() {
+                if stop.is_stopped() {
+                    break;
+                }
                 let (Some(cache), Some(indexing)) = (cache.upgrade(), indexing.upgrade()) else {
                     break;
                 };
@@ -2359,23 +2424,48 @@ mod tests {
         worker.join().unwrap();
     }
 
+    fn join_worker_promptly(worker: std::thread::JoinHandle<()>) {
+        let (completed, completion) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = completed.send(worker.join());
+        });
+        completion
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("worker did not exit within two seconds")
+            .unwrap();
+    }
+
     #[test]
-    fn cache_worker_drop_while_sleeping_releases_cache_and_exits() {
+    fn cache_worker_drop_interrupts_real_production_deadline_wait() {
         let engine = worker_engine();
         let weak_cache = Arc::downgrade(&engine.cache);
         let weak_indexing = Arc::downgrade(&engine.indexing);
-        let (ticks, waits, clock) = worker_ticks();
-        let worker = engine
-            .start_cache_scrubber_with(clock, |_| {
-                panic!("must not scrub after a sleeping engine is dropped")
+        let stop = engine.scrubber_stop.clone();
+        let worker = engine.spawn_cache_scrubber().unwrap();
+        // The same production waiter will sleep for 60 seconds. Observing its
+        // state under the mutex proves it entered the condvar wait; no tick or
+        // wake is injected by this test. Only engine Drop may interrupt it.
+        assert_eq!(
+            MemoryCache::new().scrub_delay(std::time::Duration::from_secs(60)),
+            std::time::Duration::from_secs(60)
+        );
+        let state = stop.state.lock().unwrap();
+        let (state, _) = stop
+            .wake
+            .wait_timeout_while(state, std::time::Duration::from_secs(5), |state| {
+                !state.waiting
             })
             .unwrap();
-        worker_wait(&waits);
+        assert!(
+            state.waiting,
+            "production worker did not enter its deadline wait"
+        );
+        assert!(!state.stopped);
+        drop(state);
         drop(engine);
         assert!(weak_cache.upgrade().is_none());
         assert!(weak_indexing.upgrade().is_none());
-        ticks.send(()).unwrap();
-        worker.join().unwrap();
+        join_worker_promptly(worker);
     }
 
     #[test]
@@ -2404,11 +2494,16 @@ mod tests {
         );
         assert!(weak_indexing.upgrade().is_some());
         finish.send(()).unwrap();
-        worker_wait(&waits);
-        assert!(weak_cache.upgrade().is_none(), "released before next sleep");
+        join_worker_promptly(worker);
+        assert!(
+            weak_cache.upgrade().is_none(),
+            "released after current iteration"
+        );
         assert!(weak_indexing.upgrade().is_none());
-        ticks.send(()).unwrap();
-        worker.join().unwrap();
+        assert!(
+            waits.try_recv().is_err(),
+            "must not start another wait after drop"
+        );
     }
 
     #[cfg(any(feature = "pdf", feature = "audio"))]
