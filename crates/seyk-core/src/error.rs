@@ -46,6 +46,11 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error(
+        "cache changes committed, but privacy cleanup is pending; rerun the command or sync once other readers close (using the same cache path); cache clear is a fallback"
+    )]
+    CacheCleanupPending,
+
     #[error("cache error: {0}")]
     Cache(#[from] rusqlite::Error),
 

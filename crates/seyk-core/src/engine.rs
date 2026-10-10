@@ -108,6 +108,9 @@ pub struct PageDiagnostic {
 /// What happened while bringing the cache up to date.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStats {
+    /// Deferred privacy cleanup; pending cleanup is retried on the next sync/open.
+    #[serde(default, skip_serializing_if = "crate::cache::CacheCleanup::is_empty")]
+    pub cache_cleanup: crate::cache::CacheCleanup,
     pub resources_discovered: usize,
     /// Reused from cache without re-embedding.
     pub resources_unchanged: usize,
@@ -1514,7 +1517,12 @@ impl<'e> SearchRequest<'e> {
         }
         let mut sync = if self.sync {
             let indexing = engine.acquire_indexing_lease()?;
-            engine.sync(&indexing, &resources, self.progress)?
+            engine.with_cache(|c| c.begin_sync())?;
+            let result = engine.sync(&indexing, &resources, self.progress);
+            let cleanup = engine.with_cache(|c| c.end_sync());
+            let mut stats = result?;
+            stats.cache_cleanup = cleanup?;
+            stats
         } else {
             SyncStats {
                 resources_discovered: resources.len(),
@@ -2039,45 +2047,53 @@ impl<'e> IndexRequest<'e> {
             });
         }
         let indexing = engine.acquire_indexing_lease()?;
-        let mut sync = engine.sync(&indexing, &resources, self.progress)?;
+        engine.with_cache(|c| c.begin_sync())?;
+        let result: Result<IndexReport> = (|| {
+            let mut sync = engine.sync(&indexing, &resources, self.progress)?;
 
-        let pid = engine.profile_id.as_str();
-        let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
-        let known = engine.with_cache(|c| c.resource_index(pid))?;
-        let mut gone = Vec::new();
-        match engine.provider.deletion_scope(&scope) {
-            Ok(deletion_scope) => {
-                for id in known.into_keys() {
-                    if present.contains(&id) || !deletion_scope.contains(&id) {
-                        continue;
+            let pid = engine.profile_id.as_str();
+            let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
+            let known = engine.with_cache(|c| c.resource_index(pid))?;
+            let mut gone = Vec::new();
+            match engine.provider.deletion_scope(&scope) {
+                Ok(deletion_scope) => {
+                    for id in known.into_keys() {
+                        if present.contains(&id) || !deletion_scope.contains(&id) {
+                            continue;
+                        }
+                        match engine.provider.is_deleted(&id, &deletion_scope) {
+                            Ok(true) => gone.push(id),
+                            Ok(false) => {}
+                            Err(e) => sync.skipped.push(skip(&id, format!("deletion check: {e}"))),
+                        }
                     }
-                    match engine.provider.is_deleted(&id, &deletion_scope) {
-                        Ok(true) => gone.push(id),
-                        Ok(false) => {}
-                        Err(e) => sync.skipped.push(skip(&id, format!("deletion check: {e}"))),
+                }
+                Err(e) => {
+                    for root in &scope.roots {
+                        sync.skipped
+                            .push(skip(root, format!("deletion scope: {e}")));
                     }
                 }
             }
-            Err(e) => {
-                for root in &scope.roots {
-                    sync.skipped
-                        .push(skip(root, format!("deletion scope: {e}")));
+            let removed = engine.with_cache(|c| {
+                c.remove_resources(pid, &gone)?;
+                if !gone.is_empty() {
+                    c.prune_orphans(pid)?;
                 }
-            }
-        }
-        let removed = engine.with_cache(|c| {
-            c.remove_resources(pid, &gone)?;
-            if !gone.is_empty() {
-                c.prune_orphans(pid)?;
-            }
-            Ok(gone.len())
-        })?;
+                Ok(gone.len())
+            })?;
 
-        Ok(IndexReport {
-            sync,
-            resources_removed: removed,
-            total_ms: started.elapsed().as_millis() as u64,
-        })
+            Ok(IndexReport {
+                sync,
+                resources_removed: removed,
+                total_ms: started.elapsed().as_millis() as u64,
+            })
+        })();
+        let cleanup = engine.with_cache(|c| c.end_sync());
+        let mut report: IndexReport = result?;
+        report.sync.cache_cleanup = cleanup?;
+        report.total_ms = started.elapsed().as_millis() as u64;
+        Ok(report)
     }
 }
 

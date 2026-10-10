@@ -642,7 +642,8 @@ fn watch_and_index(
                     if quiet_ok
                         && r.sync.resources_updated == 0
                         && r.resources_removed == 0
-                        && r.sync.skipped.is_empty() => {}
+                        && r.sync.skipped.is_empty()
+                        && !r.sync.cache_cleanup.pending => {}
                 Ok(r) => print!("{}", format_index_report(&r)),
                 Err(e) => eprintln!("error: {e}"),
             }
@@ -1090,6 +1091,11 @@ fn format_summary(r: &SearchResults) -> String {
             s.reason
         ));
     }
+    if r.stats.sync.cache_cleanup.pending {
+        out.push_str(
+            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
+        );
+    }
     out.push_str(&format_page_diagnostics(&r.stats.sync));
     out
 }
@@ -1116,6 +1122,11 @@ fn format_index_report(r: &IndexReport) -> String {
                 .unwrap_or_else(|| s.resource.to_string()),
             s.reason
         ));
+    }
+    if r.sync.cache_cleanup.pending {
+        out.push_str(
+            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
+        );
     }
     out.push_str(&format_page_diagnostics(&r.sync));
     out
@@ -1148,6 +1159,11 @@ fn format_cache_stats(stats: &CacheStats) -> String {
             "  {} files, {} segments, {} vectors\n",
             p.resources, p.segments, p.embeddings
         ));
+    }
+    if stats.cleanup_pending {
+        out.push_str(
+            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
+        );
     }
     out
 }

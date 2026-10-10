@@ -543,20 +543,34 @@ and how often, not their order**. Each field is tokenized and sorted before it
 is indexed. These word frequencies are still sensitive, like embeddings. The
 cache directory is created `0700` and the file `0600`. `seyk cache clear`
 deletes every vector and keyword row, compacts the database with `VACUUM`,
-then checkpoints and truncates its WAL. Schema upgrades also compact and truncate.
-SQLite `secure_delete=ON` zeroes deleted ordinary records; resource replacement
-and removal rebuild the affected profile's keyword index to erase deleted FTS
-postings, then truncate the WAL. Metadata/vector updates and orphan pruning also
-truncate the WAL. After these operations succeed, removed records do not remain
-readable in the current database or `-wal` file (a word still present in another
-live record remains indexed). Rebuilding costs grow with the profile's index size.
-If another connection blocks WAL cleanup, the operation reports an error even
-though its database changes may already be committed; close other cache users
-and run `seyk cache clear` with the same `--cache-path` (if supplied) to complete cleanup. For remnants left by older
-binaries, run `seyk cache clear` once. This is logical file cleanup, not physical
-secure erasure: SSD wear levelling, filesystem snapshots, backups, open reader
-snapshots and crash-interrupted cleanup may retain earlier copies. Use OS disk
-encryption and manage snapshots/backups according to your privacy needs.
+then checkpoints and truncates its WAL. SQLite `secure_delete=ON` zeroes deleted
+ordinary records. During a sync, destructive writes mark cleanup pending; after
+all replacements, removals and orphan pruning, Seyk rebuilds each affected
+profile's keyword index once and checks a WAL TRUNCATE checkpoint. Fresh inserts,
+unchanged metadata touches, identical vector writes and zero-row deletions do
+not request cleanup. One-off destructive cache APIs scrub immediately.
+
+If a reader blocks cleanup, the sync still succeeds but reports pending privacy
+cleanup in its status (and a warning in CLI summaries). Old content may remain
+readable in the WAL until cleanup completes. Rerun the command or sync once other
+readers close, using the same cache path; `seyk cache clear` is a fallback that
+removes the entire index. One-off APIs report `CacheCleanupPending` after changes
+have committed. Dirty profiles, WAL cleanup and migration/clear compaction are
+recorded in `meta`, without changing the cache schema version or profile.
+Blocked or interrupted cleanup is retried on a later open or sync, including a
+VACUUM blocked after a migration committed. A failed indexing pass also attempts
+its deferred cleanup before returning the indexing error.
+
+After cleanup completes, removed records do not remain readable in the current
+database or `-wal` file (a word still present in another live record remains
+indexed). Sync cleanup can leave new WAL frames containing only live cleanup
+metadata; clear also truncates these housekeeping frames. Rebuilding costs grow
+with the profile's surviving index size, once per sync rather than per resource.
+For remnants left by older binaries, run `seyk cache clear` once. This is logical
+file cleanup, not physical secure erasure: SSD wear levelling, filesystem
+snapshots, backups, open reader snapshots and crash-interrupted cleanup may
+retain earlier copies. Use OS disk encryption and manage snapshots/backups
+according to your privacy needs.
 
 Protection against a lost or stolen disk depends on OS disk encryption: check
 `fdesetup status` on macOS (FileVault), `lsblk -f` / `cryptsetup status <mapping>`

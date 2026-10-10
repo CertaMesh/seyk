@@ -129,6 +129,8 @@ pub struct CacheStats {
     /// Where the cache lives, when it is persistent.
     pub location: Option<PathBuf>,
     pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleanup_pending: bool,
     pub profiles: Vec<ProfileStats>,
     /// Directory’s own macOS backup flag captured at open; unknown elsewhere or on query failure.
     #[serde(default)]
@@ -138,11 +140,34 @@ pub struct CacheStats {
     pub in_synced_folder: bool,
 }
 
+/// Cleanup performed at the boundary of an indexing pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheCleanup {
+    pub profiles_rebuilt: usize,
+    pub pending: bool,
+}
+
+impl CacheCleanup {
+    pub fn is_empty(&self) -> bool {
+        self.profiles_rebuilt == 0 && !self.pending
+    }
+}
+
 /// Storage for resource metadata, segment locators and vectors.
 ///
 /// Unstable: exposes ResourceVersion and CachedResourceState, which may change
 /// before 1.0; filesystem is the only supported production provider.
 pub trait EmbeddingCache: Send {
+    /// Defer destructive-write cleanup until the end of one indexing pass.
+    fn begin_sync(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// End the pass, including failed passes. Busy readers leave cleanup pending.
+    fn end_sync(&mut self) -> Result<CacheCleanup> {
+        Ok(CacheCleanup::default())
+    }
+
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()>;
 
     /// Every cached resource for a profile, keyed by identity. Segments are not loaded.
@@ -428,6 +453,7 @@ impl EmbeddingCache for MemoryCache {
             size_bytes: None,
             backup_excluded: None,
             in_synced_folder: false,
+            cleanup_pending: false,
             profiles,
         })
     }
@@ -562,6 +588,7 @@ pub struct SqliteCache {
     conn: Connection,
     path: PathBuf,
     guards: super::cache_guards::GuardStatus,
+    defer_cleanup: bool,
 }
 
 impl SqliteCache {
@@ -621,8 +648,14 @@ impl SqliteCache {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "secure_delete", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
-        let mut cache = Self { conn, path, guards };
+        let mut cache = Self {
+            conn,
+            path,
+            guards,
+            defer_cleanup: false,
+        };
         cache.migrate()?;
+        cache.scrub_pending()?;
         Ok(cache)
     }
 
@@ -630,25 +663,93 @@ impl SqliteCache {
         &self.path
     }
 
-    /// TRUNCATE reports a busy reader in its result row, not as a SQL error.
-    /// A committed deletion is not a successful scrub until old WAL frames go.
-    fn truncate_wal(&self) -> Result<()> {
+    fn cleanup_pending(&self) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key IN ('wal_scrub_pending', 'compact_pending') OR key GLOB 'fts_scrub_pending:*')",
+            [], |r| r.get(0),
+        )?)
+    }
+
+    /// Do not spend the normal write busy timeout waiting for readers at a sync boundary.
+    fn scrub_pending(&mut self) -> Result<CacheCleanup> {
+        if !self.cleanup_pending()? {
+            return Ok(CacheCleanup::default());
+        }
+        self.conn.busy_timeout(std::time::Duration::ZERO)?;
+        let mut report = CacheCleanup::default();
+        let result = self.scrub_pending_inner(&mut report);
+        self.conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        match result {
+            Ok(()) => Ok(report),
+            Err(Error::Cache(error)) if sqlite_busy(&error) => {
+                report.pending = true;
+                Ok(report)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn scrub_pending_inner(&mut self, report: &mut CacheCleanup) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let profiles = tx
+            .prepare("SELECT value FROM meta WHERE key GLOB 'fts_scrub_pending:*'")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for profile in &profiles {
+            rebuild_fts(&tx, profile)?;
+        }
+        tx.execute("DELETE FROM meta WHERE key GLOB 'fts_scrub_pending:*'", [])?;
+        // Capture the marker under the same write lock as the FTS rebuild.
+        let generation: Option<String> = tx
+            .query_row(
+                "SELECT value FROM meta WHERE key='wal_scrub_pending'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.commit()?;
+        report.profiles_rebuilt = profiles.len();
+        let Some(generation) = generation else {
+            report.pending = self.cleanup_pending()?;
+            return Ok(());
+        };
+        let compact: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key='compact_pending')",
+            [],
+            |r| r.get(0),
+        )?;
+        if compact {
+            self.conn.flush_prepared_statement_cache();
+            self.conn.execute_batch("VACUUM")?;
+        }
+        // The WAL flag stays durable until checkpoint completion, including across crashes.
         let busy: i64 = self
             .conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
         if busy != 0 {
-            return Err(Error::Config(
-                "cache deletion committed, but WAL cleanup is blocked by another connection; close other cache users and run seyk cache clear using the same cache path".into(),
-            ));
+            report.pending = true;
+            return Ok(());
         }
+        // This housekeeping may write new WAL frames, but they contain only live meta
+        // records, never the deleted content removed by the completed checkpoint.
+        let tx = self.conn.transaction()?;
+        let finished = tx.execute(
+            "DELETE FROM meta WHERE key='wal_scrub_pending' AND value=?1",
+            [generation],
+        )?;
+        if finished != 0 {
+            tx.execute("DELETE FROM meta WHERE key='compact_pending'", [])?;
+        }
+        tx.commit()?;
+        report.pending = self.cleanup_pending()?;
         Ok(())
     }
 
-    fn compact(&self) -> Result<()> {
-        self.conn.flush_prepared_statement_cache();
-        self.conn.execute_batch("VACUUM;")?;
-        // VACUUM itself writes WAL frames, so truncation must come last.
-        self.truncate_wal()
+    fn cleanup_after_write(&mut self, changed: bool) -> Result<()> {
+        if changed && !self.defer_cleanup && self.scrub_pending()?.pending {
+            return Err(Error::CacheCleanupPending);
+        }
+        Ok(())
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -801,10 +902,11 @@ impl SqliteCache {
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             [SCHEMA_VERSION],
         )?;
-        tx.commit()?;
         if version.is_some() {
-            self.compact()?;
+            tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
+            mark_cleanup(&tx, None)?;
         }
+        tx.commit()?;
         Ok(())
     }
 }
@@ -892,6 +994,26 @@ fn restrict_permissions(p: &Path, mode: u32) {
 #[cfg(not(unix))]
 fn restrict_permissions(_: &Path, _: u32) {}
 
+fn sqlite_busy(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::SqliteFailure(code, _)
+        if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+}
+
+fn mark_cleanup(tx: &rusqlite::Transaction<'_>, profile: Option<&str>) -> Result<()> {
+    tx.execute(
+        "INSERT INTO meta VALUES('wal_scrub_pending',lower(hex(randomblob(16))))
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [],
+    )?;
+    if let Some(profile) = profile {
+        tx.execute(
+            "INSERT OR IGNORE INTO meta VALUES(?1,?2)",
+            params![format!("fts_scrub_pending:{profile}"), profile],
+        )?;
+    }
+    Ok(())
+}
+
 /// Remove a resource's keyword rows. FTS rows are not covered by
 /// the foreign-key cascade, so they go first, while their segment rows exist.
 fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Result<bool> {
@@ -922,6 +1044,16 @@ fn json_err(e: serde_json::Error) -> Error {
 }
 
 impl EmbeddingCache for SqliteCache {
+    fn begin_sync(&mut self) -> Result<()> {
+        self.defer_cleanup = true;
+        Ok(())
+    }
+
+    fn end_sync(&mut self) -> Result<CacheCleanup> {
+        self.defer_cleanup = false;
+        self.scrub_pending()
+    }
+
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()> {
         let tx = self.conn.transaction()?;
         let inserted = tx.execute(
@@ -1084,14 +1216,11 @@ impl EmbeddingCache for SqliteCache {
                 ])?;
             }
         }
-        if deleted {
-            rebuild_fts(&tx, profile)?;
+        if deleted || replaced != 0 {
+            mark_cleanup(&tx, deleted.then_some(profile))?;
         }
         tx.commit()?;
-        if deleted || replaced != 0 {
-            self.truncate_wal()?;
-        }
-        Ok(())
+        self.cleanup_after_write(deleted || replaced != 0)
     }
 
     fn touch_resource(
@@ -1101,11 +1230,17 @@ impl EmbeddingCache for SqliteCache {
         metadata: &ResourceMetadata,
         version: &ResourceVersion,
     ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7, media_type = ?8 WHERE profile = ?1 AND path = ?2",
+        let tx = self.conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7, media_type = ?8 WHERE profile = ?1 AND path = ?2
+            AND (modified_ns IS NOT ?3 OR size_bytes IS NOT ?4 OR version IS NOT ?5 OR content_hash IS NOT ?6 OR modality IS NOT ?7 OR media_type IS NOT ?8)",
             params![profile, resource_key(path), metadata.modified_ns, metadata.size_bytes as i64, serde_json::to_string(version).map_err(json_err)?, metadata.content_hash, metadata.modality.to_string(), metadata.media_type],
         )?;
-        self.truncate_wal()
+        if changed != 0 {
+            mark_cleanup(&tx, None)?;
+        }
+        tx.commit()?;
+        self.cleanup_after_write(changed != 0)
     }
 
     fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
@@ -1118,20 +1253,21 @@ impl EmbeddingCache for SqliteCache {
             return Ok(());
         }
         let mut deleted = false;
+        let mut removed = 0;
         {
             let mut stmt =
                 tx.prepare_cached("DELETE FROM resources WHERE profile = ?1 AND path = ?2")?;
             for p in paths {
                 let key = resource_key(p);
                 deleted |= delete_fts_rows(&tx, profile, &key)?;
-                stmt.execute(params![profile, key])?;
+                removed += stmt.execute(params![profile, key])?;
             }
         }
-        if deleted {
-            rebuild_fts(&tx, profile)?;
+        if deleted || removed != 0 {
+            mark_cleanup(&tx, deleted.then_some(profile))?;
         }
         tx.commit()?;
-        self.truncate_wal()
+        self.cleanup_after_write(deleted || removed != 0)
     }
 
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>> {
@@ -1149,16 +1285,31 @@ impl EmbeddingCache for SqliteCache {
 
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()> {
         let tx = self.conn.transaction()?;
+        let mut overwritten = false;
         {
-            let mut stmt = tx.prepare_cached(
-                "INSERT OR REPLACE INTO embeddings (profile, input_hash, vector) VALUES (?1, ?2, ?3)",
+            let mut read = tx.prepare_cached(
+                "SELECT vector FROM embeddings WHERE profile=?1 AND input_hash=?2",
             )?;
-            for (h, v) in items {
-                stmt.execute(params![profile, h, to_bytes(v)])?;
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO embeddings (profile,input_hash,vector) VALUES(?1,?2,?3)",
+            )?;
+            for (hash, vector) in items {
+                let bytes = to_bytes(vector);
+                let old: Option<Vec<u8>> = read
+                    .query_row(params![profile, hash], |r| r.get(0))
+                    .optional()?;
+                if old.as_ref() == Some(&bytes) {
+                    continue;
+                }
+                overwritten |= old.is_some();
+                stmt.execute(params![profile, hash, bytes])?;
             }
         }
+        if overwritten {
+            mark_cleanup(&tx, None)?;
+        }
         tx.commit()?;
-        self.truncate_wal()
+        self.cleanup_after_write(overwritten)
     }
 
     fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
@@ -1242,12 +1393,17 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn prune_orphans(&mut self, profile: &str) -> Result<u64> {
-        let n = self.conn.execute(
+        let tx = self.conn.transaction()?;
+        let n = tx.execute(
             "DELETE FROM embeddings WHERE profile = ?1 AND NOT EXISTS (
                  SELECT 1 FROM segments s WHERE s.profile = embeddings.profile AND s.input_hash = embeddings.input_hash)",
             [profile],
         )?;
-        self.truncate_wal()?;
+        if n != 0 {
+            mark_cleanup(&tx, None)?;
+        }
+        tx.commit()?;
+        self.cleanup_after_write(n != 0)?;
         Ok(n as u64)
     }
 
@@ -1280,6 +1436,7 @@ impl EmbeddingCache for SqliteCache {
             size_bytes: Some(size_bytes),
             backup_excluded: self.guards.backup_excluded,
             in_synced_folder: self.guards.in_synced_folder,
+            cleanup_pending: self.cleanup_pending()?,
             profiles,
         })
     }
@@ -1295,8 +1452,24 @@ impl EmbeddingCache for SqliteCache {
             tx.execute_batch(&format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")))?;
         }
         tx.execute_batch("DELETE FROM embeddings; DELETE FROM segments; DELETE FROM resources; DELETE FROM profiles;")?;
+        tx.execute("DELETE FROM meta WHERE key GLOB 'fts_scrub_pending:*'", [])?;
+        tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
+        mark_cleanup(&tx, None)?;
         tx.commit()?;
-        self.compact()
+        if self.scrub_pending()?.pending {
+            return Err(Error::CacheCleanupPending);
+        }
+        // Clear also removes the harmless cleanup-marker WAL frames.
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        if busy != 0 {
+            let tx = self.conn.transaction()?;
+            mark_cleanup(&tx, None)?;
+            tx.commit()?;
+            return Err(Error::CacheCleanupPending);
+        }
+        Ok(())
     }
 }
 
