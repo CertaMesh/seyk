@@ -20,6 +20,27 @@ golden-suite CPU stress workers and workspace verification were running.
 
 ## Publication contract (including review fixes)
 
+A genuine copy receipt records that the complete staged file matched the local,
+immutable provisioned source's size and BLAKE3 digest at publication. Matching
+recorded source/target identity, length and mtime permits reuse without reading
+weights. This is a record of earlier verification and unchanged observed stats,
+not a cryptographic authentication of the receipt or proof of present contents.
+It detects partial/interrupted publications, stale files and accidental changes
+that alter those stats; it cannot detect a forged well-formed receipt or
+corruption preserving every recorded stat.
+
+The trust boundary is the **user-owned 0700 cache/model directories** and
+**0600 copy/receipt files**. A process able to forge the receipt there can also
+replace the weights. Same-user malware is explicitly excluded by Seyk's threat
+model (Solo todo #4334). The orchestrator accepted this documented contract;
+receipts are not redesigned or signed. Parsing/path handling remains defensive:
+malformed, oversized, stale or symlink receipts are misses, and no receipt field
+selects a filesystem path. The previous size-only reuse check was weaker.
+New model/cache directories are created 0700 on Unix, and existing owned model
+cache directories are tightened to that mode. Copies and receipts are created
+0600 through fresh handles. Hard-linked weights retain source permissions:
+chmodding those links would also change the HF source inode and is forbidden.
+
 - Reuse is metadata-only for regular destinations: shared device/inode on Unix,
   or volume serial/file index through `same-file` on Windows. Copies instead
   require a bounded, versioned verified-at-publish sidecar whose source and
@@ -38,8 +59,10 @@ golden-suite CPU stress workers and workspace verification were running.
   Its writer closes before recording stamp metadata, because Windows finalizes
   last-write timestamps when writer handles close ([file-time contract](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times)).
 - Temporary names carry a recognizable prefix and creation timestamp. Cache
-  misses sweep abandoned names older than a day without using inherited source
-  mtimes. A guard also cleans up successful POSIX same-inode rename no-ops.
+  hits and misses sweep abandoned names older than a day without using inherited
+  source mtimes. Cleanup is best effort: at most once per process/directory,
+  visiting at most 256 directory entries, with at most 1,024 tracked directories.
+  Work beyond those bounds waits for another process. A guard also cleans up successful POSIX same-inode rename no-ops.
 - Copy stamps publish before the data rename. A crash or competing copy between
   those renames can leave mismatched stats; the next load safely republishes.
 - Callers still require immutable provisioned sources. This change cannot
@@ -176,3 +199,27 @@ CLI file is restored before committing; this addendum changes only the
 materializer, fixture runner/tests, and this report. All formatting, three
 clippy configurations, dependency/license checks, Python 3.9/3.14 regressions,
 and the Rust 1.89 check/build gates also passed for the addendum.
+
+## Final review contract and cleanup
+
+The final round documents the accepted receipt trust boundary and adds private
+Unix directory/copy/receipt permission assertions, including unchanged source
+mode for hard links. Reuse now performs the bounded, rate-limited staging sweep.
+A deterministic hit-path test removes an abandoned entry, preserves a recent
+entry and the source inode, observes zero digest calls, then proves the next hit
+does not scan again. A separate test checks the directory-entry scan budget.
+The existing rejected-publication symlink regression (`99138d0`) forces EXDEV,
+verifies a staged copy, rejects persist, and asserts that the original symlink,
+its referent, source bytes/hashes and staging cleanup survive.
+
+The final sixteen-test backend suite passed **100/100 repetitions (1,600 tests)**
+with eight concurrent processes and twelve CPU stress workers, alongside
+workspace validation. The old early-return ordering fails the cache-hit cleanup
+regression in a disposable probe; the fixed helper passes all sixteen tests.
+
+Final-round fmt, dependency/license preflight, clippy `-D warnings`, and workspace
+tests passed for default, audio and audio-stt. Rust 1.89 checks/builds also
+passed. Workspace validation temporarily integrates PR #46's merged CLI test
+harness; that file is restored and excluded from this commit. Native Windows
+execution remains unavailable on this macOS host. No HF source was chmodded,
+written or downloaded.

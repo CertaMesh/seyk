@@ -747,8 +747,12 @@ fn onnx_files_without_symlinks(
     key.update(src.to_string_lossy().as_bytes());
     key.update(discriminator.as_bytes());
     let key = key.finalize().to_hex();
-    let dst = base.join("seyk").join("models").join(&key[..16]);
-    std::fs::create_dir_all(&dst).map_err(|e| io_error(&dst, e))?;
+    let cache = base.join("seyk");
+    materialize::create_private_dir(&cache)?;
+    let models = cache.join("models");
+    materialize::create_private_dir(&models)?;
+    let dst = models.join(&key[..16]);
+    materialize::create_private_dir(&dst)?;
     for f in &onnx {
         let real = src
             .join(f)

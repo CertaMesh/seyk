@@ -3,16 +3,28 @@
 //! Reuse reads metadata and a bounded copy-verification stamp, never weights.
 //! Malformed stamps or changed stats cause safe republishing. No stamp field
 //! selects a path, and no existing target or stamp is ever opened for writing.
+//! A genuine copy receipt records that size and BLAKE3 matched the immutable
+//! source at publication; reuse establishes only that the recorded stats match.
+//! It is not authenticated and does not prove current content against forged
+//! receipts or corruption preserving those stats. User-owned 0700 model/cache
+//! directories and 0600 receipts are the trust boundary. Anyone able to forge a
+//! receipt there can also replace the weights. Same-user malware is outside
+//! Seyk's threat model (todo 4334); the receipt detects accidental stale/partial
+//! publications and stat-changing corruption, not that attacker.
 use super::{Result, io_error};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::{Duration, SystemTime},
 };
 
 const TEMP_PREFIX: &str = ".seyk-materialize-";
+const MAX_SWEEP_ENTRIES: usize = 256;
+const MAX_SWEEP_DIRECTORIES: usize = 1024;
 const STALE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[cfg(test)]
@@ -194,8 +206,25 @@ fn copy_required(error: &io::Error) -> bool {
         error.kind() == io::ErrorKind::PermissionDenied
     }
 }
+fn sweep_stale_once(parent: &Path) {
+    static SWEPT: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let mut directories = SWEPT
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if directories.len() >= MAX_SWEEP_DIRECTORIES || !directories.insert(parent.to_owned()) {
+        return;
+    }
+    drop(directories);
+    // Best effort, once per process/directory, with bounded work and tracking.
+    // A later process can clean entries beyond this process's scan budget.
+    let _ = sweep_stale(parent);
+}
 fn sweep_stale(parent: &Path) -> Result<()> {
-    for entry in fs::read_dir(parent).map_err(|e| io_error(parent, e))? {
+    for entry in fs::read_dir(parent)
+        .map_err(|e| io_error(parent, e))?
+        .take(MAX_SWEEP_ENTRIES)
+    {
         let entry = entry.map_err(|e| io_error(parent, e))?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -219,6 +248,50 @@ fn sweep_stale(parent: &Path) -> Result<()> {
     }
     Ok(())
 }
+pub(super) fn create_private_dir(path: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path).map_err(|e| io_error(path, e))?;
+    if !fs::symlink_metadata(path)
+        .map_err(|e| io_error(path, e))?
+        .is_dir()
+    {
+        return Err(invalid(
+            path,
+            "model cache path must be a directory, not a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Tighten pre-existing materialization directories too. Set permissions
+        // on the directory handle, never on model hard links or HF sources.
+        fs::File::open(path)
+            .and_then(|dir| dir.set_permissions(fs::Permissions::from_mode(0o700)))
+            .map_err(|e| io_error(path, e))?;
+    }
+    Ok(())
+}
+fn staging_file(parent: &Path) -> Result<tempfile::NamedTempFile> {
+    let staged = tempfile::Builder::new()
+        .prefix(&temp_prefix())
+        .tempfile_in(parent)
+        .map_err(|e| io_error(parent, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staged
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|e| io_error(staged.path(), e))?;
+    }
+    Ok(staged)
+}
 pub(super) fn publish(source: &Path, target: &Path) -> Result<()> {
     publish_with(source, target, || {}, &Filesystem)
 }
@@ -232,9 +305,6 @@ fn publish_with(
     before_publish: impl FnOnce(),
     ops: &impl Operations,
 ) -> Result<()> {
-    if matches(source, target)? {
-        return Ok(());
-    }
     let parent = target.parent().ok_or_else(|| {
         io_error(
             target,
@@ -244,7 +314,10 @@ fn publish_with(
             ),
         )
     })?;
-    sweep_stale(parent)?;
+    sweep_stale_once(parent);
+    if matches(source, target)? {
+        return Ok(());
+    }
     before_publish();
     let link_error = match ops.link(source, target) {
         Ok(()) => return Ok(()),
@@ -284,10 +357,7 @@ fn publish_copy(source: &Path, target: &Path, parent: &Path, ops: &impl Operatio
     )?;
     check(ops, Point::SourceDigest, source)?;
     let expected_hash = ops.digest(source)?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(&temp_prefix())
-        .tempfile_in(parent)
-        .map_err(|e| io_error(parent, e))?;
+    let mut staged = staging_file(parent)?;
     let mut input = fs::File::open(source).map_err(|e| io_error(source, e))?;
     let mut hash = blake3::Hasher::new();
     let mut copied = 0;
@@ -331,10 +401,7 @@ fn publish_copy(source: &Path, target: &Path, parent: &Path, ops: &impl Operatio
         target: Stat::read(&staged, &staged_meta)?,
         digest: expected_hash.to_hex().to_string(),
     };
-    let mut staged_stamp = tempfile::Builder::new()
-        .prefix(&temp_prefix())
-        .tempfile_in(parent)
-        .map_err(|e| io_error(parent, e))?;
+    let mut staged_stamp = staging_file(parent)?;
     check(ops, Point::StampWrite, staged_stamp.path())?;
     serde_json::to_writer(&mut staged_stamp, &stamp)
         .map_err(|e| invalid(staged_stamp.path(), e.to_string()))?;
@@ -683,6 +750,87 @@ mod tests {
             fs::remove_file(stamp_path(&target)).unwrap();
             no_staging_files(dir.path());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_directories_and_copy_receipts_are_private_without_chmodding_sources() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("models/key");
+        create_private_dir(&cache).unwrap();
+        for path in [&cache, &cache.parent().unwrap().to_path_buf()] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+        create_private_dir(&cache).unwrap();
+        assert_eq!(
+            fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let source = dir.path().join("source");
+        fs::write(&source, b"correct").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        let target = cache.join("copy");
+        let ops = TestOps {
+            copy_only: true,
+            ..Default::default()
+        };
+        publish_with(&source, &target, || {}, &ops).unwrap();
+        for path in [&target, &stamp_path(&target)] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let linked = cache.join("linked");
+        publish(&source, &linked).unwrap();
+        assert_shared_inode(&source, &linked);
+        assert_eq!(
+            fs::metadata(&source).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fs::read(&source).unwrap(), b"correct");
+    }
+    #[test]
+    fn reuse_sweeps_abandoned_staging_once_without_reading_weights() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("weights");
+        fs::write(&source, b"correct").unwrap();
+        fs::hard_link(&source, &target).unwrap();
+        let old = dir.path().join(format!("{TEMP_PREFIX}1-abandoned"));
+        let recent = dir.path().join(format!("{}active", temp_prefix()));
+        fs::write(&old, b"old staging bytes").unwrap();
+        fs::write(&recent, b"active staging bytes").unwrap();
+        let before = DIGEST_CALLS.with(|calls| calls.get());
+        publish(&source, &target).unwrap();
+        assert!(!old.exists());
+        assert!(recent.exists());
+        fs::write(&old, b"newly abandoned").unwrap();
+        publish(&source, &target).unwrap();
+        assert!(old.exists(), "reuse must not repeatedly scan the directory");
+        assert_eq!(DIGEST_CALLS.with(|calls| calls.get()), before);
+        assert_eq!(fs::read(&source).unwrap(), b"correct");
+        assert_shared_inode(&source, &target);
+    }
+    #[test]
+    fn stale_sweep_has_a_bounded_entry_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..MAX_SWEEP_ENTRIES + 8 {
+            fs::write(
+                dir.path().join(format!("{TEMP_PREFIX}1-{index}")),
+                b"staging",
+            )
+            .unwrap();
+        }
+        sweep_stale(dir.path()).unwrap();
+        let remaining = fs::read_dir(dir.path()).unwrap().count();
+        assert!(remaining >= 8, "scan must visit at most its entry budget");
+        assert!(remaining < MAX_SWEEP_ENTRIES + 8);
     }
 
     #[test]
