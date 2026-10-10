@@ -1585,9 +1585,10 @@ fn deleted_cache_content_is_absent_from_database_and_wal_while_open() {
             }
             _ => unreachable!(),
         }
+        assert!(!cache.scrub().unwrap().pending);
         assert!(
             !raw_contains(&database, SENTINEL),
-            "left readable bytes after {operation}"
+            "left readable bytes after {operation} scrub"
         );
     }
 }
@@ -1710,7 +1711,9 @@ fn migrations_scrub_legacy_free_pages_and_source_order_postings() {
         }
         conn.execute_batch("PRAGMA wal_checkpoint(FULL)").unwrap();
         assert!(raw_contains(&database, SENTINEL));
-        let cache = SqliteCache::open(&database).unwrap();
+        let mut cache = SqliteCache::open(&database).unwrap();
+        assert!(cache.stats().unwrap().scrub_pending);
+        assert!(!cache.scrub().unwrap().pending);
         assert!(!raw_contains(&database, SENTINEL), "version {version}");
         assert_eq!(cache.stats().unwrap().profiles[0].segments, 1);
     }
@@ -1731,7 +1734,7 @@ fn synthetic_sync_engine(database: &Path) -> SearchEngine {
 }
 
 #[test]
-fn one_rebuild_per_sync_for_any_number_of_changed_and_deleted_resources() {
+fn one_explicit_scrub_for_any_number_of_changed_and_deleted_resources() {
     for count in [1, 7, 50] {
         let temp = TempDir::new().unwrap();
         let notes = temp.path().join("notes");
@@ -1745,8 +1748,8 @@ fn one_rebuild_per_sync_for_any_number_of_changed_and_deleted_resources() {
             .unwrap();
         }
         let engine = synthetic_sync_engine(&database);
-        let initial = engine.index().paths([&notes]).execute().unwrap();
-        assert!(initial.sync.cache_cleanup.is_empty());
+        engine.index().paths([&notes]).execute().unwrap();
+        assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
         for i in 0..count {
             fs::write(
                 notes.join(format!("note{i}.txt")),
@@ -1758,24 +1761,22 @@ fn one_rebuild_per_sync_for_any_number_of_changed_and_deleted_resources() {
         let report = engine.index().paths([&notes]).execute().unwrap();
         assert_eq!(report.sync.resources_updated, count);
         assert_eq!(report.resources_removed, 1);
-        assert_eq!(report.sync.cache_cleanup.profiles_rebuilt, 1);
-        assert!(!report.sync.cache_cleanup.pending);
-        assert!(!raw_contains(&database, "syntheticquartzsentinel"));
+        assert!(engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
         assert!(
-            engine
-                .index()
-                .paths([&notes])
-                .execute()
-                .unwrap()
-                .sync
-                .cache_cleanup
-                .is_empty()
+            raw_contains(&database, "quartzsentinel"),
+            "sync must defer FTS erasure"
         );
+        let cleanup = engine.scrub_cache().unwrap();
+        assert_eq!(cleanup.profiles_scrubbed, 1);
+        assert!(!cleanup.pending);
+        assert!(!raw_contains(&database, "quartzsentinel"));
+        engine.index().paths([&notes]).execute().unwrap();
+        assert!(engine.scrub_cache().unwrap().is_empty());
     }
 }
 
 #[test]
-fn reader_does_not_fail_fresh_noop_or_destructive_sync_and_next_sync_finishes_cleanup() {
+fn reader_does_not_fail_fresh_noop_or_destructive_sync_and_scrub_retries() {
     let temp = TempDir::new().unwrap();
     let notes = temp.path().join("notes");
     fs::create_dir(&notes).unwrap();
@@ -1788,39 +1789,41 @@ fn reader_does_not_fail_fresh_noop_or_destructive_sync_and_next_sync_finishes_cl
     fs::write(notes.join("note.txt"), "syntheticreadersentinel old").unwrap();
     let fresh = engine.index().paths([&notes]).execute().unwrap();
     assert_eq!(fresh.sync.resources_updated, 1);
-    assert!(fresh.sync.cache_cleanup.is_empty());
-    assert!(
-        engine
-            .index()
-            .paths([&notes])
-            .execute()
-            .unwrap()
-            .sync
-            .cache_cleanup
-            .is_empty()
-    );
+    assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+    let unchanged = engine.index().paths([&notes]).execute().unwrap();
+    assert_eq!(unchanged.sync.resources_unchanged, 1);
+    assert!(!engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
     fs::write(notes.join("note.txt"), "updated synthetic ordinary passage").unwrap();
     let changed = engine.index().paths([&notes]).execute().unwrap();
     assert_eq!(changed.sync.resources_updated, 1);
-    assert_eq!(changed.sync.cache_cleanup.profiles_rebuilt, 1);
-    assert!(changed.sync.cache_cleanup.pending);
-    assert!(raw_contains(&database, "syntheticreadersentinel"));
-    assert!(
-        engine
-            .index()
-            .paths([&notes])
-            .execute()
-            .unwrap()
-            .sync
-            .cache_cleanup
-            .pending
+    assert!(engine.with_cache(|c| c.stats()).unwrap().scrub_pending);
+    let blocked = engine.scrub_cache().unwrap();
+    assert_eq!(blocked.profiles_scrubbed, 1);
+    assert!(blocked.pending);
+    let pending_profiles: i64 = rusqlite::Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM meta WHERE key GLOB 'fts_scrub_pending:*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        pending_profiles, 1,
+        "profile marker stays until checked TRUNCATE succeeds"
     );
+    assert!(raw_contains(&database, "syntheticreadersentinel"));
+    engine.index().paths([&notes]).execute().unwrap();
     reader.execute_batch("ROLLBACK").unwrap();
-    let retry = engine.index().paths([&notes]).execute().unwrap();
-    assert_eq!(retry.sync.resources_unchanged, 1);
-    assert_eq!(retry.sync.cache_cleanup.profiles_rebuilt, 0);
-    assert!(!retry.sync.cache_cleanup.pending);
-    assert!(!raw_contains(&database, "syntheticreadersentinel"));
+    engine.index().paths([&notes]).execute().unwrap();
+    assert!(
+        engine.with_cache(|c| c.stats()).unwrap().scrub_pending,
+        "sync alone does not scrub"
+    );
+    let retry = engine.scrub_cache().unwrap();
+    assert_eq!(retry.profiles_scrubbed, 1);
+    assert!(!retry.pending);
+    assert!(!raw_contains(&database, "readersentinel"));
 }
 
 #[test]
@@ -1854,8 +1857,8 @@ fn noop_writes_with_a_reader_do_not_checkpoint_or_request_cleanup() {
         .unwrap();
     assert_eq!(cache.prune_orphans("p").unwrap(), 0);
     assert_eq!(fs::metadata(&wal).unwrap().len(), before);
-    assert!(!cache.stats().unwrap().cleanup_pending);
-    assert!(cache.end_sync().unwrap().is_empty());
+    assert!(!cache.stats().unwrap().scrub_pending);
+    assert!(cache.scrub().unwrap().is_empty());
 }
 
 #[test]
@@ -1883,7 +1886,7 @@ fn migration_compaction_pending_is_retried_after_reader_closes() {
         .unwrap();
     assert!(raw_contains(&database, "syntheticcompactsentinel"));
     let mut cache = SqliteCache::open(&database).unwrap();
-    assert!(cache.stats().unwrap().cleanup_pending);
+    assert!(cache.stats().unwrap().scrub_pending);
     let flag: String = reader
         .query_row(
             "SELECT value FROM meta WHERE key='schema_version'",
@@ -1892,11 +1895,13 @@ fn migration_compaction_pending_is_retried_after_reader_closes() {
         )
         .unwrap();
     assert_eq!(flag, "5", "reader retains its old snapshot");
-    assert!(cache.end_sync().unwrap().pending);
+    assert!(cache.scrub().unwrap().pending);
     drop(cache);
     reader.execute_batch("ROLLBACK").unwrap();
-    let cache = SqliteCache::open(&database).unwrap();
-    assert!(!cache.stats().unwrap().cleanup_pending);
+    let mut cache = SqliteCache::open(&database).unwrap();
+    assert!(cache.stats().unwrap().scrub_pending);
+    assert!(!cache.scrub().unwrap().pending);
+    assert!(!cache.stats().unwrap().scrub_pending);
     assert!(!raw_contains(&database, "syntheticcompactsentinel"));
     let flag: i64 = reader
         .query_row(
@@ -1906,4 +1911,97 @@ fn migration_compaction_pending_is_retried_after_reader_closes() {
         )
         .unwrap();
     assert_eq!(flag, 0);
+}
+
+fn file_contains(path: &Path, needle: &str) -> bool {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("{}: {e}", path.display()),
+    };
+    bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+#[test]
+fn forensic_scrub_erases_compressed_suffixes_from_database_and_wal_separately() {
+    const TERMS: [&str; 3] = [
+        "syntheticprivatequartzsentinel",
+        "privatequartzsentinel",
+        "quartzsentinel",
+    ];
+    for operation in ["remove", "replace"] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("cache.sqlite3");
+        let wal = database.with_extension("sqlite3-wal");
+        let mut cache = SqliteCache::open(&database).unwrap();
+        cache.register_profile("p", &profile("p")).unwrap();
+        let id: ResourceId = "mem://synthetic/note".parse().unwrap();
+        cache
+            .put_resource("p", &id, &write(&resource(&["h"]), TERMS[0]))
+            .unwrap();
+        let words = (0..3000)
+            .map(|i| format!("word{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        cache
+            .put_resource(
+                "p",
+                &"mem://synthetic/keep".parse().unwrap(),
+                &write(&resource(&["keep"]), &words),
+            )
+            .unwrap();
+        let observer = rusqlite::Connection::open(&database).unwrap();
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        for file in [&database, &wal] {
+            for term in TERMS {
+                assert!(
+                    file_contains(file, term),
+                    "fixture {}: {term}",
+                    file.display()
+                );
+            }
+        }
+        if operation == "remove" {
+            cache.remove_resources("p", &[id]).unwrap();
+        } else {
+            cache
+                .put_resource("p", &id, &write(&resource(&["new"]), "ordinary"))
+                .unwrap();
+        }
+        observer
+            .execute_batch("PRAGMA wal_checkpoint(FULL)")
+            .unwrap();
+        // Negative control: the old full-string DB test passes, despite readable stale suffixes.
+        assert!(!file_contains(&database, TERMS[0]));
+        for term in &TERMS[1..] {
+            assert!(
+                file_contains(&database, term),
+                "negative DB control must fail erasure: {term}"
+            );
+            assert!(
+                file_contains(&wal, term),
+                "negative WAL control must fail erasure: {term}"
+            );
+        }
+        assert!(cache.stats().unwrap().scrub_pending);
+        let report = cache.scrub().unwrap();
+        assert_eq!(report.profiles_scrubbed, 1);
+        assert!(!report.pending);
+        for file in [&database, &wal] {
+            for term in TERMS {
+                assert!(
+                    !file_contains(file, term),
+                    "scrub {}: {term}",
+                    file.display()
+                );
+            }
+        }
+        assert!(!cache.stats().unwrap().scrub_pending);
+        assert_eq!(
+            cache.stats().unwrap().profiles[0].resources,
+            if operation == "remove" { 1 } else { 2 }
+        );
+    }
 }

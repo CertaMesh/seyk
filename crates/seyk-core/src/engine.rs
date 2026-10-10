@@ -2,7 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{
+    Arc, Mutex, MutexGuard,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -108,9 +111,6 @@ pub struct PageDiagnostic {
 /// What happened while bringing the cache up to date.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStats {
-    /// Deferred privacy cleanup; pending cleanup is retried on the next sync/open.
-    #[serde(default, skip_serializing_if = "crate::cache::CacheCleanup::is_empty")]
-    pub cache_cleanup: crate::cache::CacheCleanup,
     pub resources_discovered: usize,
     /// Reused from cache without re-embedding.
     pub resources_unchanged: usize,
@@ -262,8 +262,9 @@ impl SearchEngineBuilder {
             #[cfg(feature = "audio")]
             audio_extractor: self.audio_extractor,
             embedder,
-            cache: Mutex::new(cache),
-            indexing: Mutex::new(()),
+            cache: Arc::new(Mutex::new(cache)),
+            indexing: Arc::new(Mutex::new(())),
+            scrubber_started: AtomicBool::new(false),
             #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
             segmenter: self.segmenter,
@@ -287,10 +288,11 @@ pub struct SearchEngine {
     #[cfg(feature = "audio")]
     audio_extractor: Option<crate::audio::AudioExtractor>,
     embedder: Arc<dyn Embedder>,
-    cache: Mutex<Box<dyn EmbeddingCache>>,
+    cache: Arc<Mutex<Box<dyn EmbeddingCache>>>,
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
-    indexing: Mutex<()>,
+    indexing: Arc<Mutex<()>>,
+    scrubber_started: AtomicBool,
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
     segmenter: TextSegmenter,
@@ -488,6 +490,45 @@ impl SearchEngine {
             .lock()
             .map_err(|_| Error::Config("cache lock poisoned".into()))?;
         f(guard.as_mut())
+    }
+
+    /// Explicit privacy scrub. Index/search requests never invoke this themselves.
+    pub fn scrub_cache(&self) -> Result<crate::cache::CacheCleanup> {
+        let _lease = self
+            .indexing
+            .lock()
+            .map_err(|_| Error::Config("indexing lock poisoned".into()))?;
+        self.with_cache(|cache| cache.scrub())
+    }
+
+    /// Start one idle-time worker for watcher/daemon/MCP use. It holds weak
+    /// references, never runs in a request, and does not outlive the engine.
+    pub fn start_cache_scrubber(&self) {
+        if self.scrubber_started.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let cache = Arc::downgrade(&self.cache);
+        let indexing = Arc::downgrade(&self.indexing);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let (Some(cache), Some(indexing)) = (cache.upgrade(), indexing.upgrade()) else {
+                    break;
+                };
+                // Do not scrub in the middle of an indexing pass, even a slow embed batch.
+                let Ok(_lease) = indexing.try_lock() else {
+                    continue;
+                };
+                let Ok(mut cache) = cache.lock() else { break };
+                match cache.scrub_if_idle(std::time::Duration::from_secs(60)) {
+                    Ok(Some(report)) if report.pending => eprintln!(
+                        "warning: cache scrub pending; run seyk cache scrub once other readers close"
+                    ),
+                    Err(error) => eprintln!("warning: cache scrub pending: {error}"),
+                    _ => {}
+                }
+            }
+        });
     }
 
     /// Make sure every resource has up-to-date vectors in the cache.
@@ -1517,12 +1558,7 @@ impl<'e> SearchRequest<'e> {
         }
         let mut sync = if self.sync {
             let indexing = engine.acquire_indexing_lease()?;
-            engine.with_cache(|c| c.begin_sync())?;
-            let result = engine.sync(&indexing, &resources, self.progress);
-            let cleanup = engine.with_cache(|c| c.end_sync());
-            let mut stats = result?;
-            stats.cache_cleanup = cleanup?;
-            stats
+            engine.sync(&indexing, &resources, self.progress)?
         } else {
             SyncStats {
                 resources_discovered: resources.len(),
@@ -2047,53 +2083,45 @@ impl<'e> IndexRequest<'e> {
             });
         }
         let indexing = engine.acquire_indexing_lease()?;
-        engine.with_cache(|c| c.begin_sync())?;
-        let result: Result<IndexReport> = (|| {
-            let mut sync = engine.sync(&indexing, &resources, self.progress)?;
+        let mut sync = engine.sync(&indexing, &resources, self.progress)?;
 
-            let pid = engine.profile_id.as_str();
-            let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
-            let known = engine.with_cache(|c| c.resource_index(pid))?;
-            let mut gone = Vec::new();
-            match engine.provider.deletion_scope(&scope) {
-                Ok(deletion_scope) => {
-                    for id in known.into_keys() {
-                        if present.contains(&id) || !deletion_scope.contains(&id) {
-                            continue;
-                        }
-                        match engine.provider.is_deleted(&id, &deletion_scope) {
-                            Ok(true) => gone.push(id),
-                            Ok(false) => {}
-                            Err(e) => sync.skipped.push(skip(&id, format!("deletion check: {e}"))),
-                        }
+        let pid = engine.profile_id.as_str();
+        let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
+        let known = engine.with_cache(|c| c.resource_index(pid))?;
+        let mut gone = Vec::new();
+        match engine.provider.deletion_scope(&scope) {
+            Ok(deletion_scope) => {
+                for id in known.into_keys() {
+                    if present.contains(&id) || !deletion_scope.contains(&id) {
+                        continue;
                     }
-                }
-                Err(e) => {
-                    for root in &scope.roots {
-                        sync.skipped
-                            .push(skip(root, format!("deletion scope: {e}")));
+                    match engine.provider.is_deleted(&id, &deletion_scope) {
+                        Ok(true) => gone.push(id),
+                        Ok(false) => {}
+                        Err(e) => sync.skipped.push(skip(&id, format!("deletion check: {e}"))),
                     }
                 }
             }
-            let removed = engine.with_cache(|c| {
-                c.remove_resources(pid, &gone)?;
-                if !gone.is_empty() {
-                    c.prune_orphans(pid)?;
+            Err(e) => {
+                for root in &scope.roots {
+                    sync.skipped
+                        .push(skip(root, format!("deletion scope: {e}")));
                 }
-                Ok(gone.len())
-            })?;
+            }
+        }
+        let removed = engine.with_cache(|c| {
+            c.remove_resources(pid, &gone)?;
+            if !gone.is_empty() {
+                c.prune_orphans(pid)?;
+            }
+            Ok(gone.len())
+        })?;
 
-            Ok(IndexReport {
-                sync,
-                resources_removed: removed,
-                total_ms: started.elapsed().as_millis() as u64,
-            })
-        })();
-        let cleanup = engine.with_cache(|c| c.end_sync());
-        let mut report: IndexReport = result?;
-        report.sync.cache_cleanup = cleanup?;
-        report.total_ms = started.elapsed().as_millis() as u64;
-        Ok(report)
+        Ok(IndexReport {
+            sync,
+            resources_removed: removed,
+            total_ms: started.elapsed().as_millis() as u64,
+        })
     }
 }
 

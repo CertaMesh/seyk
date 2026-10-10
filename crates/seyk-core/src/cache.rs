@@ -129,8 +129,8 @@ pub struct CacheStats {
     /// Where the cache lives, when it is persistent.
     pub location: Option<PathBuf>,
     pub size_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub cleanup_pending: bool,
+    #[serde(skip)]
+    pub scrub_pending: bool,
     pub profiles: Vec<ProfileStats>,
     /// Directory’s own macOS backup flag captured at open; unknown elsewhere or on query failure.
     #[serde(default)]
@@ -140,16 +140,16 @@ pub struct CacheStats {
     pub in_synced_folder: bool,
 }
 
-/// Cleanup performed at the boundary of an indexing pass.
+/// Result of an explicit or idle-time privacy scrub.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheCleanup {
-    pub profiles_rebuilt: usize,
+    pub profiles_scrubbed: usize,
     pub pending: bool,
 }
 
 impl CacheCleanup {
     pub fn is_empty(&self) -> bool {
-        self.profiles_rebuilt == 0 && !self.pending
+        self.profiles_scrubbed == 0 && !self.pending
     }
 }
 
@@ -158,14 +158,15 @@ impl CacheCleanup {
 /// Unstable: exposes ResourceVersion and CachedResourceState, which may change
 /// before 1.0; filesystem is the only supported production provider.
 pub trait EmbeddingCache: Send {
-    /// Defer destructive-write cleanup until the end of one indexing pass.
-    fn begin_sync(&mut self) -> Result<()> {
-        Ok(())
+    /// Erase stale FTS postings and historical WAL frames. Busy readers leave work pending.
+    fn scrub(&mut self) -> Result<CacheCleanup> {
+        Ok(CacheCleanup::default())
     }
 
-    /// End the pass, including failed passes. Busy readers leave cleanup pending.
-    fn end_sync(&mut self) -> Result<CacheCleanup> {
-        Ok(CacheCleanup::default())
+    /// Attempt a background scrub after this long without writes. Busy work is retried
+    /// at the same interval, rather than on every scheduler tick.
+    fn scrub_if_idle(&mut self, _quiet: std::time::Duration) -> Result<Option<CacheCleanup>> {
+        Ok(None)
     }
 
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()>;
@@ -453,7 +454,7 @@ impl EmbeddingCache for MemoryCache {
             size_bytes: None,
             backup_excluded: None,
             in_synced_folder: false,
-            cleanup_pending: false,
+            scrub_pending: false,
             profiles,
         })
     }
@@ -588,7 +589,9 @@ pub struct SqliteCache {
     conn: Connection,
     path: PathBuf,
     guards: super::cache_guards::GuardStatus,
-    defer_cleanup: bool,
+    last_change: std::time::Instant,
+    last_attempt: Option<std::time::Instant>,
+    observed_generation: Option<String>,
 }
 
 impl SqliteCache {
@@ -652,10 +655,11 @@ impl SqliteCache {
             conn,
             path,
             guards,
-            defer_cleanup: false,
+            last_change: std::time::Instant::now(),
+            last_attempt: None,
+            observed_generation: None,
         };
         cache.migrate()?;
-        cache.scrub_pending()?;
         Ok(cache)
     }
 
@@ -670,8 +674,9 @@ impl SqliteCache {
         )?)
     }
 
-    /// Do not spend the normal write busy timeout waiting for readers at a sync boundary.
-    fn scrub_pending(&mut self) -> Result<CacheCleanup> {
+    /// Do not spend the normal write busy timeout waiting for readers during a scrub.
+    fn run_scrub(&mut self) -> Result<CacheCleanup> {
+        self.last_attempt = Some(std::time::Instant::now());
         if !self.cleanup_pending()? {
             return Ok(CacheCleanup::default());
         }
@@ -692,14 +697,13 @@ impl SqliteCache {
     fn scrub_pending_inner(&mut self, report: &mut CacheCleanup) -> Result<()> {
         let tx = self.conn.transaction()?;
         let profiles = tx
-            .prepare("SELECT value FROM meta WHERE key GLOB 'fts_scrub_pending:*'")?
-            .query_map([], |r| r.get::<_, String>(0))?
+            .prepare("SELECT key,value FROM meta WHERE key GLOB 'fts_scrub_pending:*'")?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for profile in &profiles {
-            rebuild_fts(&tx, profile)?;
+        for (key, _) in &profiles {
+            optimize_fts(&tx, key.strip_prefix("fts_scrub_pending:").unwrap())?;
         }
-        tx.execute("DELETE FROM meta WHERE key GLOB 'fts_scrub_pending:*'", [])?;
-        // Capture the marker under the same write lock as the FTS rebuild.
+        // Capture markers under the same write lock as the FTS scrub.
         let generation: Option<String> = tx
             .query_row(
                 "SELECT value FROM meta WHERE key='wal_scrub_pending'",
@@ -708,7 +712,7 @@ impl SqliteCache {
             )
             .optional()?;
         tx.commit()?;
-        report.profiles_rebuilt = profiles.len();
+        report.profiles_scrubbed = profiles.len();
         let Some(generation) = generation else {
             report.pending = self.cleanup_pending()?;
             return Ok(());
@@ -733,6 +737,12 @@ impl SqliteCache {
         // This housekeeping may write new WAL frames, but they contain only live meta
         // records, never the deleted content removed by the completed checkpoint.
         let tx = self.conn.transaction()?;
+        for (key, value) in &profiles {
+            tx.execute(
+                "DELETE FROM meta WHERE key=?1 AND value=?2",
+                params![key, value],
+            )?;
+        }
         let finished = tx.execute(
             "DELETE FROM meta WHERE key='wal_scrub_pending' AND value=?1",
             [generation],
@@ -745,9 +755,9 @@ impl SqliteCache {
         Ok(())
     }
 
-    fn cleanup_after_write(&mut self, changed: bool) -> Result<()> {
-        if changed && !self.defer_cleanup && self.scrub_pending()?.pending {
-            return Err(Error::CacheCleanupPending);
+    fn record_write(&mut self, changed: bool) -> Result<()> {
+        if changed {
+            self.last_change = std::time::Instant::now();
         }
         Ok(())
     }
@@ -1000,17 +1010,28 @@ fn sqlite_busy(error: &rusqlite::Error) -> bool {
 }
 
 fn mark_cleanup(tx: &rusqlite::Transaction<'_>, profile: Option<&str>) -> Result<()> {
+    let generation: String = tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
     tx.execute(
-        "INSERT INTO meta VALUES('wal_scrub_pending',lower(hex(randomblob(16))))
+        "INSERT INTO meta VALUES('wal_scrub_pending',?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [],
+        [&generation],
     )?;
     if let Some(profile) = profile {
         tx.execute(
-            "INSERT OR IGNORE INTO meta VALUES(?1,?2)",
-            params![format!("fts_scrub_pending:{profile}"), profile],
+            "INSERT INTO meta VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![format!("fts_scrub_pending:{profile}"), generation],
         )?;
     }
+    Ok(())
+}
+
+// A fresh write requests no scrub, but postpones an already pending idle scrub.
+// Updating the marker also lets other engines/processes observe activity.
+fn refresh_pending_activity(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    tx.execute(
+        "UPDATE meta SET value=lower(hex(randomblob(16))) WHERE key='wal_scrub_pending'",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1027,11 +1048,11 @@ fn delete_fts_rows(tx: &rusqlite::Transaction, profile: &str, key: &[u8]) -> Res
     Ok(deleted != 0)
 }
 
-/// FTS5 normally retains deleted postings as tombstones. Rebuild from live,
-/// order-free content to remove them without changing the FTS file format.
-fn rebuild_fts(tx: &rusqlite::Transaction, profile: &str) -> Result<()> {
+/// Merge all FTS segments to erase stale postings, including compressed suffixes.
+/// The forensic negative-control test verifies this with the bundled SQLite.
+fn optimize_fts(tx: &rusqlite::Transaction, profile: &str) -> Result<()> {
     let table = fts_table(profile);
-    tx.execute_batch(&format!("INSERT INTO {table}({table}) VALUES('rebuild');"))?;
+    tx.execute_batch(&format!("INSERT INTO {table}({table}) VALUES('optimize');"))?;
     Ok(())
 }
 
@@ -1044,14 +1065,33 @@ fn json_err(e: serde_json::Error) -> Error {
 }
 
 impl EmbeddingCache for SqliteCache {
-    fn begin_sync(&mut self) -> Result<()> {
-        self.defer_cleanup = true;
-        Ok(())
+    fn scrub(&mut self) -> Result<CacheCleanup> {
+        self.run_scrub()
     }
 
-    fn end_sync(&mut self) -> Result<CacheCleanup> {
-        self.defer_cleanup = false;
-        self.scrub_pending()
+    fn scrub_if_idle(&mut self, quiet: std::time::Duration) -> Result<Option<CacheCleanup>> {
+        let now = std::time::Instant::now();
+        let generation: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='wal_scrub_pending'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if generation != self.observed_generation {
+            self.observed_generation = generation;
+            self.last_change = now;
+        }
+        if now.duration_since(self.last_change) < quiet
+            || self
+                .last_attempt
+                .is_some_and(|attempt| now.duration_since(attempt) < quiet)
+            || !self.cleanup_pending()?
+        {
+            return Ok(None);
+        }
+        self.run_scrub().map(Some)
     }
 
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()> {
@@ -1218,9 +1258,11 @@ impl EmbeddingCache for SqliteCache {
         }
         if deleted || replaced != 0 {
             mark_cleanup(&tx, deleted.then_some(profile))?;
+        } else {
+            refresh_pending_activity(&tx)?;
         }
         tx.commit()?;
-        self.cleanup_after_write(deleted || replaced != 0)
+        self.record_write(true)
     }
 
     fn touch_resource(
@@ -1240,7 +1282,7 @@ impl EmbeddingCache for SqliteCache {
             mark_cleanup(&tx, None)?;
         }
         tx.commit()?;
-        self.cleanup_after_write(changed != 0)
+        self.record_write(changed != 0)
     }
 
     fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
@@ -1267,7 +1309,7 @@ impl EmbeddingCache for SqliteCache {
             mark_cleanup(&tx, deleted.then_some(profile))?;
         }
         tx.commit()?;
-        self.cleanup_after_write(deleted || removed != 0)
+        self.record_write(deleted || removed != 0)
     }
 
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>> {
@@ -1286,6 +1328,7 @@ impl EmbeddingCache for SqliteCache {
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()> {
         let tx = self.conn.transaction()?;
         let mut overwritten = false;
+        let mut changed = false;
         {
             let mut read = tx.prepare_cached(
                 "SELECT vector FROM embeddings WHERE profile=?1 AND input_hash=?2",
@@ -1302,14 +1345,17 @@ impl EmbeddingCache for SqliteCache {
                     continue;
                 }
                 overwritten |= old.is_some();
+                changed = true;
                 stmt.execute(params![profile, hash, bytes])?;
             }
         }
         if overwritten {
             mark_cleanup(&tx, None)?;
+        } else if changed {
+            refresh_pending_activity(&tx)?;
         }
         tx.commit()?;
-        self.cleanup_after_write(overwritten)
+        self.record_write(changed)
     }
 
     fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
@@ -1403,7 +1449,7 @@ impl EmbeddingCache for SqliteCache {
             mark_cleanup(&tx, None)?;
         }
         tx.commit()?;
-        self.cleanup_after_write(n != 0)?;
+        self.record_write(n != 0)?;
         Ok(n as u64)
     }
 
@@ -1436,7 +1482,7 @@ impl EmbeddingCache for SqliteCache {
             size_bytes: Some(size_bytes),
             backup_excluded: self.guards.backup_excluded,
             in_synced_folder: self.guards.in_synced_folder,
-            cleanup_pending: self.cleanup_pending()?,
+            scrub_pending: self.cleanup_pending()?,
             profiles,
         })
     }
@@ -1456,7 +1502,7 @@ impl EmbeddingCache for SqliteCache {
         tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
         mark_cleanup(&tx, None)?;
         tx.commit()?;
-        if self.scrub_pending()?.pending {
+        if self.run_scrub()?.pending {
             return Err(Error::CacheCleanupPending);
         }
         // Clear also removes the harmless cleanup-marker WAL frames.
@@ -1558,5 +1604,44 @@ mod guard_tests {
                     .to_string_lossy()
                     .starts_with(".CACHEDIR.TAG-"))
         );
+    }
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn idle_scrub_observes_other_writers_and_throttles_busy_retries() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cache.sqlite3");
+        let mut cache = SqliteCache::open(&path).unwrap();
+        let tx = cache.conn.transaction().unwrap();
+        mark_cleanup(&tx, None).unwrap();
+        tx.commit().unwrap();
+        let quiet = Duration::from_secs(60);
+        assert!(cache.scrub_if_idle(quiet).unwrap().is_none());
+        cache.last_change = Instant::now() - Duration::from_secs(61);
+        // A fresh write in another process postpones pending cleanup too.
+        let mut writer = Connection::open(&path).unwrap();
+        let tx = writer.transaction().unwrap();
+        refresh_pending_activity(&tx).unwrap();
+        tx.commit().unwrap();
+        assert!(cache.scrub_if_idle(quiet).unwrap().is_none());
+        assert!(cache.last_change.elapsed() < quiet);
+        let reader = Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN; SELECT * FROM meta;").unwrap();
+        cache.last_change = Instant::now() - Duration::from_secs(61);
+        assert!(cache.scrub_if_idle(quiet).unwrap().unwrap().pending);
+        assert!(
+            cache.scrub_if_idle(quiet).unwrap().is_none(),
+            "do not optimize again on every tick with a busy reader"
+        );
+        assert!(cache.cleanup_pending().unwrap());
+        reader.execute_batch("ROLLBACK").unwrap();
+        cache.last_attempt = Some(Instant::now() - Duration::from_secs(61));
+        assert!(!cache.scrub_if_idle(quiet).unwrap().unwrap().pending);
+        assert!(!cache.cleanup_pending().unwrap());
     }
 }

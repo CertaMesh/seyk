@@ -48,6 +48,7 @@ pub fn watch(
     progress: Option<ProgressFn<'_>>,
     mut on_pass: impl FnMut(Result<IndexReport>),
 ) -> Result<()> {
+    engine.start_cache_scrubber();
     // Canonical, because the OS reports events with resolved paths (/private/var on macOS).
     let paths: Vec<PathBuf> = paths
         .iter()

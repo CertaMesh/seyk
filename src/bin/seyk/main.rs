@@ -251,6 +251,8 @@ enum CacheAction {
     },
     /// Delete every cached embedding.
     Clear,
+    /// Erase deleted keyword postings and old WAL frames without clearing live records.
+    Scrub,
 }
 
 #[cfg(all(feature = "mcp", unix))]
@@ -362,6 +364,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 req = req.lexical_weight(w);
             }
             let results = req.execute()?;
+            report_scrub(engine.scrub_cache());
             progress.finish();
             let mut out = std::io::stdout().lock();
             if json {
@@ -482,6 +485,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .progress(&report)
                 .execute()?;
             progress.finish();
+            report_scrub(engine.scrub_cache());
             if json {
                 println!("{}", serde_json::to_string_pretty(&json_output(&result))?);
             } else {
@@ -501,8 +505,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 }
                 CacheAction::Clear => {
-                    cache.clear()?;
+                    match cache.clear() {
+                        Ok(()) => {}
+                        Err(seyk::Error::CacheCleanupPending) => scrub_warning(),
+                        Err(error) => return Err(error.into()),
+                    }
                     println!("Cleared {}", cache.path().display());
+                }
+                CacheAction::Scrub => {
+                    let report = cache.scrub()?;
+                    if report.pending {
+                        scrub_warning();
+                    } else {
+                        println!("Scrubbed {}", cache.path().display());
+                    }
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -642,8 +658,7 @@ fn watch_and_index(
                     if quiet_ok
                         && r.sync.resources_updated == 0
                         && r.resources_removed == 0
-                        && r.sync.skipped.is_empty()
-                        && !r.sync.cache_cleanup.pending => {}
+                        && r.sync.skipped.is_empty() => {}
                 Ok(r) => print!("{}", format_index_report(&r)),
                 Err(e) => eprintln!("error: {e}"),
             }
@@ -1091,11 +1106,6 @@ fn format_summary(r: &SearchResults) -> String {
             s.reason
         ));
     }
-    if r.stats.sync.cache_cleanup.pending {
-        out.push_str(
-            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
-        );
-    }
     out.push_str(&format_page_diagnostics(&r.stats.sync));
     out
 }
@@ -1123,13 +1133,25 @@ fn format_index_report(r: &IndexReport) -> String {
             s.reason
         ));
     }
-    if r.sync.cache_cleanup.pending {
-        out.push_str(
-            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
-        );
-    }
     out.push_str(&format_page_diagnostics(&r.sync));
     out
+}
+
+fn scrub_warning() {
+    eprintln!(
+        "warning: cache scrub pending; run seyk cache scrub once other readers close (using the same cache path), or rerun the one-shot command"
+    );
+}
+
+// Cleanup must never turn a successful one-shot sync or search into a failure.
+fn report_scrub(result: seyk::Result<seyk::cache::CacheCleanup>) {
+    match result {
+        Ok(report) if report.pending => scrub_warning(),
+        Err(error) => {
+            eprintln!("warning: cache scrub pending: {error}; run seyk cache scrub to retry")
+        }
+        _ => {}
+    }
 }
 
 fn format_cache_stats(stats: &CacheStats) -> String {
@@ -1160,9 +1182,9 @@ fn format_cache_stats(stats: &CacheStats) -> String {
             p.resources, p.segments, p.embeddings
         ));
     }
-    if stats.cleanup_pending {
+    if stats.scrub_pending {
         out.push_str(
-            "  warning: cache privacy cleanup pending; rerun the command or sync once other readers close\n",
+            "  warning: cache scrub pending; run seyk cache scrub once other readers close\n",
         );
     }
     out

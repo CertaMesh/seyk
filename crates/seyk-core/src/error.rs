@@ -47,7 +47,7 @@ pub enum Error {
     },
 
     #[error(
-        "cache changes committed, but privacy cleanup is pending; rerun the command or sync once other readers close (using the same cache path); cache clear is a fallback"
+        "cache changes committed, but scrub is pending; run seyk cache scrub once other readers close (using the same cache path), or rerun the one-shot command; cache clear is a fallback"
     )]
     CacheCleanupPending,
 
