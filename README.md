@@ -183,8 +183,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3` or `4`, not a bare hit. The extraction document uses
-version 4 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4` or `5`, not a bare hit. The extraction document uses
+version 5 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -433,7 +433,7 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 4`.
+CLI JSON objects and MCP search responses include `schema_version: 5`.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -533,13 +533,51 @@ the old vectors are simply never looked up. `cache stats` lists the profiles.
 The hard links exist because ONNX Runtime refuses weight files that live behind the
 Hugging Face cache's symlinks.
 
-**Privacy.** Files, queries and embeddings never leave the machine. Treat the cache
+**Privacy.** Seyk sends no files, queries or embeddings over the network. Treat the cache
 as sensitive. Embeddings can leak information about the text they came from, and
 the keyword index (a SQLite FTS5 table) stores **which words occur in each passage
 and how often, not their order**. Each field is tokenized and sorted before it
 is indexed. These word frequencies are still sensitive, like embeddings. The
 cache directory is created `0700` and the file `0600`. `seyk cache clear`
 deletes every vector.
+
+Protection against a lost or stolen disk depends on OS disk encryption: check
+`fdesetup status` on macOS (FileVault), `lsblk -f` / `cryptsetup status <mapping>`
+on Linux (LUKS), or `manage-bde -status` on Windows (BitLocker). Seyk does not
+encrypt SQLite independently. A copied cache exposes vectors, word frequencies,
+resource paths, hashes and metadata to anyone who can read it; file permissions
+and disk encryption do not protect a copy on another unencrypted volume.
+
+Seyk applies backup hints only to its default platform cache directory, or a
+cache directory it creates during this open. For a custom `SEYK_CACHE` /
+`--cache-path` in an existing directory, it leaves the directory's tags,
+permissions and exclusion flag untouched. To opt in, give a dedicated directory
+that does not exist yet, such as `--cache-path /private/local/seyk/cache.sqlite3`.
+Seyk writes the standard `CACHEDIR.TAG` for backup tools that honor it and, on
+macOS, sets the directory's own backup-exclusion resource value using Apple's
+Core Foundation API (`kCFURLIsExcludedFromBackupKey`) without root. Tagging is
+best-effort: failures warn and continue, foreign tags are preserved, and
+filesystems without atomic no-clobber hard-link publication skip the tag.
+Temporary tag files older than one hour are swept best-effort on preparation.
+These are backup hints, not encryption or a guarantee against every backup tool.
+Linux cache directories have no automatic backup guarantee.
+`~/Library/Caches` is excluded by Time Machine on the development Mac; we have
+not verified a universal macOS iCloud exclusion guarantee. iCloud Drive sync is
+separate from Time Machine.
+
+A cache inside a detected iCloud Drive, Dropbox, OneDrive, Google Drive or
+Syncthing folder produces one warning per process on stderr and continues.
+Detection covers conventional locations, Dropbox configured roots, OneDrive
+environment roots, macOS CloudStorage providers and Syncthing `.stfolder`
+markers; arbitrary custom roots without these signals may be missed.
+`seyk cache stats --json` reports `backup_excluded` (the directory's own macOS
+resource flag, `null` when unknown) and `in_synced_folder` (advisory boolean).
+Both values are captured once at cache open, without subprocesses, and reused
+by stats and MCP daemon status's `cache_status` (`null` until the daemon opens
+its cache, or if stats fail). Search responses do not include cache status.
+These snapshots do not reflect subsequent directory changes until reopen and
+are distinct from inherited Time Machine exclusions. Protocol version 5 adds
+these fields; extraction still accepts search documents from versions 2–5.
 
 ## Supported resources
 

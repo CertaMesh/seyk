@@ -98,6 +98,7 @@ pub struct DaemonStatus {
     pub version: String,
     pub sessions: usize,
     pub folders: Vec<(PathBuf, IndexStatus)>,
+    pub cache_status: Option<seyk::CacheStats>,
 }
 
 // ---- daemon side -----------------------------------------------------------
@@ -252,6 +253,7 @@ async fn handle(
                 version: env!("CARGO_PKG_VERSION").into(),
                 sessions: sessions.active(),
                 folders: hub.watched(),
+                cache_status: hub.cache_status().ok().flatten(),
             };
             reply(&mut write, Ok(Some(status))).await
         }

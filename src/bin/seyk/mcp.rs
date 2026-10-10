@@ -160,6 +160,17 @@ impl Hub {
         })
     }
 
+    #[cfg(unix)]
+    pub fn cache_status(&self) -> Result<Option<seyk::CacheStats>> {
+        self.engine
+            .lock()
+            .map_err(|_| anyhow!("engine lock poisoned"))?
+            .as_ref()
+            .map(|engine| engine.with_cache(|cache| cache.stats()))
+            .transpose()
+            .map_err(Into::into)
+    }
+
     fn engine(&self) -> Result<Arc<SearchEngine>> {
         let mut slot = self
             .engine
@@ -659,6 +670,13 @@ mod tests {
     }
 
     fn counted_engine(documents: Arc<AtomicUsize>) -> Result<SearchEngine> {
+        engine_with_cache(documents, MemoryCache::new())
+    }
+
+    fn engine_with_cache(
+        documents: Arc<AtomicUsize>,
+        cache: impl seyk::EmbeddingCache + 'static,
+    ) -> Result<SearchEngine> {
         Ok(SearchEngine::builder()
             .embedder(WordHash(
                 ModelIdentity {
@@ -673,7 +691,7 @@ mod tests {
                 },
                 documents,
             ))
-            .cache(MemoryCache::new())
+            .cache(cache)
             .build()?)
     }
 
@@ -706,6 +724,39 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn mcp_status_reuses_guard_snapshot_after_directory_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("dedicated");
+        let cache = seyk::SqliteCache::open(directory.join("cache.sqlite3")).unwrap();
+        let hub = Hub::new(Box::new(|| Err(anyhow!("already initialized"))), false);
+        *hub.engine.lock().unwrap() = Some(Arc::new(
+            engine_with_cache(Arc::new(AtomicUsize::new(0)), cache).unwrap(),
+        ));
+        let initial = hub.cache_status().unwrap().unwrap();
+        assert!(!initial.in_synced_folder);
+        std::fs::create_dir(directory.join(".stfolder")).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(initial.backup_excluded, Some(true));
+            // Independent mutation: a fresh native read would now return false.
+            assert!(
+                std::process::Command::new("/usr/bin/xattr")
+                    .args(["-d", "com.apple.metadata:com_apple_backup_excludeItem"])
+                    .arg(&directory)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        for _ in 0..4 {
+            let status = hub.cache_status().unwrap().unwrap();
+            assert_eq!(status.backup_excluded, initial.backup_excluded);
+            assert_eq!(status.in_synced_folder, initial.in_synced_folder);
+        }
+    }
+
     #[test]
     fn response_keeps_openable_path_and_adds_versioned_uri() {
         let dir = tempfile::tempdir().unwrap();
@@ -717,7 +768,8 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 4);
+        assert_eq!(response["schema_version"], 5);
+        assert!(response.get("cache_status").is_none());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
             Path::new(response["hits"][0]["path"].as_str().unwrap())
