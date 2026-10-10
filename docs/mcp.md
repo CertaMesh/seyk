@@ -9,8 +9,8 @@ not acquire this lease.
 
 A synthetic SQLite probe (debug build, five samples, one segment per file,
 batches of 16, fake inference at 2 ms per document segment) measured median
-inline latency for a one-file/one-segment request: **5.2 ms with no watcher
-load**, **209.2 ms with 64 watcher files/segments**, and **875.5 ms with 256
+inline latency for a one-file/one-segment request: **7.2 ms with no watcher
+load**, **268.1 ms with 64 watcher files/segments**, and **841.5 ms with 256
 watcher files/segments**. All data lived in fresh temporary directories. Each
 watcher stopped after its first pass and was joined before the next sample. The
 request arrived at the watcher's first embedding batch. These measure the MCP
