@@ -548,13 +548,19 @@ encrypt SQLite independently. A copied cache exposes vectors, word frequencies,
 resource paths, hashes and metadata to anyone who can read it; file permissions
 and disk encryption do not protect a copy on another unencrypted volume.
 
-Use a dedicated directory for a custom `SEYK_CACHE` / `--cache-path`: these
-backup hints apply to the cache file’s entire parent directory.
+Seyk applies backup hints only to its default platform cache directory, or a
+cache directory it creates during this open. For a custom `SEYK_CACHE` /
+`--cache-path` in an existing directory, it leaves the directory's tags,
+permissions and exclusion flag untouched. To opt in, give a dedicated directory
+that does not exist yet, such as `--cache-path /private/local/seyk/cache.sqlite3`.
 Seyk writes the standard `CACHEDIR.TAG` for backup tools that honor it and, on
-macOS, sets the directory’s own backup-exclusion resource value using Apple’s
-Core Foundation API (`kCFURLIsExcludedFromBackupKey`)
-(without root). These are backup hints, not encryption or a guarantee against
-every backup tool. Linux cache directories have no automatic backup guarantee.
+macOS, sets the directory's own backup-exclusion resource value using Apple's
+Core Foundation API (`kCFURLIsExcludedFromBackupKey`) without root. Tagging is
+best-effort: failures warn and continue, foreign tags are preserved, and
+filesystems without atomic no-clobber hard-link publication skip the tag.
+Temporary tag files older than one hour are swept best-effort on preparation.
+These are backup hints, not encryption or a guarantee against every backup tool.
+Linux cache directories have no automatic backup guarantee.
 `~/Library/Caches` is excluded by Time Machine on the development Mac; we have
 not verified a universal macOS iCloud exclusion guarantee. iCloud Drive sync is
 separate from Time Machine.
@@ -564,11 +570,14 @@ Syncthing folder produces one warning per process on stderr and continues.
 Detection covers conventional locations, Dropbox configured roots, OneDrive
 environment roots, macOS CloudStorage providers and Syncthing `.stfolder`
 markers; arbitrary custom roots without these signals may be missed.
-`seyk cache stats --json` reports `backup_excluded` (Time Machine verification,
-`null` when unknown) and `in_synced_folder` (advisory boolean). MCP search
-responses and daemon status expose the same fields in `cache_status` (`null`
-until the daemon has opened its cache). Protocol version 5 adds these fields;
-extraction still accepts search documents from versions 2–5.
+`seyk cache stats --json` reports `backup_excluded` (the directory's own macOS
+resource flag, `null` when unknown) and `in_synced_folder` (advisory boolean).
+Both values are captured once at cache open, without subprocesses, and reused
+by stats and MCP daemon status's `cache_status` (`null` until the daemon opens
+its cache, or if stats fail). Search responses do not include cache status.
+These snapshots do not reflect subsequent directory changes until reopen and
+are distinct from inherited Time Machine exclusions. Protocol version 5 adds
+these fields; extraction still accepts search documents from versions 2–5.
 
 ## Supported resources
 

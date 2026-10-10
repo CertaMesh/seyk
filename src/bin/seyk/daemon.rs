@@ -253,7 +253,7 @@ async fn handle(
                 version: env!("CARGO_PKG_VERSION").into(),
                 sessions: sessions.active(),
                 folders: hub.watched(),
-                cache_status: hub.cache_status()?,
+                cache_status: hub.cache_status().ok().flatten(),
             };
             reply(&mut write, Ok(Some(status))).await
         }

@@ -34,7 +34,7 @@ fn help_lists_all_top_level_commands() {
 #[test]
 fn cache_stats_json_and_clear_work_without_a_model() {
     let temp = TempDir::new().unwrap();
-    let cache = temp.path().join("cache.sqlite3");
+    let cache = temp.path().join("dedicated/cache.sqlite3");
     let output = binary()
         .args([
             "cache",
@@ -54,12 +54,52 @@ fn cache_stats_json_and_clear_work_without_a_model() {
     assert_eq!(stats["backup_excluded"], true);
     #[cfg(not(target_os = "macos"))]
     assert!(stats["backup_excluded"].is_null());
-    assert!(temp.path().join("CACHEDIR.TAG").is_file());
+    assert!(temp.path().join("dedicated/CACHEDIR.TAG").is_file());
 
     binary()
         .args(["cache", "--cache-path", cache.to_str().unwrap(), "clear"])
         .assert()
         .success();
+}
+
+#[test]
+fn relative_cache_path_does_not_exclude_unrelated_siblings() {
+    let temp = TempDir::new().unwrap();
+    let sibling = temp.path().join("source.md");
+    std::fs::write(&sibling, "important source").unwrap();
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(temp.path()).unwrap().permissions().mode()
+    };
+    let output = binary()
+        .current_dir(temp.path())
+        .args(["cache", "--cache-path", "cache.sqlite3", "stats", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
+    #[cfg(target_os = "macos")]
+    assert_eq!(stats["backup_excluded"], false);
+    #[cfg(not(target_os = "macos"))]
+    assert!(stats["backup_excluded"].is_null());
+    assert!(!temp.path().join("CACHEDIR.TAG").exists());
+    assert_eq!(
+        std::fs::read_to_string(sibling).unwrap(),
+        "important source"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(temp.path()).unwrap().permissions().mode(),
+            permissions
+        );
+    }
 }
 
 #[test]
@@ -233,6 +273,29 @@ fn extract_round_trip_without_a_model() {
             .output()
             .unwrap()
     };
+    for version in 2..=5 {
+        let mut document = value.clone();
+        document["schema_version"] = version.into();
+        let data = document.to_string();
+        let raw = run(&["extract", "--from-json", "-"], &data);
+        assert!(
+            raw.status.success(),
+            "schema {version}: {}",
+            String::from_utf8_lossy(&raw.stderr)
+        );
+        assert_eq!(raw.stdout, expected);
+        let json = run(&["extract", "--from-json", "-", "--json"], &data);
+        assert!(json.status.success());
+        let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
+    }
+    for version in [1, 6] {
+        let mut document = value.clone();
+        document["schema_version"] = version.into();
+        let bad = run(&["extract", "--from-json", "-"], &document.to_string());
+        assert!(!bad.status.success(), "schema {version}");
+        assert!(bad.stdout.is_empty());
+    }
     let raw = run(&["extract", "--from-json", "-"], &input);
     assert!(
         raw.status.success(),

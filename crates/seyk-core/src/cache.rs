@@ -130,10 +130,10 @@ pub struct CacheStats {
     pub location: Option<PathBuf>,
     pub size_bytes: Option<u64>,
     pub profiles: Vec<ProfileStats>,
-    /// Time Machine exclusion verified on macOS; unknown elsewhere or on query failure.
+    /// Directory’s own macOS backup flag captured at open; unknown elsewhere or on query failure.
     #[serde(default)]
     pub backup_excluded: Option<bool>,
-    /// Advisory detection of known sync roots, not proof that other paths are local.
+    /// Known sync roots detected at open; not proof that other paths are local.
     #[serde(default)]
     pub in_synced_folder: bool,
 }
@@ -561,6 +561,7 @@ fn migrate_shared_fts(tx: &rusqlite::Transaction<'_>, profiles: &[String]) -> Re
 pub struct SqliteCache {
     conn: Connection,
     path: PathBuf,
+    guards: super::cache_guards::GuardStatus,
 }
 
 impl SqliteCache {
@@ -579,26 +580,47 @@ impl SqliteCache {
     }
 
     /// Open or create a cache file. Embeddings can leak information about
-    /// their source text, so the directory and file are private to the user.
+    /// their source text, so owned directories and the cache file are private to the user.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
-        let path = path.into();
-        if let Some(dir) = path.parent() {
-            let dir = if dir.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                dir
-            };
-            std::fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        Self::open_with_guards(path.into(), super::cache_guards::prepare)
+    }
+
+    fn open_with_guards(
+        path: PathBuf,
+        prepare: impl FnOnce(&Path, bool) -> super::cache_guards::GuardStatus,
+    ) -> Result<Self> {
+        let dir = super::cache_guards::parent_dir(&path);
+        // Only successful creation of the final directory establishes ownership;
+        // an existence check followed by create_dir_all would race another creator.
+        let created = match std::fs::create_dir(dir) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(super::cache_guards::parent_dir(dir))
+                    .map_err(|e| Error::io(dir, e))?;
+                match std::fs::create_dir(dir) {
+                    Ok(()) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => {
+                        false
+                    }
+                    Err(e) => return Err(Error::io(dir, e)),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => false,
+            Err(e) => return Err(Error::io(dir, e)),
+        };
+        let owned = created || super::cache_guards::is_default_dir(dir);
+        if owned {
             restrict_permissions(dir, 0o700);
-            super::cache_guards::prepare(dir)?;
         }
+        // Native verification and sync detection happen once, before any cache mutex.
+        let guards = prepare(dir, owned);
         let conn = Connection::open(&path)?;
         restrict_permissions(&path, 0o600);
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
-        let mut cache = Self { conn, path };
+        let mut cache = Self { conn, path, guards };
         cache.migrate()?;
         Ok(cache)
     }
@@ -1211,14 +1233,8 @@ impl EmbeddingCache for SqliteCache {
         Ok(CacheStats {
             location: Some(self.path.clone()),
             size_bytes: Some(size_bytes),
-            backup_excluded: self.path.parent().and_then(|dir| {
-                super::cache_guards::backup_excluded(if dir.as_os_str().is_empty() {
-                    Path::new(".")
-                } else {
-                    dir
-                })
-            }),
-            in_synced_folder: super::cache_guards::in_synced_folder(&self.path),
+            backup_excluded: self.guards.backup_excluded,
+            in_synced_folder: self.guards.in_synced_folder,
             profiles,
         })
     }
@@ -1252,5 +1268,80 @@ mod windows_tests {
         let legacy = br"\\?\C:\notes\chapter.md".to_vec();
         assert_eq!(resource_key(&id), legacy);
         assert_eq!(key_resource(legacy).unwrap(), id);
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    #[test]
+    fn stats_reuses_one_verification_even_after_directory_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let calls = Cell::new(0);
+        let cache =
+            SqliteCache::open_with_guards(temp.path().join("cache.sqlite3"), |dir, owned| {
+                assert!(!owned);
+                super::super::cache_guards::prepare_with(
+                    dir,
+                    owned,
+                    |_, _| panic!("foreign directory publication"),
+                    |_| {
+                        calls.set(calls.get() + 1);
+                        Some(false)
+                    },
+                    |_| {},
+                )
+            })
+            .unwrap();
+        std::fs::create_dir(temp.path().join(".stfolder")).unwrap();
+        for _ in 0..4 {
+            let stats = cache.stats().unwrap();
+            assert_eq!(stats.backup_excluded, Some(false));
+            assert!(!stats.in_synced_folder);
+        }
+        assert_eq!(calls.get(), 1);
+        assert!(!temp.path().join("CACHEDIR.TAG").exists());
+    }
+
+    #[test]
+    fn unsupported_tag_publication_warns_and_cache_still_opens() {
+        let temp = tempfile::tempdir().unwrap();
+        let warnings = RefCell::new(Vec::new());
+        let path = temp.path().join("dedicated/cache.sqlite3");
+        let cache = SqliteCache::open_with_guards(path, |dir, owned| {
+            assert!(owned);
+            super::super::cache_guards::prepare_with(
+                dir,
+                owned,
+                |_, _| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "hard links unsupported",
+                    ))
+                },
+                |_| None,
+                |warning| warnings.borrow_mut().push(warning),
+            )
+        })
+        .unwrap();
+        assert!(cache.stats().is_ok());
+        assert!(
+            warnings
+                .borrow()
+                .iter()
+                .any(|w| w.contains("hard links unsupported"))
+        );
+        assert!(!cache.path().parent().unwrap().join("CACHEDIR.TAG").exists());
+        assert!(
+            std::fs::read_dir(cache.path().parent().unwrap())
+                .unwrap()
+                .flatten()
+                .all(|e| !e
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".CACHEDIR.TAG-"))
+        );
     }
 }

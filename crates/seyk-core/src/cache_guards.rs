@@ -8,7 +8,97 @@ const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# Seyk cache: di
 static SYNC_WARNED: AtomicBool = AtomicBool::new(false);
 static TAG_ID: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn prepare(dir: &Path) -> Result<()> {
+#[derive(Clone, Copy)]
+pub(crate) struct GuardStatus {
+    pub backup_excluded: Option<bool>,
+    pub in_synced_folder: bool,
+}
+
+pub(crate) fn prepare(dir: &Path, owned: bool) -> GuardStatus {
+    prepare_with(
+        dir,
+        owned,
+        |source, destination| std::fs::hard_link(source, destination),
+        backup_excluded,
+        |warning| eprintln!("{warning}"),
+    )
+}
+
+pub(crate) fn prepare_with(
+    dir: &Path,
+    owned: bool,
+    publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    verify: impl FnOnce(&Path) -> Option<bool>,
+    mut warn: impl FnMut(String),
+) -> GuardStatus {
+    let tag = dir.join("CACHEDIR.TAG");
+    let tag_result = if owned {
+        sweep_stale_tags(dir);
+        write_tag(dir, publish)
+    } else {
+        // Read-only validation warns about foreign hints without taking ownership.
+        match std::fs::symlink_metadata(&tag) {
+            Ok(_) => validate_tag(&tag),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Error::io(&tag, error)),
+        }
+    };
+    if let Err(error) = tag_result {
+        warn(format!(
+            "warning: could not tag cache directory {}: {error}",
+            dir.display()
+        ));
+    }
+    if owned {
+        #[cfg(target_os = "macos")]
+        if !exclude_from_backup(dir) {
+            warn(format!(
+                "warning: could not exclude cache from Time Machine: {}",
+                dir.display()
+            ));
+        }
+    }
+    let status = GuardStatus {
+        backup_excluded: verify(dir),
+        in_synced_folder: in_synced_folder(dir),
+    };
+    if status.in_synced_folder && !SYNC_WARNED.swap(true, Ordering::Relaxed) {
+        warn(format!(
+            "warning: Seyk cache is inside a known synced folder; sensitive cache data may leave this machine: {}",
+            dir.display()
+        ));
+    }
+    status
+}
+
+fn sweep_stale_tags(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".CACHEDIR.TAG-")
+        {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if metadata.is_file()
+            && metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_secs(3600))
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn write_tag(dir: &Path, publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>) -> Result<()> {
     use std::io::Write;
     let tag = dir.join("CACHEDIR.TAG");
     let temporary = dir.join(format!(
@@ -31,45 +121,35 @@ pub(crate) fn prepare(dir: &Path) -> Result<()> {
     let result = (|| {
         file.write_all(TAG.as_bytes())
             .map_err(|e| Error::io(&temporary, e))?;
-        match std::fs::hard_link(&temporary, &tag) {
+        match publish(&temporary, &tag) {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !std::fs::symlink_metadata(&tag)
-                    .map_err(|e| Error::io(&tag, e))?
-                    .is_file()
-                {
-                    return Err(Error::Config(format!(
-                        "cache tag is not a regular file: {}",
-                        tag.display()
-                    )));
-                }
-                let contents = std::fs::read(&tag).map_err(|e| Error::io(&tag, e))?;
-                if !contents.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
-                    return Err(Error::Config(format!(
-                        "invalid cache tag: {}",
-                        tag.display()
-                    )));
-                }
-                Ok(())
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => validate_tag(&tag),
             Err(e) => Err(Error::io(&tag, e)),
         }
     })();
     drop(file);
     let _ = std::fs::remove_file(&temporary);
-    result?;
-    #[cfg(target_os = "macos")]
-    if !exclude_from_backup(dir) {
-        eprintln!(
-            "warning: could not exclude cache from Time Machine: {}",
-            dir.display()
-        );
+    // There is no portable atomic no-clobber rename. If publication is unsupported,
+    // skip the hint and warn rather than overwrite a foreign tag or fail cache open.
+    result
+}
+
+fn validate_tag(tag: &Path) -> Result<()> {
+    if !std::fs::symlink_metadata(tag)
+        .map_err(|e| Error::io(tag, e))?
+        .is_file()
+    {
+        return Err(Error::Config(format!(
+            "cache tag is not a regular file: {}",
+            tag.display()
+        )));
     }
-    if in_synced_folder(dir) && !SYNC_WARNED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "warning: Seyk cache is inside a known synced folder; sensitive cache data may leave this machine: {}",
-            dir.display()
-        );
+    let contents = std::fs::read(tag).map_err(|e| Error::io(tag, e))?;
+    if !contents.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") {
+        return Err(Error::Config(format!(
+            "invalid cache tag: {}",
+            tag.display()
+        )));
     }
     Ok(())
 }
@@ -125,32 +205,81 @@ fn exclude_from_backup(dir: &Path) -> bool {
     }
 }
 
+// Read through a fresh native URL so inherited Time Machine exclusions and
+// the setter's cached resource values cannot mask a missing directory flag.
+#[cfg(target_os = "macos")]
 pub(crate) fn backup_excluded(dir: &Path) -> Option<bool> {
-    #[cfg(target_os = "macos")]
-    {
-        let dir = std::fs::canonicalize(dir).ok()?;
-        let output = std::process::Command::new("/usr/bin/tmutil")
-            .arg("isexcluded")
-            .arg(dir)
-            .output()
-            .ok()?;
-        if !output.status.success() {
+    use std::ffi::c_void;
+    use std::os::unix::ffi::OsStrExt;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFURLIsExcludedFromBackupKey: *const c_void;
+        fn CFURLCreateFromFileSystemRepresentation(
+            allocator: *const c_void,
+            bytes: *const u8,
+            length: isize,
+            is_directory: u8,
+        ) -> *const c_void;
+        fn CFURLCopyResourcePropertyForKey(
+            url: *const c_void,
+            key: *const c_void,
+            value: *mut *const c_void,
+            error: *mut *const c_void,
+        ) -> u8;
+        fn CFBooleanGetValue(value: *const c_void) -> u8;
+        fn CFRelease(value: *const c_void);
+    }
+    let dir = std::fs::canonicalize(dir).ok()?;
+    let bytes = dir.as_os_str().as_bytes();
+    // SAFETY: the path is live for creation; the key's documented value is
+    // CFBoolean. Both Copy/Create references are released exactly once.
+    unsafe {
+        let url = CFURLCreateFromFileSystemRepresentation(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            bytes.len().try_into().ok()?,
+            1,
+        );
+        if url.is_null() {
             return None;
         }
-        let output = String::from_utf8(output.stdout).ok()?;
-        if output.starts_with("[Excluded]") {
-            Some(true)
-        } else if output.starts_with("[Included]") {
-            Some(false)
+        let mut value = std::ptr::null();
+        let copied = CFURLCopyResourcePropertyForKey(
+            url,
+            kCFURLIsExcludedFromBackupKey,
+            &mut value,
+            std::ptr::null_mut(),
+        ) != 0;
+        let result = if copied && !value.is_null() {
+            Some(CFBooleanGetValue(value) != 0)
         } else {
             None
+        };
+        if !value.is_null() {
+            CFRelease(value);
         }
+        CFRelease(url);
+        result
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = dir;
-        None
-    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn backup_excluded(_dir: &Path) -> Option<bool> {
+    None
+}
+
+pub(crate) fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+pub(crate) fn is_default_dir(dir: &Path) -> bool {
+    dirs::cache_dir().is_some_and(|base| {
+        resolved(dir)
+            .zip(resolved(&base.join("seyk")))
+            .is_some_and(|(a, b)| a == b)
+    })
 }
 
 // Resolve symlinked ancestors, including when the final cache file doesn't exist.
@@ -248,83 +377,30 @@ fn detected(path: &Path, home: Option<&Path>) -> bool {
 mod tests {
     use super::*;
 
-    // Read through a fresh native URL so inherited Time Machine exclusions and
-    // the setter's cached resource values cannot mask a missing directory flag.
-    #[cfg(target_os = "macos")]
-    fn own_exclusion(dir: &Path) -> Option<bool> {
-        use std::ffi::c_void;
-        use std::os::unix::ffi::OsStrExt;
-        #[link(name = "CoreFoundation", kind = "framework")]
-        unsafe extern "C" {
-            static kCFURLIsExcludedFromBackupKey: *const c_void;
-            fn CFURLCreateFromFileSystemRepresentation(
-                allocator: *const c_void,
-                bytes: *const u8,
-                length: isize,
-                is_directory: u8,
-            ) -> *const c_void;
-            fn CFURLCopyResourcePropertyForKey(
-                url: *const c_void,
-                key: *const c_void,
-                value: *mut *const c_void,
-                error: *mut *const c_void,
-            ) -> u8;
-            fn CFBooleanGetValue(value: *const c_void) -> u8;
-            fn CFRelease(value: *const c_void);
-        }
-        let dir = std::fs::canonicalize(dir).ok()?;
-        let bytes = dir.as_os_str().as_bytes();
-        // SAFETY: the path is live for creation; the key's documented value is
-        // CFBoolean. Both Copy/Create references are released exactly once.
-        unsafe {
-            let url = CFURLCreateFromFileSystemRepresentation(
-                std::ptr::null(),
-                bytes.as_ptr(),
-                bytes.len().try_into().ok()?,
-                1,
-            );
-            if url.is_null() {
-                return None;
-            }
-            let mut value = std::ptr::null();
-            let copied = CFURLCopyResourcePropertyForKey(
-                url,
-                kCFURLIsExcludedFromBackupKey,
-                &mut value,
-                std::ptr::null_mut(),
-            ) != 0;
-            let result = if copied && !value.is_null() {
-                Some(CFBooleanGetValue(value) != 0)
-            } else {
-                None
-            };
-            if !value.is_null() {
-                CFRelease(value);
-            }
-            CFRelease(url);
-            result
-        }
-    }
-
     #[test]
     fn tags_are_standard_and_idempotent_and_exclusion_is_verified() {
         let temp = tempfile::tempdir().unwrap();
         #[cfg(target_os = "macos")]
-        assert_eq!(own_exclusion(temp.path()), Some(false));
-        prepare(temp.path()).unwrap();
-        prepare(temp.path()).unwrap();
+        assert_eq!(backup_excluded(temp.path()), Some(false));
+        prepare(temp.path(), true);
+        prepare(temp.path(), true);
         assert_eq!(
             std::fs::read_to_string(temp.path().join("CACHEDIR.TAG")).unwrap(),
             TAG
         );
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(own_exclusion(temp.path()), Some(true));
             assert_eq!(backup_excluded(temp.path()), Some(true));
+            let output = std::process::Command::new("/usr/bin/tmutil")
+                .arg("isexcluded")
+                .arg(temp.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).starts_with("[Excluded]"));
             let destination = tempfile::tempdir().unwrap();
             let moved = destination.path().join("moved-cache");
             std::fs::rename(temp.path(), &moved).unwrap();
-            assert_eq!(own_exclusion(&moved), Some(true));
             assert_eq!(backup_excluded(&moved), Some(true));
         }
         #[cfg(not(target_os = "macos"))]
@@ -334,12 +410,12 @@ mod tests {
     #[test]
     fn concurrent_preparation_publishes_only_complete_tags() {
         let temp = tempfile::tempdir().unwrap();
-        prepare(temp.path()).unwrap();
+        prepare(temp.path(), true);
         std::fs::remove_file(temp.path().join("CACHEDIR.TAG")).unwrap();
         std::thread::scope(|scope| {
             for _ in 0..8 {
                 let dir = temp.path();
-                scope.spawn(move || prepare(dir).unwrap());
+                scope.spawn(move || prepare(dir, true));
             }
         });
         assert_eq!(
@@ -355,8 +431,8 @@ mod tests {
         if std::env::var_os(CHILD).is_some() {
             let temp = tempfile::tempdir().unwrap();
             std::fs::create_dir(temp.path().join(".stfolder")).unwrap();
-            prepare(temp.path()).unwrap();
-            prepare(temp.path()).unwrap();
+            prepare(temp.path(), true);
+            prepare(temp.path(), true);
             return;
         }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -388,7 +464,7 @@ mod tests {
         let target = temp.path().join("target");
         std::fs::write(&target, TAG).unwrap();
         std::os::unix::fs::symlink(&target, temp.path().join("CACHEDIR.TAG")).unwrap();
-        assert!(prepare(temp.path()).is_err());
+        prepare(temp.path(), true);
         assert_eq!(std::fs::read_to_string(target).unwrap(), TAG);
     }
 
@@ -397,8 +473,58 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let tag = temp.path().join("CACHEDIR.TAG");
         std::fs::write(&tag, "other data").unwrap();
-        assert!(prepare(temp.path()).is_err());
+        prepare(temp.path(), true);
         assert_eq!(std::fs::read_to_string(tag).unwrap(), "other data");
+    }
+
+    #[test]
+    fn foreign_custom_directory_warns_without_tagging_or_excluding() {
+        let temp = tempfile::tempdir().unwrap();
+        let tag = temp.path().join("CACHEDIR.TAG");
+        std::fs::write(&tag, "foreign data").unwrap();
+        let before = backup_excluded(temp.path());
+        let mut warnings = Vec::new();
+        let status = prepare_with(
+            temp.path(),
+            false,
+            |_, _| panic!("must not publish"),
+            backup_excluded,
+            |w| warnings.push(w),
+        );
+        assert_eq!(status.backup_excluded, before);
+        assert_eq!(std::fs::read_to_string(tag).unwrap(), "foreign data");
+        assert!(warnings.iter().any(|w| w.contains("invalid cache tag")));
+    }
+
+    #[test]
+    fn foreign_tags_warn_and_stale_temporary_tags_are_swept() {
+        let temp = tempfile::tempdir().unwrap();
+        let tag = temp.path().join("CACHEDIR.TAG");
+        std::fs::write(&tag, "foreign data").unwrap();
+        let old = temp.path().join(".CACHEDIR.TAG-old");
+        let fresh = temp.path().join(".CACHEDIR.TAG-fresh");
+        std::fs::write(&old, "unfinished").unwrap();
+        std::fs::write(&fresh, "unfinished").unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(7200),
+                ),
+            )
+            .unwrap();
+        let mut warnings = Vec::new();
+        prepare_with(
+            temp.path(),
+            true,
+            |source, destination| std::fs::hard_link(source, destination),
+            backup_excluded,
+            |w| warnings.push(w),
+        );
+        assert!(warnings.iter().any(|w| w.contains("invalid cache tag")));
+        assert_eq!(std::fs::read_to_string(tag).unwrap(), "foreign data");
+        assert!(!old.exists());
+        assert!(fresh.exists());
     }
 
     #[test]
