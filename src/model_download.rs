@@ -178,7 +178,7 @@ mod tests {
         );
     }
 
-    /// A loopback-only HF resolve endpoint. No redirects or external URLs.
+    /// A loopback-only HF endpoint, optionally redirecting within the fixture.
     struct HttpFixture {
         endpoint: String,
         requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -188,6 +188,10 @@ mod tests {
 
     impl HttpFixture {
         fn new() -> Self {
+            Self::with_redirect(false)
+        }
+
+        fn with_redirect(redirect: bool) -> Self {
             use std::io::{BufRead, BufReader, Write};
             use std::sync::{
                 Arc, Mutex,
@@ -232,15 +236,29 @@ mod tests {
                         }
                         metadata |= line.trim().eq_ignore_ascii_case("range: bytes=0-0");
                     }
-                    // Remote main has advanced to B. A is still downloadable.
-                    let (revision, file) = path
-                        .strip_prefix("/test/synthetic/resolve/")
-                        .unwrap()
-                        .split_once('/')
-                        .unwrap();
-                    let commit = if revision == "main" { B } else { revision };
-                    assert!(commit == A || commit == B);
-                    let payload = format!("synthetic {commit} {file}");
+                    let (commit, payload) = if redirect {
+                        if path == "/test/synthetic/resolve/main/config.json" {
+                            write!(stream,
+                                "HTTP/1.1 302 Found\r\nLocation: /resolved/config.json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            ).unwrap();
+                            continue;
+                        }
+                        if path != "/resolved/config.json" {
+                            write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                            continue;
+                        }
+                        (A, "{}".to_string())
+                    } else {
+                        // Remote main has advanced to B. A is still downloadable.
+                        let (revision, file) = path
+                            .strip_prefix("/test/synthetic/resolve/")
+                            .unwrap()
+                            .split_once('/')
+                            .unwrap();
+                        let commit = if revision == "main" { B } else { revision };
+                        assert!(commit == A || commit == B);
+                        (commit, format!("synthetic {commit} {file}"))
+                    };
                     let body = if metadata {
                         &payload.as_bytes()[..1]
                     } else {
@@ -273,8 +291,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn partial_old_cache_downloads_missing_files_from_pinned_snapshot() {
+    // Run real HTTP clients without changing the parallel test process environment.
+    fn ran_proxy_free_child(test_name: &str) -> bool {
         const CHILD: &str = "SEYK_HF_FIXTURE_CHILD";
         const PROXY_VARS: [&str; 6] = [
             "HTTP_PROXY",
@@ -284,13 +302,15 @@ mod tests {
             "https_proxy",
             "all_proxy",
         ];
-        if std::env::var_os(CHILD).is_none() {
+        if std::env::var(CHILD).ok().as_deref() != Some(test_name) {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-            child.args([
-                "--exact",
-                "model_download::tests::partial_old_cache_downloads_missing_files_from_pinned_snapshot",
-                "--nocapture",
-            ]).env(CHILD, "1");
+            child
+                .args([
+                    "--exact",
+                    &format!("model_download::tests::{test_name}"),
+                    "--nocapture",
+                ])
+                .env(CHILD, test_name);
             // Command-local removal is race-free and independent of the ureq version.
             for var in PROXY_VARS {
                 child.env_remove(var);
@@ -302,13 +322,58 @@ mod tests {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
-            return;
+            return true;
         }
         for var in PROXY_VARS {
             assert!(
                 std::env::var_os(var).is_none(),
                 "proxy variable inherited: {var}"
             );
+        }
+        false
+    }
+
+    #[test]
+    fn uncached_hub_download_follows_redirects_and_populates_cache() {
+        if ran_proxy_free_child("uncached_hub_download_follows_redirects_and_populates_cache") {
+            return;
+        }
+        let cache = tempfile::tempdir().unwrap();
+        let fixture = HttpFixture::with_redirect(true);
+        let api = hf_hub::api::sync::ApiBuilder::new()
+            .with_cache_dir(cache.path().to_path_buf())
+            .with_endpoint(fixture.endpoint.clone())
+            .with_token(None)
+            .with_progress(false)
+            .with_retries(0)
+            .build()
+            .unwrap();
+        let repo = api.model("test/synthetic".into());
+        let path = repo.get("config.json").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), A);
+        let request_count = {
+            let requests = fixture.requests.lock().unwrap();
+            assert!(
+                requests
+                    .iter()
+                    .any(|r| r == "/test/synthetic/resolve/main/config.json")
+            );
+            assert!(requests.iter().any(|r| r == "/resolved/config.json"));
+            assert!(requests.iter().all(|r| matches!(
+                r.as_str(),
+                "/test/synthetic/resolve/main/config.json" | "/resolved/config.json"
+            )));
+            requests.len()
+        };
+        assert_eq!(repo.get("config.json").unwrap(), path);
+        assert_eq!(fixture.requests.lock().unwrap().len(), request_count);
+    }
+
+    #[test]
+    fn partial_old_cache_downloads_missing_files_from_pinned_snapshot() {
+        if ran_proxy_free_child("partial_old_cache_downloads_missing_files_from_pinned_snapshot") {
+            return;
         }
         let cache = tempfile::tempdir().unwrap();
         let repo = "test/synthetic";
