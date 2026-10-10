@@ -275,6 +275,41 @@ mod tests {
 
     #[test]
     fn partial_old_cache_downloads_missing_files_from_pinned_snapshot() {
+        const CHILD: &str = "SEYK_HF_FIXTURE_CHILD";
+        const PROXY_VARS: [&str; 6] = [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ];
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args([
+                "--exact",
+                "model_download::tests::partial_old_cache_downloads_missing_files_from_pinned_snapshot",
+                "--nocapture",
+            ]).env(CHILD, "1");
+            // Command-local removal is race-free and independent of the ureq version.
+            for var in PROXY_VARS {
+                child.env_remove(var);
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "fixture child failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        for var in PROXY_VARS {
+            assert!(
+                std::env::var_os(var).is_none(),
+                "proxy variable inherited: {var}"
+            );
+        }
         let cache = tempfile::tempdir().unwrap();
         let repo = "test/synthetic";
         let files = files();
