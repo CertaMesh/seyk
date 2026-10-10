@@ -7,6 +7,7 @@
 //! installed lazily once; RAII guards suppress and record parser panics only on
 //! the parsing thread, delegating other threads to the captured previous hook.
 //! Later external hooks replace it and may print; Seyk never removes or overwrites them.
+//! First installation is deferred during unwinding, so that parse may also print.
 //! With `audio`, Symphonia probe, construction, packet reads and decode panics
 //! likewise become payload-free `UnsupportedAudio` errors; applications must use
 //! a payload-free panic hook for audio. ALAC frame allocations are checked before construction.

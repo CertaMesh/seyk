@@ -1065,8 +1065,20 @@ fn format_sync(s: &SyncStats) -> String {
     );
     if !s.skipped.is_empty() {
         out.push_str(&format!(", {} skipped", s.skipped.len()));
+        let mut counts = std::collections::BTreeMap::new();
         for count in &s.skipped_counts {
-            out.push_str(&format!("; {}: {}", count.count, count.reason));
+            *counts.entry(count.code).or_insert(0usize) += count.count;
+        }
+        for (code, count) in counts.iter().take(5) {
+            let code = match code {
+                seyk::SkipCode::PdfParserPanicked => "pdf_parser_panicked",
+                seyk::SkipCode::PdfParseFailed => "pdf_parse_failed",
+                seyk::SkipCode::Other => "other",
+            };
+            out.push_str(&format!("; {count}: {code}"));
+        }
+        if counts.len() > 5 {
+            out.push_str("; further codes omitted");
         }
     }
     if !s.page_diagnostics.is_empty() {
@@ -1468,8 +1480,34 @@ mod tests {
             })
             .collect();
         let summary = format_summary(&r);
-        assert!(summary.contains("7 skipped; 7: PDF parser panicked"));
+        assert!(summary.contains("7 skipped; 7: pdf_parser_panicked"));
         assert_eq!(summary.matches("  skipped ").count(), 5);
+    }
+
+    #[test]
+    fn sync_summary_groups_codes_without_inlining_resource_reasons() {
+        let stats = SyncStats {
+            skipped: (0..100)
+                .map(|i| seyk::SkippedResource {
+                    code: seyk::SkipCode::Other,
+                    resource: format!("mem://{i}").parse().unwrap(),
+                    path: None,
+                    reason: format!("private long path {i}"),
+                })
+                .collect(),
+            skipped_counts: (0..100)
+                .map(|i| seyk::SkippedCount {
+                    code: seyk::SkipCode::Other,
+                    count: 1,
+                    reason: format!("private long path {i}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let summary = format_sync(&stats);
+        assert!(summary.contains("100 skipped; 100: other"));
+        assert!(!summary.contains("private"));
+        assert!(summary.len() < 150);
     }
 
     #[test]

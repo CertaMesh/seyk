@@ -5,7 +5,8 @@
 //! catches unwinding parser panics with thread-local suppression under a permanent
 //! dispatcher, installed lazily once and delegating other threads to its captured
 //! hook. A later external hook replaces it and may print; Seyk never overwrites
-//! that hook. Abort, OOM and
+//! that hook. First installation is deferred during unwinding and that parse
+//! may print. Abort, OOM and
 //! parser hangs are not contained. `pdf-render` adds CPU page rendering with
 //! bundled fallback fonts and no system-font lookup. No OCR is performed.
 
@@ -194,6 +195,17 @@ impl Write for LimitedText {
     }
 }
 
+fn page_failure(source: &ResourceId, reason: &'static str) -> Error {
+    Error::PdfPageDecode {
+        resource: source.clone(),
+        reason,
+    }
+}
+
+fn decoded_text(bytes: Vec<u8>, source: &ResourceId) -> Result<String> {
+    String::from_utf8(bytes).map_err(|_| page_failure(source, "decoded text is not UTF-8"))
+}
+
 fn decode(doc: &Document, source: &ResourceId, page: u32) -> Result<String> {
     let mut text = LimitedText {
         bytes: Vec::new(),
@@ -207,8 +219,8 @@ fn decode(doc: &Document, source: &ResourceId, page: u32) -> Result<String> {
     if text.exceeded {
         return Err(failure(source, "page text exceeds 1 MiB"));
     }
-    result.map_err(|_| failure(source, "page decoding failed"))?;
-    String::from_utf8(text.bytes).map_err(|_| failure(source, "decoded text is not UTF-8"))
+    result.map_err(|_| page_failure(source, "page decoding failed"))?;
+    decoded_text(text.bytes, source)
 }
 
 #[path = "pdf/panic_hook.rs"]
@@ -239,23 +251,23 @@ fn pages(doc: &Document, source: &ResourceId) -> Result<Vec<u32>> {
     Ok(pages)
 }
 
+fn isolated_page(result: Result<String>) -> Result<(String, Option<Error>)> {
+    Ok(match result {
+        Ok(text) => (text, None),
+        Err(error @ (Error::ParserPanicked { .. } | Error::PdfPageDecode { .. })) => {
+            (String::new(), Some(error))
+        }
+        Err(error) => return Err(error),
+    })
+}
+
 pub(crate) fn read_pages(bytes: &[u8], source: &ResourceId) -> Result<Vec<PageText>> {
     guarded(source, || {
         let doc = document(bytes, source)?;
         let mut total = 0usize;
         let mut result = Vec::new();
         for page in pages(&doc, source)? {
-            let (text, error) = match guarded(source, || decode(&doc, source, page)) {
-                Ok(text) => (text, None),
-                Err(
-                    error @ (Error::ParserPanicked { .. }
-                    | Error::PdfParse {
-                        reason: "page decoding failed",
-                        ..
-                    }),
-                ) => (String::new(), Some(error)),
-                Err(error) => return Err(error),
-            };
+            let (text, error) = isolated_page(guarded(source, || decode(&doc, source, page)))?;
             total += text.len();
             if total > MAX_DOCUMENT_TEXT_BYTES {
                 return Err(failure(source, "document text exceeds 32 MiB"));
@@ -362,6 +374,24 @@ pub(crate) mod fixture;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_utf8_is_a_page_failure_and_does_not_discard_following_text() {
+        let source = "mem://utf8-pages".parse().unwrap();
+        let (text, error) = isolated_page(decoded_text(vec![0xff], &source)).unwrap();
+        assert!(text.is_empty());
+        assert!(matches!(
+            error,
+            Some(Error::PdfPageDecode {
+                reason: "decoded text is not UTF-8",
+                ..
+            })
+        ));
+        let (text, error) = isolated_page(decoded_text(b"second basil".to_vec(), &source)).unwrap();
+        assert_eq!(text, "second basil");
+        assert!(error.is_none());
+        assert!(isolated_page(Err(failure(&source, "page text exceeds 1 MiB"))).is_err());
+    }
 
     #[test]
     fn self_made_cmaps_reproduce_both_upstream_panics() {

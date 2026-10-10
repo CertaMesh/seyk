@@ -881,6 +881,16 @@ fn same_size_encoder_tamper_is_not_admitted_by_either_cache_path() {
                 .iter()
                 .any(|skipped| skipped.resource == id)
         );
+        assert_eq!(
+            result
+                .stats
+                .sync
+                .skipped_counts
+                .iter()
+                .map(|count| count.count)
+                .sum::<usize>(),
+            result.stats.sync.skipped.len()
+        );
         assert!(missing.digest.get().is_none());
     }
     std::fs::write(&weights, b"old-weights").unwrap();

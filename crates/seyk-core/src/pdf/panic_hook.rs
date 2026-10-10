@@ -30,16 +30,20 @@ pub(super) struct Guard {
 }
 impl Guard {
     pub(super) fn new() -> Self {
-        INSTALLED.get_or_init(|| {
-            let previous = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| {
-                if SUPPRESSED.get() {
-                    MESSAGE.set(Some(diagnostic(info.payload())));
-                } else {
-                    previous(info);
-                }
-            }));
-        });
+        // set_hook is forbidden during unwinding. Defer first installation
+        // until a normal parse; an existing dispatcher still uses TLS below.
+        if !std::thread::panicking() {
+            INSTALLED.get_or_init(|| {
+                let previous = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    if SUPPRESSED.get() {
+                        MESSAGE.set(Some(diagnostic(info.payload())));
+                    } else {
+                        previous(info);
+                    }
+                }));
+            });
+        }
         Self {
             previous: SUPPRESSED.replace(true),
             message: MESSAGE.replace(None),
@@ -90,6 +94,23 @@ mod tests {
         std::panic::set_hook(Box::new(move |_| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
+        struct ParseOnDrop;
+        impl Drop for ParseOnDrop {
+            fn drop(&mut self) {
+                let _guard = super::Guard::new();
+                assert!(super::INSTALLED.get().is_none());
+            }
+        }
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _drop = ParseOnDrop;
+                panic!("outer unwind before installation");
+            })
+            .is_err()
+        );
+        assert!(!super::SUPPRESSED.get());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        calls.store(0, Ordering::SeqCst);
         // Installation is lazy and happens once, before racing parse transitions.
         drop(super::Guard::new());
         let barrier = Arc::new(Barrier::new(3));

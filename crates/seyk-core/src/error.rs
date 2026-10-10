@@ -37,6 +37,11 @@ pub enum Error {
         resource: crate::ResourceId,
         reason: &'static str,
     },
+    #[error("PDF parse failed for {resource}: {reason}")]
+    PdfPageDecode {
+        resource: crate::ResourceId,
+        reason: &'static str,
+    },
     #[error("PDF parser panicked for {resource}: {reason}")]
     ParserPanicked {
         resource: crate::ResourceId,

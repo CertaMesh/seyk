@@ -288,8 +288,32 @@ the previous hook. Per-parse RAII guards change only thread-local suppression:
 parser panics are recorded as sanitized diagnostics without printing, while
 unrelated threads delegate to the captured hook. A component installing a later
 hook replaces the dispatcher; parser panics are still caught but may then print.
-Seyk never removes or overwrites that later hook. Neither mechanism contains
+Seyk never removes or overwrites that later hook. If the first parse starts
+during unwinding, dispatcher installation is deferred until a normal parse;
+that first parse can use the existing hook and may print. Neither mechanism contains
 aborts, out-of-memory failures, hangs or hostile allocation behaviour.
+
+PDF parser failures are isolated per page: valid pages keep their original page
+numbers, and failed pages appear in `sync.page_diagnostics` with typed `code`
+and sanitized `reason`. If every page fails, the resource also appears in
+`sync.skipped`; `sync.skipped_counts` groups resource counts by code and reason.
+CLI summaries group skips by code (at most five groups). MCP reports inline
+diagnostics and watcher diagnostics in a separate `index_diagnostics` field;
+`index.state` keeps its existing values, including `ready`. Protocol version 6 adds
+these diagnostic fields; the cache schema remains unchanged. MCP page details are
+capped at 128 entries, with the total reported separately.
+
+An unchanged PDF is not re-parsed or rewritten after a deterministic failure.
+Page diagnostics are replayed from an engine-local map keyed by resource and
+preparation descriptor. They are not persisted: a fresh process reports them
+only for resources it actually parses, and cannot replay failures from an
+already-fresh persistent cache. Changed bytes or preparation versions trigger
+a new parse.
+
+Raw lopdf text fallback is deferred: lopdf 0.42 prefers Encoding over ToUnicode
+and silently substitutes standard encoding after some font errors. That can
+produce incorrect evidence. Page isolation recovers unaffected pages without
+guessing glyph mappings. Subprocess isolation remains tracked in Solo #4374.
 
 ### Scores and tags
 
@@ -831,16 +855,3 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
-
-PDF parser failures are isolated per page: valid pages keep their original page
-numbers, and failed pages appear in `sync.page_diagnostics` with typed `code`
-and sanitized `reason`. If every page fails, the resource also appears in
-`sync.skipped`; `sync.skipped_counts` groups resource counts by code and reason.
-CLI summaries show these counts, and MCP reports them for inline searches and
-background watcher status (`ready_with_diagnostics`). Protocol version 6 adds
-these diagnostic fields; the cache schema remains unchanged.
-
-Raw lopdf text fallback is deferred: lopdf 0.42 prefers Encoding over ToUnicode
-and silently substitutes standard encoding after some font errors. That can
-produce incorrect evidence. Page isolation recovers unaffected pages without
-guessing glyph mappings. Subprocess isolation remains tracked in Solo #4374.

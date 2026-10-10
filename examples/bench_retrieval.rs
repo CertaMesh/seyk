@@ -300,20 +300,20 @@ fn main() -> Result<()> {
     // names, source bytes or dependency panic payloads into benchmark logs.
     for skipped in &index.sync.skipped_counts {
         eprintln!(
-            "skipped resources: count={} code={:?} reason={}",
-            skipped.count, skipped.code, skipped.reason
+            "skipped resources: count={} code={:?}",
+            skipped.count, skipped.code
         );
     }
     let mut diagnostics = std::collections::BTreeMap::new();
     for page in &index.sync.page_diagnostics {
         *diagnostics
-            .entry((&page.resource, page.code, &page.reason))
+            .entry((&page.resource, page.code))
             .or_insert(0usize) += 1;
     }
-    for ((resource, code, reason), pages) in diagnostics {
+    for ((resource, code), pages) in diagnostics {
         let path = resource.to_file_path().context("non-file diagnostic")?;
         let hash = blake3::hash(&fs::read(path)?);
-        eprintln!("page diagnostic: hash={hash} pages={pages} code={code:?} reason={reason}");
+        eprintln!("page diagnostic: hash={hash} pages={pages} code={code:?}");
     }
     ensure!(
         index.sync.resources_discovered == count,
