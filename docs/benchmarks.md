@@ -240,7 +240,8 @@ BEIR and IRPAPERS text use `title\n\nbody`. NanoSciFact supplies only `text`, wh
 is preserved. Document IDs and qrels live outside the indexed corpus. Materialized
 files and metadata have integrity hashes, checked before indexing and scoring.
 Repeat materialization preserves unchanged file mtimes. Unexpected stale files,
-duplicate IDs, missing qrels targets and incomplete runs fail explicitly.
+duplicate IDs, missing qrels targets and incomplete runs fail explicitly, except
+for the known empty-transcription IRPAPERS pages described below.
 
 ### Sources and tracks
 
@@ -249,7 +250,7 @@ duplicate IDs, missing qrels targets and incomplete runs fail explicitly.
 | NanoSciFact | train (the published 50-query subset) | 2,919 / 50 | [HF card](https://huggingface.co/datasets/zeta-alpha-ai/NanoSciFact/blob/309f1d1ae3ae2e092444a8a0c25bed59b82318bc/README.md) says CC BY 4.0; upstream abstracts are ODC-By 1.0 |
 | SciFact | BEIR test | 5,183 / 300 | [Upstream](https://github.com/allenai/scifact/blob/master/LICENSE.md): claims CC BY 4.0, abstracts ODC-By 1.0 |
 | NFCorpus | BEIR test, graded qrels | 3,633 / 323 | CC BY-SA 4.0 per [BEIR card](https://huggingface.co/datasets/BeIR/nfcorpus) |
-| IRPAPERS text | original 180 questions | 3,230 pages / 180 | [MIT dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md); source-paper rights remain with their authors |
+| IRPAPERS text | original 180 questions | 3,230 raw pages (3,226 with text) / 180 | [MIT dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md); source-paper rights remain with their authors |
 | IRPAPERS PDF | same questions | 166 PDFs / 180 | [Upstream PDFs and MIT repository licence](https://github.com/weaviate/IRPAPERS/tree/7fce2967a94ade0e62c4efee9376d58164cf32f8/data/PDFs); source-paper rights remain with their authors |
 
 SciFact licence labels conflict across Hugging Face cards (CC BY-NC 2.0,
@@ -269,6 +270,17 @@ decodes images. The PDF adapter reads only numbered PDFs from the pinned
 source archive (318 MB of uncompressed PDFs). PDF inference disables vision and audio and records omitted-page
 diagnostics; it measures embedded PDF text, not the OCR text track. The image
 track is deferred.
+
+IRPAPERS text skips pages whose transcription is empty or whitespace-only, after
+validating their row structure, paper/page identity and PDF join. The declared
+`documents = 3230` validates raw rows, including skipped pages; duplicate IDs,
+bad joins, invalid page numbers and other malformed rows still fail loudly.
+The dataset manifest's `empty_transcriptions` provenance records `raw_rows`,
+`materialized_pages`, `skipped_page_keys` (opaque hashes only), `skipped_pages`
+and `qrels_targeting_skipped_pages`. Skipped pages are absent from the corpus and
+document map. Queries and qrels targeting them are retained, so those targets
+count as misses with the original metric denominators. Score JSON, score output
+and the report include both skip and affected-qrel counts.
 
 ### Run and score
 
@@ -342,7 +354,8 @@ cargo test --workspace --locked --no-fail-fast
 ```
 
 The Python tests check hand-computed graded nDCG, MRR, recall, empty rankings,
-ID/page mapping and rejection paths. Rust tests check duplicate collapse and
+ID/page mapping, empty-transcription skips, retained qrels scored as misses and
+rejection paths. Rust tests check duplicate collapse and
 byte-identical rankings across a reopened warm dedicated SQLite cache with a
 deterministic test embedder. For a real-model determinism check, repeat the runner
 with a new `--label warm` and compare each mode's original and warm file:
@@ -361,9 +374,10 @@ not a proposed default. On full SciFact scoring, lexical nDCG@10 outside [.60,.6
 is an error requiring investigation before any ranking conclusion. This band is
 not applied to NanoSciFact. Full SciFact execution is deferred when only smoke
 runs are authorized; the checked band is not a claim that Seyk meets it yet.
-IRPAPERS text materialization fails loudly on an empty transcription. It has not
-been checked against the full 3.78 GB CSV, including its declared 3,230-document
-count; that validation remains deferred to the first full run.
+The pinned full IRPAPERS CSV contains four empty-transcription pages among its
+3,230 raw rows. Materialization retains the 180 queries and writes 3,226 text
+documents. One qrel targets a skipped page and remains a miss; the manifest and
+score output record that count.
 
 Published comparison points: SciFact BM25/TAS-B nDCG@10 .665/.643 and NFCorpus
 .325/.319 ([BEIR baselines](https://github.com/beir-cellar/beir/wiki/Results));
