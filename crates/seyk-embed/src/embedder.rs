@@ -81,8 +81,10 @@ pub trait Embedder: Send + Sync {
     }
     /// Extra modality-specific weights/preparation identity, included in that
     /// input's cache key without invalidating other modalities' vectors.
-    fn input_identity(&self, _modality: Modality) -> &str {
-        ""
+    /// Resolve this before cache admission, even if inference is unnecessary.
+    /// Backends may lazily read model assets here; failed preparation is retryable.
+    fn input_identity(&self, _modality: Modality) -> Result<&str> {
+        Ok("")
     }
     fn supports(&self, modality: Modality) -> bool;
     fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>>;
@@ -127,7 +129,7 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
     fn identity(&self) -> &ModelIdentity {
         (**self).identity()
     }
-    fn input_identity(&self, modality: Modality) -> &str {
+    fn input_identity(&self, modality: Modality) -> Result<&str> {
         (**self).input_identity(modality)
     }
     fn supports(&self, modality: Modality) -> bool {
@@ -159,7 +161,7 @@ impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     fn identity(&self) -> &ModelIdentity {
         (**self).identity()
     }
-    fn input_identity(&self, modality: Modality) -> &str {
+    fn input_identity(&self, modality: Modality) -> Result<&str> {
         (**self).input_identity(modality)
     }
     fn supports(&self, modality: Modality) -> bool {

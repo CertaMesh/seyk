@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fn identity(&self) -> &ModelIdentity {
                 self.model.identity()
             }
-            fn input_identity(&self, m: Modality) -> &str {
+            fn input_identity(&self, m: Modality) -> seyk_embed::Result<&str> {
                 self.model.input_identity(m)
             }
             fn supports(&self, m: Modality) -> bool {

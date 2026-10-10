@@ -849,16 +849,16 @@ impl Embedder for EmbeddingGemma2 {
         &self.identity
     }
 
-    fn input_identity(&self, modality: Modality) -> &str {
+    fn input_identity(&self, modality: Modality) -> Result<&str> {
         #[cfg(feature = "audio")]
         if modality == Modality::Audio {
             return self
                 .audio
                 .as_ref()
-                .map_or("audio-disabled", |a| a.identity.as_str());
+                .map_or(Ok("audio-disabled"), |a| a.identity());
         }
         let _ = modality;
-        ""
+        Ok("")
     }
 
     fn supports(&self, modality: Modality) -> bool {
