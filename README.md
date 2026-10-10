@@ -282,10 +282,13 @@ cache, so keep a copy if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
 `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream
-diagnostics can contain document data. Seyk core installs no logger. Its scoped
-panic-hook guard silences PDF parser panics only on the parsing thread and
-delegates unrelated panics to the previous hook, restoring it after the last
-concurrent parse. Applications must not replace their hook during a parse. Neither mechanism contains
+diagnostics can contain document data. Seyk core installs no logger. On the first
+PDF parse, core installs one permanent panic dispatcher with `OnceLock`, capturing
+the previous hook. Per-parse RAII guards change only thread-local suppression:
+parser panics are recorded as sanitized diagnostics without printing, while
+unrelated threads delegate to the captured hook. A component installing a later
+hook replaces the dispatcher; parser panics are still caught but may then print.
+Seyk never removes or overwrites that later hook. Neither mechanism contains
 aborts, out-of-memory failures, hangs or hostile allocation behaviour.
 
 ### Scores and tags

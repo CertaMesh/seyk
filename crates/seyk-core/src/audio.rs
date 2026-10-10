@@ -40,8 +40,9 @@ fn unsupported(id: &ResourceId, reason: &'static str) -> Error {
     }
 }
 
-/// Contain upstream unwinding panics without exposing their payloads. As with
-/// PDF parsing, applications must install a payload-free panic hook.
+/// Contain upstream unwinding panics without exposing their payloads.
+/// Applications must install a payload-free panic hook for audio; PDF parsing
+/// uses its own dispatcher.
 fn guarded<T>(id: &ResourceId, f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(unsupported(id, "audio decoder or parser panicked")))

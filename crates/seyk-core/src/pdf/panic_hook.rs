@@ -1,68 +1,73 @@
-//! The hook is global, but suppression is confined to guarded parser work on
-//! each thread. Concurrent unrelated panics retain the application's hook.
+//! One permanent dispatcher; only thread-local state changes during parsing.
+//! A later external hook replaces ours. We never reinstall or remove it.
 use std::cell::Cell;
-use std::panic::PanicHookInfo;
-use std::sync::{Arc, Mutex};
+use std::sync::OnceLock;
 
-type Callback = Box<dyn Fn(&PanicHookInfo<'_>) + Send + Sync>;
-struct Hook(Callback);
-static STATE: Mutex<Option<(usize, Arc<Hook>)>> = Mutex::new(None);
-thread_local! { static DEPTH: Cell<usize> = const { Cell::new(0) }; }
+static INSTALLED: OnceLock<()> = OnceLock::new();
+thread_local! {
+    static SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+    static MESSAGE: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
 
-pub(super) struct Guard(std::marker::PhantomData<std::rc::Rc<()>>);
+// Never retain arbitrary upstream payloads: they can contain private source text.
+fn diagnostic(payload: &(dyn std::any::Any + Send)) -> &'static str {
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+    match message {
+        Some("unexpected entry in unicode map") => "unexpected entry in unicode map",
+        Some("bad length of hexstring") => "bad length of hexstring",
+        _ => "unrecognized parser panic",
+    }
+}
+
+pub(super) struct Guard {
+    previous: bool,
+    message: Option<&'static str>,
+    // TLS state must be restored on the same thread.
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
 impl Guard {
     pub(super) fn new() -> Self {
-        let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((users, _)) = state.as_mut() {
-            *users += 1;
-        } else {
-            let previous = Arc::new(Hook(std::panic::take_hook()));
-            let delegate = previous.clone();
+        INSTALLED.get_or_init(|| {
+            let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
-                if DEPTH.get() == 0 {
-                    (delegate.0)(info);
+                if SUPPRESSED.get() {
+                    MESSAGE.set(Some(diagnostic(info.payload())));
+                } else {
+                    previous(info);
                 }
             }));
-            *state = Some((1, previous));
+        });
+        Self {
+            previous: SUPPRESSED.replace(true),
+            message: MESSAGE.replace(None),
+            _thread: std::marker::PhantomData,
         }
-        DEPTH.set(DEPTH.get() + 1);
-        Self(std::marker::PhantomData)
+    }
+
+    pub(super) fn message(&self) -> &'static str {
+        MESSAGE.get().unwrap_or("unrecognized parser panic")
     }
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        DEPTH.set(DEPTH.get() - 1);
-        let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((users, _)) = state.as_mut() {
-            *users -= 1;
-            // Rust forbids replacing a hook while this thread is unwinding.
-            // Leave the delegating hook installed with zero users in that rare
-            // case; the next normal guard drop restores the original callback.
-            if *users == 0 && !std::thread::panicking() {
-                let (_, previous) = state.take().expect("active hook");
-                // Drop the dispatcher before unwrapping its original callback;
-                // restore that exact callback rather than accumulating wrappers.
-                drop(std::panic::take_hook());
-                let callback = match Arc::try_unwrap(previous) {
-                    Ok(hook) => hook.0,
-                    Err(hook) => Box::new(move |info: &PanicHookInfo<'_>| (hook.0)(info)),
-                };
-                std::panic::set_hook(callback);
-            }
-        }
+        MESSAGE.set(self.message);
+        SUPPRESSED.set(self.previous);
     }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn scoped_hook_preserves_unrelated_and_concurrent_panics() {
-        const CHILD: &str = "SEYK_TEST_SCOPED_PDF_HOOK";
+    fn dispatcher_preserves_hook_ownership_and_unwinding() {
+        const CHILD: &str = "SEYK_TEST_PDF_DISPATCHER";
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "pdf::panic_hook::tests::scoped_hook_preserves_unrelated_and_concurrent_panics",
+                    "pdf::panic_hook::tests::dispatcher_preserves_hook_ownership_and_unwinding",
                     "--nocapture",
                 ])
                 .env(CHILD, "1")
@@ -85,39 +90,67 @@ mod tests {
         std::panic::set_hook(Box::new(move |_| {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
-        let guard = super::Guard::new();
-        assert!(std::panic::catch_unwind(|| panic!("private parser bytes")).is_err());
-        let barrier = Arc::new(Barrier::new(2));
-        let peer = barrier.clone();
-        let worker = std::thread::spawn(move || {
-            let _guard = super::Guard::new();
-            peer.wait();
-            assert!(std::panic::catch_unwind(|| panic!("another parser")).is_err());
-            peer.wait();
-        });
+        // Installation is lazy and happens once, before racing parse transitions.
+        drop(super::Guard::new());
+        let barrier = Arc::new(Barrier::new(3));
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..1000 {
+                        let guard = super::Guard::new();
+                        assert!(
+                            std::panic::catch_unwind(|| panic!("bad length of hexstring")).is_err()
+                        );
+                        assert_eq!(guard.message(), "bad length of hexstring");
+                    }
+                })
+            })
+            .collect();
         barrier.wait();
-        // A thread outside the parser scope must use the original hook even
-        // while two parser guards are alive on other threads.
-        assert!(std::thread::spawn(|| panic!("unrelated")).join().is_err());
-        barrier.wait();
-        worker.join().unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        drop(guard);
-        assert!(std::panic::catch_unwind(|| panic!("restored")).is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        for _ in 0..1000 {
+            assert!(std::panic::catch_unwind(|| panic!("unrelated")).is_err());
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1000);
+        {
+            let guard = super::Guard::new();
+            assert!(std::panic::catch_unwind(|| panic!("private source bytes")).is_err());
+            assert_eq!(guard.message(), "unrecognized parser panic");
+        }
         assert!(
             std::panic::catch_unwind(|| {
                 let _guard = super::Guard::new();
-                panic!("guard also tolerates unwinding drop");
+                panic!("private bytes");
             })
             .is_err()
         );
-        assert!(std::panic::catch_unwind(|| panic!("still delegated")).is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        for _ in 0..100 {
-            let _guard = super::Guard::new();
+        assert!(!super::SUPPRESSED.get());
+        assert_eq!(super::MESSAGE.get(), None);
+        assert!(std::panic::catch_unwind(|| panic!("after unwind")).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1001);
+        let outer = super::Guard::new();
+        {
+            let _inner = super::Guard::new();
         }
-        assert!(std::panic::catch_unwind(|| panic!("exact original restored")).is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert!(super::SUPPRESSED.get());
+        // Install an external hook while a parse is active. Neither guard drop
+        // nor later guard construction may overwrite it.
+        let external = Arc::new(AtomicUsize::new(0));
+        let counter = external.clone();
+        std::panic::set_hook(Box::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        drop(outer);
+        for _ in 0..10 {
+            let _guard = super::Guard::new();
+            assert!(std::panic::catch_unwind(|| panic!("external parser hook")).is_err());
+        }
+        assert!(std::panic::catch_unwind(|| panic!("external unrelated hook")).is_err());
+        assert_eq!(external.load(Ordering::SeqCst), 11);
+        assert_eq!(calls.load(Ordering::SeqCst), 1001);
     }
 }

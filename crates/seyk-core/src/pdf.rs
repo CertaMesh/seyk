@@ -2,8 +2,10 @@
 //!
 //! Applications with a logger must filter `pdf_extract` to Off, plus
 //! `hayro_interpret`, `hayro_syntax` and `hayro_font` with `pdf-render`. This module
-//! catches unwinding parser panics with a scoped, thread-local hook guard that
-//! delegates unrelated panics to the previous hook. Abort, OOM and
+//! catches unwinding parser panics with thread-local suppression under a permanent
+//! dispatcher, installed lazily once and delegating other threads to its captured
+//! hook. A later external hook replaces it and may print; Seyk never overwrites
+//! that hook. Abort, OOM and
 //! parser hangs are not contained. `pdf-render` adds CPU page rendering with
 //! bundled fallback fonts and no system-font lookup. No OCR is performed.
 
@@ -38,12 +40,13 @@ fn failure(source: &ResourceId, reason: &'static str) -> Error {
 }
 
 /// All parser work, including document loading and destruction, stays inside
-/// this boundary. Error strings/panic payloads from upstream are never exposed.
+/// this boundary. Only allowlisted static panic reasons are exposed.
 fn guarded<T>(source: &ResourceId, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _silence = panic_hook::Guard::new();
+    let silence = panic_hook::Guard::new();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
         Err(Error::ParserPanicked {
             resource: source.clone(),
+            reason: silence.message(),
         })
     })
 }

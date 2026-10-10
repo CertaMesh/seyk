@@ -232,7 +232,13 @@ fn real_binary_cmap_panics_have_no_hook_stderr_spam() {
         assert!(stderr.contains("PDF parser panicked"));
         assert!(!stderr.contains("internal failure"));
         assert!(!stderr.contains("panicked at"));
-        assert!(!stderr.contains("hexstring"));
-        assert!(!stderr.contains("unicode map"));
+        let reason = if bad_length {
+            "bad length of hexstring"
+        } else {
+            "unexpected entry in unicode map"
+        };
+        assert!(stderr.contains(reason));
+        // The explicit CLI diagnostic is one line, with no hook backtrace/banner.
+        assert_eq!(stderr.lines().count(), 1);
     }
 }

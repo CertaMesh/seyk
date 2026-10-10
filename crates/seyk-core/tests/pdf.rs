@@ -351,12 +351,20 @@ fn malformed_cmaps_are_typed_failures_and_other_documents_remain_searchable() {
         .unwrap();
     assert_eq!(result.stats.sync.resources_discovered, 3);
     assert_eq!(result.stats.sync.skipped.len(), 2);
-    assert_eq!(result.stats.sync.skipped_counts.len(), 1);
-    assert_eq!(result.stats.sync.skipped_counts[0].count, 2);
-    assert_eq!(
-        result.stats.sync.skipped_counts[0].code,
-        seyk_core::SkipCode::PdfParserPanicked
-    );
+    assert_eq!(result.stats.sync.skipped_counts.len(), 2);
+    for count in &result.stats.sync.skipped_counts {
+        assert_eq!(count.count, 1);
+        assert_eq!(count.code, seyk_core::SkipCode::PdfParserPanicked);
+    }
+    let reasons: Vec<_> = result
+        .stats
+        .sync
+        .skipped_counts
+        .iter()
+        .map(|count| count.reason.as_str())
+        .collect();
+    assert!(reasons.contains(&"PDF parser panicked: bad length of hexstring"));
+    assert!(reasons.contains(&"PDF parser panicked: unexpected entry in unicode map"));
     assert_eq!(result.stats.sync.page_diagnostics.len(), 2);
     assert_eq!(result.hits.len(), 1);
     assert_eq!(

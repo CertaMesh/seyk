@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn renderer_unwind_is_contained_without_retaining_its_payload() {
         // Exercise an unwind from within Hayro via its font callback, using the
-        // same guarded render path as production. No global panic hook changes.
+        // same guarded render path as production. Uses the shared permanent dispatcher.
         let renderer = PageRenderer::new(&fixture::text(&["public text"]), &source()).unwrap();
         let settings = InterpreterSettings {
             font_resolver: Arc::new(|_| panic!("{}", crate::pdf::fixture::MARKER)),

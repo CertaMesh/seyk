@@ -1435,7 +1435,7 @@ fn pdf_reason(error: Error) -> String {
     match error {
         Error::PdfParse { reason, .. } => format!("PDF parse failed: {reason}"),
         Error::PdfRender { reason, .. } => format!("PDF rendering failed: {reason}"),
-        Error::ParserPanicked { .. } => "PDF parser panicked".into(),
+        Error::ParserPanicked { reason, .. } => format!("PDF parser panicked: {reason}"),
         other => other.to_string(),
     }
 }
@@ -1561,7 +1561,7 @@ fn strip_link_targets(text: &str) -> String {
 
 fn skip(resource: &ResourceId, reason: impl Into<String>) -> SkippedResource {
     let reason = reason.into();
-    let code = if reason == "PDF parser panicked" {
+    let code = if reason.starts_with("PDF parser panicked") {
         SkipCode::PdfParserPanicked
     } else if reason.starts_with("PDF parse failed: ") {
         SkipCode::PdfParseFailed

@@ -3,8 +3,10 @@
 //! With `pdf`, applications installing a `log` logger MUST filter `pdf_extract`
 //! to Off. With `pdf-render`, also filter `hayro_interpret`, `hayro_syntax` and
 //! `hayro_font` to Off: upstream diagnostics can contain document bytes. This crate installs
-//! no logger. PDF panics become errors via catch_unwind with a scoped hook guard
-//! that silences only parser panics on the current thread.
+//! no logger. PDF panics become errors via catch_unwind. A permanent dispatcher is
+//! installed lazily once; RAII guards suppress and record parser panics only on
+//! the parsing thread, delegating other threads to the captured previous hook.
+//! Later external hooks replace it and may print; Seyk never removes or overwrites them.
 //! With `audio`, Symphonia probe, construction, packet reads and decode panics
 //! likewise become payload-free `UnsupportedAudio` errors; applications must use
 //! a payload-free panic hook for audio. ALAC frame allocations are checked before construction.

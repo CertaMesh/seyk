@@ -37,8 +37,11 @@ pub enum Error {
         resource: crate::ResourceId,
         reason: &'static str,
     },
-    #[error("PDF parser panicked for {resource}")]
-    ParserPanicked { resource: crate::ResourceId },
+    #[error("PDF parser panicked for {resource}: {reason}")]
+    ParserPanicked {
+        resource: crate::ResourceId,
+        reason: &'static str,
+    },
     #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,
