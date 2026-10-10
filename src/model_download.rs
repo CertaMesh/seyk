@@ -178,6 +178,161 @@ mod tests {
         );
     }
 
+    /// A loopback-only HF resolve endpoint. No redirects or external URLs.
+    struct HttpFixture {
+        endpoint: String,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl HttpFixture {
+        fn new() -> Self {
+            use std::io::{BufRead, BufReader, Write};
+            use std::sync::{
+                Arc, Mutex,
+                atomic::{AtomicBool, Ordering},
+            };
+            use std::time::Duration;
+
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (recorded, stopping) = (requests.clone(), stop.clone());
+            let worker = std::thread::spawn(move || {
+                while !stopping.load(Ordering::SeqCst) {
+                    let (mut stream, _) = match listener.accept() {
+                        Ok(connection) => connection,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(e) => panic!("fixture accept: {e}"),
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(&stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let path = line.split_whitespace().nth(1).unwrap().to_string();
+                    recorded.lock().unwrap().push(path.clone());
+                    let mut metadata = false;
+                    loop {
+                        line.clear();
+                        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        metadata |= line.trim().eq_ignore_ascii_case("range: bytes=0-0");
+                    }
+                    // Remote main has advanced to B. A is still downloadable.
+                    let (revision, file) = path
+                        .strip_prefix("/test/synthetic/resolve/")
+                        .unwrap()
+                        .split_once('/')
+                        .unwrap();
+                    let commit = if revision == "main" { B } else { revision };
+                    assert!(commit == A || commit == B);
+                    let payload = format!("synthetic {commit} {file}");
+                    let body = if metadata {
+                        &payload.as_bytes()[..1]
+                    } else {
+                        payload.as_bytes()
+                    };
+                    let end = body.len() - 1;
+                    write!(stream,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-{end}/{}\r\nx-repo-commit: {commit}\r\nETag: \"{}\"\r\nConnection: close\r\n\r\n",
+                        body.len(), payload.len(), blake3::hash(payload.as_bytes())
+                    ).unwrap();
+                    stream.write_all(body).unwrap();
+                }
+            });
+            Self {
+                endpoint,
+                requests,
+                stop,
+                worker: Some(worker),
+            }
+        }
+    }
+
+    impl Drop for HttpFixture {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let result = self.worker.take().unwrap().join();
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn partial_old_cache_downloads_missing_files_from_pinned_snapshot() {
+        let cache = tempfile::tempdir().unwrap();
+        let repo = "test/synthetic";
+        let files = files();
+        assert_eq!(files[0], "tokenizer.json");
+        let repo_dir = cache.path().join("models--test--synthetic");
+        let dir = repo_dir.join("snapshots").join(A);
+        let tokenizer = write_file(&dir, &files[0]);
+        hf_hub::Cache::new(cache.path().to_path_buf())
+            .model(repo.into())
+            .create_ref(A)
+            .unwrap();
+        assert!(!repo_dir.join("refs").join(A).exists());
+        assert!(files[1..].iter().all(|file| !dir.join(file).exists()));
+        let fixture = HttpFixture::new();
+        let api = hf_hub::api::sync::ApiBuilder::new()
+            .with_cache_dir(cache.path().to_path_buf())
+            .with_endpoint(fixture.endpoint.clone())
+            .with_token(None)
+            .with_progress(false)
+            .with_retries(0)
+            .build()
+            .unwrap();
+        let downloaded = download_files("main", &files, |revision, file| {
+            api.repo(hf_hub::Repo::with_revision(
+                repo.into(),
+                hf_hub::RepoType::Model,
+                revision.into(),
+            ))
+            .get(file)
+            .map_err(|e| Error::Embedding(e.to_string()))
+        })
+        .unwrap();
+        assert_eq!(downloaded, dir);
+        assert_eq!(std::fs::read(tokenizer).unwrap(), b"synthetic model file");
+        assert_eq!(
+            std::fs::read_to_string(repo_dir.join("refs/main")).unwrap(),
+            A
+        );
+        assert!(!repo_dir.join("snapshots").join(B).exists());
+        let requests = fixture.requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        for request in requests.iter() {
+            assert!(
+                request.starts_with(&format!("/test/synthetic/resolve/{A}/")),
+                "{request}"
+            );
+        }
+        for file in &files[1..] {
+            let path = format!("/test/synthetic/resolve/{A}/{file}");
+            assert!(requests.contains(&path), "missing request for {file}");
+            assert_eq!(
+                std::fs::read_to_string(dir.join(file)).unwrap(),
+                format!("synthetic {A} {file}")
+            );
+        }
+        assert!(!requests.iter().any(|r| r.ends_with("tokenizer.json")));
+    }
+
     #[test]
     fn uncached_hub_download_follows_redirects_and_populates_cache() {
         use std::io::{Read, Write};
