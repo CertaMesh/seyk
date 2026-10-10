@@ -108,6 +108,13 @@ impl Embedder for Overrides {
     fn dimension(&self) -> Dimension {
         Dimension::D768
     }
+    fn input_identity(&self, modality: Modality) -> Result<&str> {
+        if modality == Modality::Audio {
+            Err(Error::Embedding("identity override".into()))
+        } else {
+            Ok("distinct input identity")
+        }
+    }
     fn supports(&self, modality: Modality) -> bool {
         modality == Modality::Video
     }
@@ -136,9 +143,17 @@ fn wrappers_preserve_every_method_override() {
     fn verify(model: impl Embedder) {
         assert_eq!(model.identity().model_id, "mock");
         assert_eq!(model.dimension(), Dimension::D768);
+        assert_eq!(
+            model.input_identity(Modality::Text).unwrap(),
+            "distinct input identity"
+        );
         assert!(model.supports(Modality::Video));
         assert!(!model.supports(Modality::Text));
         let errors = [
+            (
+                model.input_identity(Modality::Audio).unwrap_err(),
+                "identity override",
+            ),
             (model.embed_batch(&[]).unwrap_err(), "batch override"),
             (
                 model

@@ -352,18 +352,18 @@ impl SearchEngine {
     }
 
     /// Sync and cached-only search must agree on the prepared audio identity.
-    fn audio_descriptor_hash(&self, resource: &ProvidedResource) -> String {
+    fn audio_descriptor_hash(&self, resource: &ProvidedResource) -> Result<String> {
         #[cfg(feature = "audio")]
         {
-            input_hash(&[
+            Ok(input_hash(&[
                 &resource.fingerprint(),
                 crate::audio::PREPARATION,
-                self.embedder.input_identity(crate::Modality::Audio),
-            ])
+                self.embedder.input_identity(crate::Modality::Audio)?,
+            ]))
         }
         #[cfg(not(feature = "audio"))]
         {
-            resource.fingerprint()
+            Ok(resource.fingerprint())
         }
     }
 
@@ -476,7 +476,13 @@ impl SearchEngine {
                     r.fingerprint()
                 }
             } else if r.kind == ResourceKind::Audio {
-                self.audio_descriptor_hash(r)
+                match self.audio_descriptor_hash(r) {
+                    Ok(hash) => hash,
+                    Err(error) => {
+                        stats.skipped.push(skip(&r.id, error.to_string()));
+                        continue;
+                    }
+                }
             } else {
                 r.fingerprint()
             };
@@ -1047,6 +1053,7 @@ impl SearchEngine {
         let mut batch = Vec::new();
         let mut records = Vec::new();
         let capacity = self.batch_size.min(4);
+        let identity = self.embedder.input_identity(crate::Modality::Audio)?;
         let result = crate::audio::windows_verified(
             source,
             &r.id,
@@ -1055,7 +1062,6 @@ impl SearchEngine {
                 let mut hash = blake3::Hasher::new();
                 hash.update(b"audio-input-v1");
                 hash.update(crate::audio::PREPARATION.as_bytes());
-                let identity = self.embedder.input_identity(crate::Modality::Audio);
                 hash.update(&(identity.len() as u64).to_le_bytes());
                 hash.update(identity.as_bytes());
                 hash.update(&(samples.len() as u64).to_le_bytes());
@@ -1449,7 +1455,7 @@ impl<'e> SearchRequest<'e> {
                 resources: resources.len(),
             });
         }
-        let sync = if self.sync {
+        let mut sync = if self.sync {
             let indexing = engine
                 .indexing
                 .lock()
@@ -1471,14 +1477,25 @@ impl<'e> SearchRequest<'e> {
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
         for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
             let failed = sync.skipped.iter().any(|s| s.resource == r.id);
-            let descriptor = engine.audio_descriptor_hash(r);
+            if failed {
+                wanted.remove(&r.id);
+                continue;
+            }
+            let descriptor = match engine.audio_descriptor_hash(r) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    sync.skipped.push(skip(&r.id, error.to_string()));
+                    wanted.remove(&r.id);
+                    continue;
+                }
+            };
             let current = metadata.get(&r.id).is_some_and(|m| {
                 // Unknown/changed cached sources cannot establish eligibility in cached-only search.
                 (self.sync || m.version.matches(&r.version))
                     && m.metadata.size_bytes == r.size_bytes
                     && m.descriptor_hash.as_ref() == Some(&descriptor)
             });
-            if failed || !current || !engine.audio_eligible(&r.id)? {
+            if !current || !engine.audio_eligible(&r.id)? {
                 wanted.remove(&r.id);
             }
         }

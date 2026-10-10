@@ -116,9 +116,16 @@ optional files produce `ModelNotFound` for the audio request without preventing
 text embedding. Video returns `UnsupportedModality`. `GemmaConfig::audio` and
 `.audio(bool)` control audio acceptance; `GemmaConfig::files()` remains the
 ordinary model file list. The CLI provisions `audio::FILES` separately.
-`Embedder::input_identity(modality)` defaults to an empty string and adds
+`Embedder::input_identity(modality)` returns `Result<&str>`, defaults to `Ok("")`, and adds
 modality-specific weights/preprocessing to input hashes without changing the
-shared `ModelIdentity` or text cache profile.
+shared `ModelIdentity` or text cache profile. Audio hashing starts on the first
+audio identity request, before cache admission (including cached-only search),
+or direct audio embedding. Text-only use reads no audio assets. Failed
+preparation can be retried after installing or repairing the files; a successful
+identity stays fixed until model reload. The digest recipe and existing cache
+keys are unchanged. Filename-based session loading still rechecks the digest
+before the first inference; binding loading to an owned byte snapshot is a
+separate follow-up (Solo todo #4423).
 For images, opt into preprocessing and provision the vision weights:
 
 ```toml

@@ -71,8 +71,8 @@ fn reference_embedding_and_text_cache_identity() {
         text.embed_query("unchanged text input").unwrap()
     );
     assert_ne!(
-        model.input_identity(Modality::Audio),
-        text.input_identity(Modality::Audio)
+        model.input_identity(Modality::Audio).unwrap(),
+        text.input_identity(Modality::Audio).unwrap()
     );
     for (name, samples, _, reference) in cases() {
         let count = audio::preprocess(&samples)
@@ -152,10 +152,13 @@ fn missing_audio_files_leave_text_available() {
         .build()
         .unwrap();
     assert_eq!(missing.identity(), installed.identity());
-    assert!(matches!(
-        missing.embed_audio(&fixture::signal(), 16000),
-        Err(seyk_embeddinggemma::Error::ModelNotFound(_))
-    ));
+    // Failed preparation is retryable after the files have been installed.
+    assert_eq!(
+        missing.input_identity(Modality::Audio).unwrap(),
+        installed.input_identity(Modality::Audio).unwrap()
+    );
+    drop(missing);
+    drop(text);
     // A same-length edit between construction and lazy load must not cache a
     // vector under the old identity. Replace a hard link, never mutate HF data.
     let graph = dir.path().join(audio::FILES[0]);
@@ -167,9 +170,16 @@ fn missing_audio_files_leave_text_available() {
         .embed_audio(&fixture::signal(), 16000)
         .unwrap_err();
     assert!(error.to_string().contains("audio weights changed"));
+    let reloaded = EmbeddingGemma2::builder()
+        .model_path(dir.path())
+        .vision(false)
+        .audio(true)
+        .threads(1)
+        .build()
+        .unwrap();
     assert_ne!(
-        missing.input_identity(Modality::Audio),
-        installed.input_identity(Modality::Audio)
+        reloaded.input_identity(Modality::Audio).unwrap(),
+        installed.input_identity(Modality::Audio).unwrap()
     );
 }
 
