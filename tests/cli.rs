@@ -8,6 +8,20 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 fn binary() -> Command {
+    // A freshly linked executable can spend tens of seconds in the OS loader
+    // (notably macOS code-signature assessment) before main even runs. Verify
+    // process readiness once, before starting any command's operation deadline.
+    // Once also prevents parallel tests from competing on that first launch.
+    static READY: std::sync::Once = std::sync::Once::new();
+    READY.call_once(|| {
+        let output = Command::cargo_bin("seyk")
+            .unwrap()
+            .arg("--version")
+            .timeout(std::time::Duration::from_secs(120))
+            .ok()
+            .expect("CLI readiness probe (--version) must succeed within 120 s");
+        assert_eq!(output.stdout, b"seyk 0.1.0\n");
+    });
     Command::cargo_bin("seyk").unwrap()
 }
 
@@ -196,31 +210,109 @@ fn missing_model_is_a_helpful_failure_and_invalid_dimensions_are_rejected() {
         .stderr(predicate::str::contains("unsupported dimension 300"));
 }
 
+/// Exercise an MCP session as a client: initialize, await readiness, then list
+/// tools. Defensively keep stdin open until the pending replies arrive.
+#[cfg(feature = "mcp")]
+fn mcp_handshake(command: &mut std::process::Command) -> [Value; 2] {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct Session(Child);
+    impl Drop for Session {
+        fn drop(&mut self) {
+            // Also reap on assertion failure or timeout.
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut session = Session(
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let mut stdin = session.0.stdin.take().unwrap();
+    let stdout = session.0.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut response = |id| {
+        use std::sync::mpsc::RecvTimeoutError;
+        let line = match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => line.expect("reading MCP child stdout failed"),
+            Err(RecvTimeoutError::Disconnected) => panic!(
+                "MCP child exited or closed stdout before response {id}; status: {:?}",
+                session
+                    .0
+                    .try_wait()
+                    .expect("checking MCP child status failed")
+            ),
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(status) = session
+                    .0
+                    .try_wait()
+                    .expect("checking MCP child status failed")
+                {
+                    panic!("MCP child exited before response {id}: {status}");
+                }
+                panic!("MCP response {id} timed out within the 20 s operation deadline");
+            }
+        };
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["id"], id);
+        assert!(value.get("error").is_none(), "{value}");
+        value
+    };
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{{}},"clientInfo":{{"name":"test","version":"0"}}}}}}"#).unwrap();
+    stdin.flush().unwrap();
+    let initialized = response(1);
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+    )
+    .unwrap();
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).unwrap();
+    stdin.flush().unwrap();
+    let tools = response(2);
+    drop(stdin);
+    // Both responses are received; close/reap the child without another
+    // wall-clock assertion on OS process teardown.
+    drop(session);
+    reader.join().unwrap();
+    [initialized, tools]
+}
+
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+#[should_panic(expected = "MCP child exited")]
+fn mcp_early_child_exit_has_a_distinct_diagnostic() {
+    let mut command = std::process::Command::new("/bin/sh");
+    // Consume initialize before exiting so the failure is the missing reply,
+    // rather than a write to an already closed stdin pipe.
+    command.args(["-c", "read -r initialize; exit 7"]);
+    mcp_handshake(&mut command);
+}
+
 /// The MCP server answers the handshake and lists its tool before any model is
 /// loaded, so clients start fast and this runs without weights.
 #[cfg(feature = "mcp")]
 #[test]
 fn mcp_server_lists_search_tool_without_loading_the_model() {
     let temp = TempDir::new().unwrap();
-    let requests = [
-        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
-        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
-    ]
-    .join("\n")
-        + "\n";
-    let output = binary()
+    let mut command = std::process::Command::new(binary().get_program());
+    command
         .args(["mcp", "--standalone", temp.path().to_str().unwrap()])
-        .env("SEYK_MODEL", temp.path().join("no-model"))
-        .write_stdin(requests)
-        .timeout(std::time::Duration::from_secs(20))
-        .output()
-        .unwrap();
-    let responses: Vec<Value> = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
+        .env("SEYK_MODEL", temp.path().join("no-model"));
+    let responses = mcp_handshake(&mut command);
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
     let tools = &responses[1]["result"]["tools"];
     let search = tools
