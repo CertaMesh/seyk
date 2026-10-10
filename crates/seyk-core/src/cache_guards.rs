@@ -248,9 +248,69 @@ fn detected(path: &Path, home: Option<&Path>) -> bool {
 mod tests {
     use super::*;
 
+    // Read through a fresh native URL so inherited Time Machine exclusions and
+    // the setter's cached resource values cannot mask a missing directory flag.
+    #[cfg(target_os = "macos")]
+    fn own_exclusion(dir: &Path) -> Option<bool> {
+        use std::ffi::c_void;
+        use std::os::unix::ffi::OsStrExt;
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            static kCFURLIsExcludedFromBackupKey: *const c_void;
+            fn CFURLCreateFromFileSystemRepresentation(
+                allocator: *const c_void,
+                bytes: *const u8,
+                length: isize,
+                is_directory: u8,
+            ) -> *const c_void;
+            fn CFURLCopyResourcePropertyForKey(
+                url: *const c_void,
+                key: *const c_void,
+                value: *mut *const c_void,
+                error: *mut *const c_void,
+            ) -> u8;
+            fn CFBooleanGetValue(value: *const c_void) -> u8;
+            fn CFRelease(value: *const c_void);
+        }
+        let dir = std::fs::canonicalize(dir).ok()?;
+        let bytes = dir.as_os_str().as_bytes();
+        // SAFETY: the path is live for creation; the key's documented value is
+        // CFBoolean. Both Copy/Create references are released exactly once.
+        unsafe {
+            let url = CFURLCreateFromFileSystemRepresentation(
+                std::ptr::null(),
+                bytes.as_ptr(),
+                bytes.len().try_into().ok()?,
+                1,
+            );
+            if url.is_null() {
+                return None;
+            }
+            let mut value = std::ptr::null();
+            let copied = CFURLCopyResourcePropertyForKey(
+                url,
+                kCFURLIsExcludedFromBackupKey,
+                &mut value,
+                std::ptr::null_mut(),
+            ) != 0;
+            let result = if copied && !value.is_null() {
+                Some(CFBooleanGetValue(value) != 0)
+            } else {
+                None
+            };
+            if !value.is_null() {
+                CFRelease(value);
+            }
+            CFRelease(url);
+            result
+        }
+    }
+
     #[test]
     fn tags_are_standard_and_idempotent_and_exclusion_is_verified() {
         let temp = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        assert_eq!(own_exclusion(temp.path()), Some(false));
         prepare(temp.path()).unwrap();
         prepare(temp.path()).unwrap();
         assert_eq!(
@@ -259,10 +319,12 @@ mod tests {
         );
         #[cfg(target_os = "macos")]
         {
+            assert_eq!(own_exclusion(temp.path()), Some(true));
             assert_eq!(backup_excluded(temp.path()), Some(true));
             let destination = tempfile::tempdir().unwrap();
             let moved = destination.path().join("moved-cache");
             std::fs::rename(temp.path(), &moved).unwrap();
+            assert_eq!(own_exclusion(&moved), Some(true));
             assert_eq!(backup_excluded(&moved), Some(true));
         }
         #[cfg(not(target_os = "macos"))]
