@@ -364,7 +364,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 req = req.lexical_weight(w);
             }
             let results = req.execute()?;
-            report_scrub(engine.scrub_cache());
             progress.finish();
             let mut out = std::io::stdout().lock();
             if json {
@@ -378,6 +377,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )?;
                 eprint!("{}", format_summary(&results));
             }
+            out.flush()?;
+            drop(out);
+            report_scrub(engine.scrub_cache());
             Ok(ExitCode::SUCCESS)
         }
         Command::Extract {
@@ -485,12 +487,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .progress(&report)
                 .execute()?;
             progress.finish();
-            report_scrub(engine.scrub_cache());
             if json {
                 println!("{}", serde_json::to_string_pretty(&json_output(&result))?);
             } else {
                 print!("{}", format_index_report(&result));
             }
+            std::io::stdout().flush()?;
+            report_scrub(engine.scrub_cache());
             Ok(ExitCode::SUCCESS)
         }
         Command::Cache { action, cache_path } => {

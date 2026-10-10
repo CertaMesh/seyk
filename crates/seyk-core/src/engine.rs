@@ -509,9 +509,19 @@ impl SearchEngine {
     /// references and never runs in a request. On engine drop it stops after its
     /// current iteration; drop does not cancel or join an in-flight scrub.
     pub fn start_cache_scrubber(&self) {
+        let cache = Arc::downgrade(&self.cache);
         self.start_cache_scrubber_with(
-            || {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+            move || {
+                let delay = {
+                    let Some(cache) = cache.upgrade() else {
+                        return false;
+                    };
+                    let Ok(cache) = cache.lock() else {
+                        return false;
+                    };
+                    cache.scrub_delay(std::time::Duration::from_secs(60))
+                }; // Release strong references and the mutex before sleeping.
+                std::thread::sleep(delay);
                 true
             },
             |cache| match cache.scrub_if_idle(std::time::Duration::from_secs(60)) {
@@ -525,7 +535,7 @@ impl SearchEngine {
     }
 
     // Injectable ticks and work make worker ownership/locking tests deterministic.
-    // Production supplies the one-second clock and the normal idle scrub above.
+    // Production sleeps to the quiet/retry deadline (60 seconds when idle).
     fn start_cache_scrubber_with(
         &self,
         mut tick: impl FnMut() -> bool + Send + 'static,
