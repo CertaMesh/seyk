@@ -169,6 +169,9 @@ trait Operations {
     fn digest(&self, path: &Path) -> Result<blake3::Hash> {
         digest(path)
     }
+    fn persist(&self, staged: tempfile::TempPath, target: &Path) -> io::Result<()> {
+        staged.persist(target).map_err(|e| e.error)
+    }
     fn check(&self, _point: Point) -> io::Result<()> {
         Ok(())
     }
@@ -341,13 +344,11 @@ fn publish_copy(source: &Path, target: &Path, parent: &Path, ops: &impl Operatio
     // Publish stamp first. A crash, error or race between these renames makes
     // the stats disagree, causing safe republishing on the next load.
     check(ops, Point::StampRename, target)?;
-    staged_stamp
-        .persist(stamp_path(target))
-        .map_err(|e| io_error(target, e.error))?;
+    ops.persist(staged_stamp.into_temp_path(), &stamp_path(target))
+        .map_err(|e| io_error(target, e))?;
     check(ops, Point::TargetRename, target)?;
-    staged
-        .persist(target)
-        .map_err(|e| io_error(target, e.error))?;
+    ops.persist(staged, target)
+        .map_err(|e| io_error(target, e))?;
     Ok(())
 }
 #[cfg(test)]
@@ -510,6 +511,79 @@ mod tests {
             );
             no_staging_files(dir.path());
         }
+    }
+
+    struct RejectPersist {
+        target: PathBuf,
+        attempts: AtomicUsize,
+    }
+    impl Operations for RejectPersist {
+        fn link(&self, _: &Path, _: &Path) -> io::Result<()> {
+            Err(io::ErrorKind::CrossesDevices.into())
+        }
+        fn persist(&self, staged: tempfile::TempPath, target: &Path) -> io::Result<()> {
+            if target == self.target {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                // Fail at the publication operation, after verification and
+                // stamp publication. The owned staging guard must clean up.
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Filesystem.persist(staged, target)
+            }
+        }
+    }
+    fn rejected_copy_preserves_files(symlink_target: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let old = dir.path().join("old-source");
+        let target = dir.path().join("weights");
+        let bytes = vec![42; 150_000];
+        fs::write(&source, &bytes).unwrap();
+        fs::write(&old, b"old correct destination").unwrap();
+        if symlink_target {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&old, &target).unwrap();
+            #[cfg(not(unix))]
+            unreachable!("symlink rejection test is Unix-only");
+        } else {
+            fs::hard_link(&old, &target).unwrap();
+        }
+        let source_hash = digest(&source).unwrap();
+        let old_hash = digest(&old).unwrap();
+        let ops = RejectPersist {
+            target: target.clone(),
+            attempts: AtomicUsize::new(0),
+        };
+        let error = publish_with(&source, &target, || {}, &ops).unwrap_err();
+        assert!(matches!(error, super::super::Error::Io { source, .. }
+            if source.kind() == io::ErrorKind::PermissionDenied));
+        assert_eq!(ops.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        assert_eq!(digest(&source).unwrap(), source_hash);
+        assert_eq!(fs::read(&target).unwrap(), b"old correct destination");
+        assert_eq!(fs::read(&old).unwrap(), b"old correct destination");
+        assert_eq!(digest(&old).unwrap(), old_hash);
+        if symlink_target {
+            assert!(
+                fs::symlink_metadata(&target)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read_link(&target).unwrap(), old);
+        } else {
+            assert_shared_inode(&old, &target);
+        }
+        no_staging_files(dir.path());
+    }
+    #[test]
+    fn failed_copy_persist_preserves_existing_hard_link_and_cleans_staging() {
+        rejected_copy_preserves_files(false);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejected_symlink_replacement_preserves_link_and_source_and_cleans_staging() {
+        rejected_copy_preserves_files(true);
     }
 
     #[test]

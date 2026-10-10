@@ -2,10 +2,11 @@
 """Repeat the complete audio_golden suite under CPU load using disposable weights.
 
 Build with cargo test -p seyk-embeddinggemma --features audio --test audio_golden
---no-run. HF_HOME must point to a disposable copy of the pinned HF snapshot:
+--no-run. --hf-home must point to a disposable copy of the pinned HF snapshot:
 the home must be under the system temp directory and all resolved snapshot
 files must stay inside that home, with st_nlink == 1. Never hard-link
-the disposable weights to the real HF cache. No downloads or test timeouts.
+the disposable weights to the real HF cache. Configured/default HF homes are
+rejected even under temp. No downloads or test timeouts.
 """
 import argparse
 import concurrent.futures
@@ -30,6 +31,10 @@ def main():
     args = parser.parse_args()
     if min(args.runs, args.parallel) < 1 or args.stress_workers < 0:
         parser.error("counts must be positive; stress workers may be zero")
+    default_home = (Path.home() / ".cache/huggingface").resolve()
+    configured_home = Path(os.environ.get("HF_HOME", str(default_home))).expanduser().resolve()
+    if args.hf_home in (default_home, configured_home):
+        parser.error("--hf-home must not be the configured or default HF home")
     files = sorted((args.hf_home / "hub").glob("models--*/snapshots/**/*"))
     files = [p for p in files if p.is_file()]
     temporary_root = Path(tempfile.gettempdir()).resolve()

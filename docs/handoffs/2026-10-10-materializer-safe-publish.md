@@ -84,7 +84,8 @@ exit status, duration, the specific ORT exception, and SHA-256 hashes before
 and after the entire experiment. It waits for completion without an outer
 timeout and changes no test timeout or retry policy.
 Use Python 3.9 or newer. The runner rejects multiply linked fixture files and
-homes outside the system temporary directory. Early aborts, missing test headers
+homes outside the system temporary directory, and the configured (`HF_HOME`)
+or default (`~/.cache/huggingface`) HF home, even when those live under temp. Early aborts, missing test headers
 and executable launch errors are recorded as failures; the cohort continues to
 the summary and final fixture hash check.
 
@@ -131,6 +132,22 @@ copy-writer-close adjustment changes the copy-only path, which is exercised by
 the forced-EXDEV regressions. The passing cohort does not explain the native
 exception observed in the two earlier cohorts and does not close todo #4461.
 
+The review-B addendum extends the suite to thirteen tests. An injected persist
+operation rejects publication after a forced-EXDEV copy has been verified and
+its stamp published. The original hard-linked target, source bytes and hashes
+survive, with no staging entries. A Unix case rejects replacement of a symlink
+and also asserts that its original link and referent survive unchanged. These
+complement the existing partial-copy, verification and actual digest-mismatch
+failures. A disposable probe bypassing the persist seam fails the new test;
+the correctly wired helper passes all thirteen tests. The expanded backend
+suite passed **100/100 loaded repetitions (1,300 tests)** with eight concurrent
+processes and twelve CPU stress workers, alongside workspace validation.
+
+The runner adds a synthetic test for configured and default HF homes located
+inside a temporary directory. Both cases were accepted before this guard and
+are now rejected before any executable launches or results directory is created.
+No real cache files are used by these tests.
+
 ## Verification
 
 Formatting, workspace/all-targets clippy with `-D warnings`, and workspace
@@ -142,12 +159,20 @@ Verification used the already provisioned ORT static archive through
 a successful `seyk --version` probe completed macOS executable readiness;
 no test deadline was changed.
 
-During final verification on main `41d5449`, the legacy no-model MCP CLI test
+During the first review round on main `41d5449`, the legacy no-model MCP CLI test
 also reproduced its independent empty-response failure (`responses[0]` with
 length zero). It does not load model files or execute the materializer. The
-final default/audio workspace gates therefore integrate the reviewed CLI test
+that round's default/audio workspace gates therefore integrated the reviewed CLI test
 harness from PR #46 (`9cdac59`) temporarily, without including that file in this
-PR. The audio-stt workspace run and MSRV gates passed with the main-based CLI
+PR. That round's audio-stt workspace run and MSRV gates passed with the main-based CLI
 test. This PR's product code and source-preservation checks remain independent
 of that test-harness change; the combined gate represents PR #48 landing after
 PR #46. No failed test was blindly retried.
+
+The review-B addendum repeated default, `audio`, and `audio-stt` workspace
+verification with PR #46's now-merged CLI harness temporarily integrated. All
+three passed, including the thirteen materializer regressions. The borrowed
+CLI file is restored before committing; this addendum changes only the
+materializer, fixture runner/tests, and this report. All formatting, three
+clippy configurations, dependency/license checks, Python 3.9/3.14 regressions,
+and the Rust 1.89 check/build gates also passed for the addendum.
