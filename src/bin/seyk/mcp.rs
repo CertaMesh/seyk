@@ -1019,6 +1019,154 @@ mod tests {
         (server, documents)
     }
 
+    /// Reproducible synthetic workload, deliberately separate from CI timing assertions.
+    /// Run with: cargo test --bin seyk measure_disjoint_watcher_inline_sync -- --ignored --nocapture
+    #[test]
+    #[ignore = "synthetic latency measurement; no timing threshold"]
+    fn measure_disjoint_watcher_inline_sync() {
+        use seyk_core::LeaseEvent;
+        use std::sync::mpsc;
+
+        struct TimedEmbedder {
+            inner: WordHash,
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+            first: std::sync::atomic::AtomicBool,
+        }
+        impl Embedder for TimedEmbedder {
+            fn identity(&self) -> &ModelIdentity {
+                self.inner.identity()
+            }
+            fn supports(&self, modality: Modality) -> bool {
+                self.inner.supports(modality)
+            }
+            fn embed_query(&self, query: &str) -> seyk_embed::Result<Embedding> {
+                self.inner.embed_query(query)
+            }
+            fn embed_batch(
+                &self,
+                requests: &[seyk_embed::EmbeddingRequest<'_>],
+            ) -> seyk_embed::Result<Vec<Embedding>> {
+                if requests
+                    .iter()
+                    .all(|r| r.task == seyk_embed::EmbeddingTask::SearchDocument)
+                {
+                    let inputs: Vec<_> = requests.iter().map(|r| r.input.clone()).collect();
+                    self.embed_resources(&inputs)
+                } else {
+                    self.inner.embed_batch(requests)
+                }
+            }
+            fn embed_resources(
+                &self,
+                inputs: &[ResourceInput<'_>],
+            ) -> seyk_embed::Result<Vec<Embedding>> {
+                let background = inputs.iter().any(|input| {
+                    matches!(input,
+                    ResourceInput::Text { text, .. } if text.contains("watcher"))
+                });
+                if background && self.first.swap(false, Ordering::SeqCst) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(20))
+                        .unwrap();
+                }
+                // Fixed synthetic inference service time; no model or private data.
+                std::thread::sleep(Duration::from_millis(2 * inputs.len() as u64));
+                self.inner.embed_resources(inputs)
+            }
+        }
+
+        for files in [0, 64, 256] {
+            for sample in 1..=5 {
+                let temp = tempfile::tempdir().unwrap();
+                let a = temp.path().join("watched");
+                let b = temp.path().join("inline");
+                std::fs::create_dir(&a).unwrap();
+                std::fs::create_dir(&b).unwrap();
+                for i in 0..files {
+                    std::fs::write(
+                        a.join(format!("{i:04}.txt")),
+                        format!("watcher synthetic document {i:04} quartz pebble"),
+                    )
+                    .unwrap();
+                }
+                std::fs::write(b.join("query.txt"), "inline synthetic quartz pebble").unwrap();
+                let (entered_tx, entered_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let engine = Arc::new(
+                    SearchEngine::builder()
+                        .embedder(TimedEmbedder {
+                            inner: WordHash(
+                                ModelIdentity {
+                                    model_id: "test/word-hash".into(),
+                                    revision: "1".into(),
+                                    variant: "test".into(),
+                                    dimension: Dimension::D128,
+                                    normalization: "l2".into(),
+                                    query_prompt: String::new(),
+                                    document_prompt: String::new(),
+                                    max_tokens: 512,
+                                },
+                                Arc::new(AtomicUsize::new(0)),
+                            ),
+                            entered: entered_tx,
+                            release: Mutex::new(release_rx),
+                            first: std::sync::atomic::AtomicBool::new(true),
+                        })
+                        .cache(seyk::SqliteCache::open(temp.path().join("cache.db")).unwrap())
+                        .batch_size(16)
+                        .build()
+                        .unwrap(),
+                );
+                // The inline root has no watcher. A real Hub watcher owns only A.
+                let hub = Hub::new(Box::new(|| unreachable!()), false);
+                *hub.engine.lock().unwrap() = Some(engine.clone());
+                let server = SeykServer::new(vec![b.clone()], hub.clone()).unwrap();
+                if files > 0 {
+                    let a = a.canonicalize().unwrap();
+                    let cell = Arc::new(Mutex::new(IndexStatus::LoadingModel));
+                    hub.watched.lock().unwrap().push((a.clone(), cell.clone()));
+                    std::thread::spawn(move || hub.background_index(&a, &cell));
+                    entered_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+                }
+                let started = Instant::now();
+                let observations = Arc::new(Mutex::new(Vec::new()));
+                let recorded = observations.clone();
+                engine.observe_indexing_lease(Arc::new(move |event| {
+                    recorded.lock().unwrap().push((event, started.elapsed()));
+                    if event == LeaseEvent::Contended {
+                        release_tx.send(()).unwrap();
+                    }
+                }));
+                let response = server.run_search(params(&[b])).unwrap();
+                let elapsed = started.elapsed();
+                assert_eq!(response.segments_embedded, 1);
+                assert_eq!(response.hits.len(), 1);
+                let observed = observations.lock().unwrap();
+                let wait = if files == 0 {
+                    assert_eq!(observed.len(), 1);
+                    Duration::ZERO
+                } else {
+                    assert_eq!(observed[0].0, LeaseEvent::Contended);
+                    assert_eq!(observed[1].0, LeaseEvent::Acquired);
+                    observed[1].1 - observed[0].1
+                };
+                println!(
+                    "watcher_files={files} watcher_segments={files} inline_files=1 inline_segments=1 batch=16 synthetic_ms_per_segment=2 cache=sqlite sample={sample} inline_ms={:.3} lease_wait_ms={:.3}",
+                    elapsed.as_secs_f64() * 1000.0,
+                    wait.as_secs_f64() * 1000.0
+                );
+                // Hub watchers live for the process lifetime, as in production.
+                // Drop the observer before temporary roots disappear.
+                drop(observed);
+                engine.observe_indexing_lease(Arc::new(|_| {}));
+            }
+        }
+    }
+
     #[test]
     fn inline_sync_uses_requested_coverage_not_session_display_status() {
         // Fresh caches per case prove positive inline cases actually embed too.
