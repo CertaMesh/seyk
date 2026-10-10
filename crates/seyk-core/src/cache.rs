@@ -585,6 +585,8 @@ fn migrate_shared_fts(tx: &rusqlite::Transaction<'_>, profiles: &[String]) -> Re
 }
 
 /// Persistent cache in a single SQLite file.
+// All write transactions use IMMEDIATE: acquire the writer slot before any
+// comparison/read snapshot, so another connection cannot cause BUSY_SNAPSHOT.
 pub struct SqliteCache {
     conn: Connection,
     path: PathBuf,
@@ -592,6 +594,8 @@ pub struct SqliteCache {
     last_change: std::time::Instant,
     last_attempt: Option<std::time::Instant>,
     observed_generation: Option<String>,
+    #[cfg(test)]
+    after_vector_read: Option<Box<dyn FnMut() + Send>>,
 }
 
 impl SqliteCache {
@@ -658,6 +662,8 @@ impl SqliteCache {
             last_change: std::time::Instant::now(),
             last_attempt: None,
             observed_generation: None,
+            #[cfg(test)]
+            after_vector_read: None,
         };
         cache.migrate()?;
         Ok(cache)
@@ -695,7 +701,9 @@ impl SqliteCache {
     }
 
     fn scrub_pending_inner(&mut self, report: &mut CacheCleanup) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let profiles = tx
             .prepare("SELECT key,value FROM meta WHERE key GLOB 'fts_scrub_pending:*'")?
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -736,7 +744,9 @@ impl SqliteCache {
         }
         // This housekeeping may write new WAL frames, but they contain only live meta
         // records, never the deleted content removed by the completed checkpoint.
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         for (key, value) in &profiles {
             tx.execute(
                 "DELETE FROM meta WHERE key=?1 AND value=?2",
@@ -1095,7 +1105,9 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn register_profile(&mut self, id: &str, profile: &CacheProfile) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let inserted = tx.execute(
             "INSERT OR IGNORE INTO profiles (id, profile, dimension) VALUES (?1, ?2, ?3)",
             params![
@@ -1204,7 +1216,9 @@ impl EmbeddingCache for SqliteCache {
         resource: &ResourceWrite<'_>,
     ) -> Result<()> {
         let key = resource_key(path);
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let deleted = delete_fts_rows(&tx, profile, &key)?;
         let replaced = tx.execute(
             "DELETE FROM resources WHERE profile = ?1 AND path = ?2",
@@ -1272,7 +1286,9 @@ impl EmbeddingCache for SqliteCache {
         metadata: &ResourceMetadata,
         version: &ResourceVersion,
     ) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let changed = tx.execute(
             "UPDATE resources SET modified_ns = ?3, size_bytes = ?4, version = ?5, content_hash = ?6, modality = ?7, media_type = ?8 WHERE profile = ?1 AND path = ?2
             AND (modified_ns IS NOT ?3 OR size_bytes IS NOT ?4 OR version IS NOT ?5 OR content_hash IS NOT ?6 OR modality IS NOT ?7 OR media_type IS NOT ?8)",
@@ -1286,7 +1302,9 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn remove_resources(&mut self, profile: &str, paths: &[ResourceId]) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if !tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM profiles WHERE id = ?1)",
             [profile],
@@ -1326,7 +1344,9 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut overwritten = false;
         let mut changed = false;
         {
@@ -1341,6 +1361,10 @@ impl EmbeddingCache for SqliteCache {
                 let old: Option<Vec<u8>> = read
                     .query_row(params![profile, hash], |r| r.get(0))
                     .optional()?;
+                #[cfg(test)]
+                if let Some(observer) = &mut self.after_vector_read {
+                    observer();
+                }
                 if old.as_ref() == Some(&bytes) {
                     continue;
                 }
@@ -1439,7 +1463,9 @@ impl EmbeddingCache for SqliteCache {
     }
 
     fn prune_orphans(&mut self, profile: &str) -> Result<u64> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let n = tx.execute(
             "DELETE FROM embeddings WHERE profile = ?1 AND NOT EXISTS (
                  SELECT 1 FROM segments s WHERE s.profile = embeddings.profile AND s.input_hash = embeddings.input_hash)",
@@ -1489,7 +1515,9 @@ impl EmbeddingCache for SqliteCache {
 
     fn clear(&mut self) -> Result<()> {
         self.conn.flush_prepared_statement_cache();
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // Include orphan virtual tables, not just those still represented by profiles.
         let tables = tx.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'segments_fts_p_*' AND sql LIKE 'CREATE VIRTUAL TABLE%'")?
             .query_map([], |r| r.get::<_, String>(0))?
@@ -1510,7 +1538,9 @@ impl EmbeddingCache for SqliteCache {
             .conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
         if busy != 0 {
-            let tx = self.conn.transaction()?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             mark_cleanup(&tx, None)?;
             tx.commit()?;
             return Err(Error::CacheCleanupPending);
@@ -1611,6 +1641,117 @@ mod guard_tests {
 mod scrub_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn sync_serializes_external_writer_between_vector_read_and_insert() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct SyntheticEmbedder(crate::ModelIdentity);
+        impl crate::Embedder for SyntheticEmbedder {
+            fn identity(&self) -> &crate::ModelIdentity {
+                &self.0
+            }
+            fn supports(&self, modality: Modality) -> bool {
+                modality == Modality::Text
+            }
+            fn embed_batch(
+                &self,
+                requests: &[seyk_embed::EmbeddingRequest<'_>],
+            ) -> seyk_embed::Result<Vec<crate::Embedding>> {
+                requests
+                    .iter()
+                    .map(|_| crate::Embedding::from_raw(vec![1.0; 128], crate::Dimension::D128))
+                    .collect()
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cache.sqlite3");
+        let file = temp.path().join("synthetic.txt");
+        std::fs::write(&file, "synthetic alpha garden words").unwrap();
+        let mut cache = SqliteCache::open(&path).unwrap();
+        let writer = Arc::new(Mutex::new(Connection::open(&path).unwrap()));
+        writer.lock().unwrap().busy_timeout(Duration::ZERO).unwrap();
+
+        // Negative control: the exact deferred SELECT -> external commit -> INSERT
+        // ordering produces BUSY_SNAPSHOT, which a busy timeout cannot resolve.
+        let tx = cache.conn.transaction().unwrap();
+        tx.query_row("SELECT count(*) FROM embeddings", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap();
+        writer
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO meta(key,value) VALUES('interleaving_control','committed')",
+                [],
+            )
+            .unwrap();
+        let error = tx
+            .execute(
+                "INSERT INTO meta(key,value) VALUES('stale_snapshot','write')",
+                [],
+            )
+            .unwrap_err();
+        match error {
+            rusqlite::Error::SqliteFailure(code, _) => {
+                assert_eq!(code.extended_code, rusqlite::ffi::SQLITE_BUSY_SNAPSHOT)
+            }
+            other => panic!("expected BUSY_SNAPSHOT, got {other}"),
+        }
+        tx.rollback().unwrap();
+
+        // Stop the actual sync after its vector SELECT and attempt the same external
+        // commit before INSERT. IMMEDIATE must serialize it behind the sync writer.
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = attempts.clone();
+        let external = writer.clone();
+        cache.after_vector_read = Some(Box::new(move || {
+            let error = external
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO meta(key,value) VALUES('external_writer','committed')",
+                    [],
+                )
+                .unwrap_err();
+            assert!(sqlite_busy(&error));
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        let engine = crate::SearchEngine::builder()
+            .embedder(SyntheticEmbedder(crate::ModelIdentity {
+                model_id: "test/interleaving".into(),
+                revision: "1".into(),
+                variant: "synthetic".into(),
+                dimension: crate::Dimension::D128,
+                normalization: "l2".into(),
+                query_prompt: String::new(),
+                document_prompt: String::new(),
+                max_tokens: 512,
+            }))
+            .cache(cache)
+            .build()
+            .unwrap();
+        let result = engine.index().paths([&file]).execute().unwrap();
+        assert_eq!(result.sync.resources_updated, 1);
+        assert!(attempts.load(Ordering::SeqCst) > 0);
+        // The external commit succeeds after the sync releases its write lease.
+        writer
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO meta(key,value) VALUES('external_writer','committed')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            engine.with_cache(|c| c.stats()).unwrap().profiles[0].embeddings,
+            1
+        );
+    }
 
     #[test]
     fn idle_scrub_observes_other_writers_and_throttles_busy_retries() {

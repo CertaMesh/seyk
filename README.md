@@ -543,9 +543,10 @@ the keyword index (a SQLite FTS5 table) stores **which words occur in each passa
 and how often, not their order**. Each field is tokenized and sorted before it
 is indexed. These word frequencies are still sensitive, like embeddings. The
 cache directory is created `0700` and the file `0600`. SQLite
-`secure_delete=ON` always zeroes deleted ordinary records. Deleted keyword
-postings and historical WAL frames are **erased after the next scrub**, not
-necessarily when a file is removed or replaced. A scrub runs FTS5 `optimize`
+`secure_delete=ON` zeroes deleted ordinary records in updated pages. Earlier
+page images in the main database and WAL, along with deleted keyword postings,
+are **erased after the next scrub**, not necessarily when a file is removed or
+replaced. A scrub runs FTS5 `optimize`
 for each pending profile, then checks a WAL TRUNCATE checkpoint. Forensic tests
 with the bundled SQLite verify removal of readable prefix-compressed suffixes,
 not just whole token strings. A word still present in another live record remains
@@ -554,10 +555,12 @@ indexed. Scrub cost depends on the profile's index size.
 A scrub happens at the end of a one-shot `seyk index` or `seyk search` command,
 when cleanup is pending. Watcher, daemon and MCP use a background worker after
 about **60 seconds with no further changes**; it never scrubs inline in an MCP
-request or during an indexing pass. Further writes, including fresh inserts
-while cleanup is already pending, postpone it. Continuous changes can delay
+request or during an indexing pass. A running scrub holds the cache mutex, so
+a concurrent request can wait for it to finish. Further writes, including fresh
+inserts while cleanup is already pending, postpone it. Continuous changes can delay
 scrubbing indefinitely. The worker retries blocked cleanup at roughly 60-second
-intervals. A short-lived MCP process may exit before its idle scrub runs.
+intervals. A short-lived MCP process, or a watcher stopped within about 60 seconds
+of its last change, may exit before its idle scrub runs; there is no scrub on exit.
 
 Run `seyk cache scrub` to scrub immediately without deleting live records.
 `seyk cache clear` deletes the entire index, runs `VACUUM`, and truncates the WAL,

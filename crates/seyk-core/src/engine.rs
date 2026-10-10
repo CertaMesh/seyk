@@ -164,7 +164,8 @@ pub enum ProgressEvent {
 
 /// Called without the cache mutex held. During embedding, the indexing lease
 /// is held: callbacks may inspect the cache or search with `sync(false)`, but
-/// must not synchronously start another indexing pass on the same engine.
+/// must not synchronously start another indexing pass or call `scrub_cache`
+/// on the same engine, since either would reacquire the indexing lease.
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
 
 pub struct SearchEngineBuilder {
@@ -482,8 +483,8 @@ impl SearchEngine {
     }
 
     /// Run a closure with exclusive access to the cache.
-    /// The closure must not start indexing, which acquires the indexing lease
-    /// before the cache mutex.
+    /// The closure must not start indexing or call `scrub_cache`: both acquire
+    /// the indexing lease before the cache mutex and would self-deadlock.
     pub fn with_cache<T>(&self, f: impl FnOnce(&mut dyn EmbeddingCache) -> Result<T>) -> Result<T> {
         let mut guard = self
             .cache
@@ -493,6 +494,9 @@ impl SearchEngine {
     }
 
     /// Explicit privacy scrub. Index/search requests never invoke this themselves.
+    ///
+    /// Do not call this from `with_cache` closures or indexing progress callbacks
+    /// on this engine: reacquiring the cache mutex or indexing lease would deadlock.
     pub fn scrub_cache(&self) -> Result<crate::cache::CacheCleanup> {
         let _lease = self
             .indexing
@@ -502,16 +506,38 @@ impl SearchEngine {
     }
 
     /// Start one idle-time worker for watcher/daemon/MCP use. It holds weak
-    /// references, never runs in a request, and does not outlive the engine.
+    /// references and never runs in a request. On engine drop it stops after its
+    /// current iteration; drop does not cancel or join an in-flight scrub.
     pub fn start_cache_scrubber(&self) {
+        self.start_cache_scrubber_with(
+            || {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                true
+            },
+            |cache| match cache.scrub_if_idle(std::time::Duration::from_secs(60)) {
+                Ok(Some(report)) if report.pending => eprintln!(
+                    "warning: cache scrub pending; run seyk cache scrub once other readers close"
+                ),
+                Err(error) => eprintln!("warning: cache scrub pending: {error}"),
+                _ => {}
+            },
+        );
+    }
+
+    // Injectable ticks and work make worker ownership/locking tests deterministic.
+    // Production supplies the one-second clock and the normal idle scrub above.
+    fn start_cache_scrubber_with(
+        &self,
+        mut tick: impl FnMut() -> bool + Send + 'static,
+        mut scrub: impl FnMut(&mut dyn EmbeddingCache) + Send + 'static,
+    ) -> Option<std::thread::JoinHandle<()>> {
         if self.scrubber_started.swap(true, Ordering::Relaxed) {
-            return;
+            return None;
         }
         let cache = Arc::downgrade(&self.cache);
         let indexing = Arc::downgrade(&self.indexing);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+        Some(std::thread::spawn(move || {
+            while tick() {
                 let (Some(cache), Some(indexing)) = (cache.upgrade(), indexing.upgrade()) else {
                     break;
                 };
@@ -520,15 +546,9 @@ impl SearchEngine {
                     continue;
                 };
                 let Ok(mut cache) = cache.lock() else { break };
-                match cache.scrub_if_idle(std::time::Duration::from_secs(60)) {
-                    Ok(Some(report)) if report.pending => eprintln!(
-                        "warning: cache scrub pending; run seyk cache scrub once other readers close"
-                    ),
-                    Err(error) => eprintln!("warning: cache scrub pending: {error}"),
-                    _ => {}
-                }
+                scrub(cache.as_mut());
             }
-        });
+        }))
     }
 
     /// Make sure every resource has up-to-date vectors in the cache.
@@ -2222,6 +2242,164 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn worker_engine() -> SearchEngine {
+        struct NoInference(crate::ModelIdentity);
+        impl Embedder for NoInference {
+            fn identity(&self) -> &crate::ModelIdentity {
+                &self.0
+            }
+            fn supports(&self, _: crate::Modality) -> bool {
+                true
+            }
+            fn embed_batch(
+                &self,
+                _: &[EmbeddingRequest<'_>],
+            ) -> seyk_embed::Result<Vec<Embedding>> {
+                panic!("worker must not embed")
+            }
+        }
+        SearchEngine::builder()
+            .embedder(NoInference(crate::ModelIdentity {
+                model_id: "test/worker".into(),
+                revision: "1".into(),
+                variant: "test".into(),
+                dimension: crate::Dimension::D128,
+                normalization: "l2".into(),
+                query_prompt: String::new(),
+                document_prompt: String::new(),
+                max_tokens: 512,
+            }))
+            .build()
+            .unwrap()
+    }
+
+    // A waiting notification is also a barrier: the previous iteration has dropped
+    // its strong references and guards. No wall-clock sleeps are needed in tests.
+    fn worker_ticks() -> (
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+        impl FnMut() -> bool + Send,
+    ) {
+        let (ticks, receive) = std::sync::mpsc::channel();
+        let (waiting, waits) = std::sync::mpsc::channel();
+        (ticks, waits, move || {
+            waiting.send(()).unwrap();
+            receive.recv().is_ok()
+        })
+    }
+
+    fn worker_wait(waits: &std::sync::mpsc::Receiver<()>) {
+        waits
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+    }
+
+    #[test]
+    fn cache_worker_duplicate_start_runs_only_one_worker() {
+        use std::sync::atomic::AtomicUsize;
+        let engine = worker_engine();
+        let (ticks, waits, clock) = worker_ticks();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let observed = runs.clone();
+        let worker = engine
+            .start_cache_scrubber_with(clock, move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
+        worker_wait(&waits);
+        assert!(
+            engine
+                .start_cache_scrubber_with(
+                    || panic!("duplicate worker started"),
+                    |_| panic!("duplicate scrub")
+                )
+                .is_none()
+        );
+        engine.start_cache_scrubber();
+        ticks.send(()).unwrap();
+        worker_wait(&waits);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        drop(ticks);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cache_worker_excludes_active_indexing() {
+        use std::sync::atomic::AtomicUsize;
+        let engine = worker_engine();
+        let (ticks, waits, clock) = worker_ticks();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let observed = runs.clone();
+        let worker = engine
+            .start_cache_scrubber_with(clock, move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
+        worker_wait(&waits);
+        let indexing = engine.indexing.lock().unwrap();
+        ticks.send(()).unwrap();
+        worker_wait(&waits);
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        drop(indexing);
+        ticks.send(()).unwrap();
+        worker_wait(&waits);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        drop(ticks);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cache_worker_drop_while_sleeping_releases_cache_and_exits() {
+        let engine = worker_engine();
+        let weak_cache = Arc::downgrade(&engine.cache);
+        let weak_indexing = Arc::downgrade(&engine.indexing);
+        let (ticks, waits, clock) = worker_ticks();
+        let worker = engine
+            .start_cache_scrubber_with(clock, |_| {
+                panic!("must not scrub after a sleeping engine is dropped")
+            })
+            .unwrap();
+        worker_wait(&waits);
+        drop(engine);
+        assert!(weak_cache.upgrade().is_none());
+        assert!(weak_indexing.upgrade().is_none());
+        ticks.send(()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cache_worker_drop_while_active_finishes_only_current_iteration() {
+        let engine = worker_engine();
+        let weak_cache = Arc::downgrade(&engine.cache);
+        let weak_indexing = Arc::downgrade(&engine.indexing);
+        let (ticks, waits, clock) = worker_ticks();
+        let (entered, active) = std::sync::mpsc::channel();
+        let (finish, release) = std::sync::mpsc::channel();
+        let worker = engine
+            .start_cache_scrubber_with(clock, move |_| {
+                entered.send(()).unwrap();
+                release
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            })
+            .unwrap();
+        worker_wait(&waits);
+        ticks.send(()).unwrap();
+        worker_wait(&active);
+        drop(engine);
+        assert!(
+            weak_cache.upgrade().is_some(),
+            "in-flight iteration retains its cache"
+        );
+        assert!(weak_indexing.upgrade().is_some());
+        finish.send(()).unwrap();
+        worker_wait(&waits);
+        assert!(weak_cache.upgrade().is_none(), "released before next sleep");
+        assert!(weak_indexing.upgrade().is_none());
+        ticks.send(()).unwrap();
+        worker.join().unwrap();
+    }
 
     #[cfg(any(feature = "pdf", feature = "audio"))]
     #[test]
