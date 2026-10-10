@@ -20,12 +20,17 @@ pub struct WatchOptions {
     /// Wait this long after the last change before re-indexing, so a save burst
     /// or a `git checkout` triggers one pass instead of hundreds.
     pub debounce: Duration,
+    /// End after the initial pass so debug benchmarks can join the watcher.
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    pub stop_after_first_pass: bool,
 }
 
 impl Default for WatchOptions {
     fn default() -> Self {
         Self {
             debounce: Duration::from_millis(1500),
+            #[cfg(all(feature = "test-support", debug_assertions))]
+            stop_after_first_pass: false,
         }
     }
 }
@@ -69,6 +74,10 @@ pub fn watch(
 
     // Watch before the first pass so edits made during it are not lost.
     run(&mut on_pass);
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    if options.stop_after_first_pass {
+        return Ok(());
+    }
     // Both callbacks run serially in debounce_loop and share the reporter.
     let on_pass = RefCell::new(on_pass);
     debounce_loop(

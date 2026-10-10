@@ -261,7 +261,7 @@ impl SearchEngineBuilder {
             embedder,
             cache: Mutex::new(cache),
             indexing: Mutex::new(()),
-            #[cfg(feature = "test-support")]
+            #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
             segmenter: self.segmenter,
             profile,
@@ -288,7 +288,7 @@ pub struct SearchEngine {
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
     indexing: Mutex<()>,
-    #[cfg(feature = "test-support")]
+    #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
@@ -298,7 +298,7 @@ pub struct SearchEngine {
 }
 
 /// Test-only observations at the indexing lease boundary.
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "test-support", debug_assertions))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseEvent {
     /// A real try_lock failed while another pass held the lease.
@@ -306,17 +306,17 @@ pub enum LeaseEvent {
     Acquired,
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "test-support", debug_assertions))]
 type LeaseObserver = Arc<dyn Fn(LeaseEvent) + Send + Sync>;
 
 impl SearchEngine {
     /// Install a test observer. It must not start indexing on this engine.
-    #[cfg(feature = "test-support")]
+    #[cfg(all(feature = "test-support", debug_assertions))]
     pub fn observe_indexing_lease(&self, observer: LeaseObserver) {
         *self.lease_observer.lock().unwrap() = Some(observer);
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(all(feature = "test-support", debug_assertions))]
     fn observe_lease(&self, event: LeaseEvent) {
         let observer = self.lease_observer.lock().unwrap().clone();
         if let Some(observer) = observer {
@@ -325,7 +325,7 @@ impl SearchEngine {
     }
 
     fn acquire_indexing_lease(&self) -> Result<MutexGuard<'_, ()>> {
-        #[cfg(feature = "test-support")]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         {
             // The real mutex remains held through exactly the same interval.
             let guard = match self.indexing.try_lock() {
@@ -343,7 +343,7 @@ impl SearchEngine {
             self.observe_lease(LeaseEvent::Acquired);
             Ok(guard)
         }
-        #[cfg(not(feature = "test-support"))]
+        #[cfg(not(all(feature = "test-support", debug_assertions)))]
         self.indexing
             .lock()
             .map_err(|_| Error::Config("indexing lock poisoned".into()))

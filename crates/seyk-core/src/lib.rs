@@ -57,5 +57,5 @@ pub mod audio;
 
 mod cache_guards;
 
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "test-support", debug_assertions))]
 pub use engine::LeaseEvent;

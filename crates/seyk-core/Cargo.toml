@@ -8,7 +8,7 @@ description = "Local search, evidence and cache engine"
 
 [features]
 default = []
-# Observation hooks for concurrency tests; absent from normal/release builds.
+# Observation hooks for debug tests; compiled out of release even if enabled.
 test-support = []
 audio = ["dep:symphonia"]
 pdf = ["dep:pdf-extract", "dep:flate2"]

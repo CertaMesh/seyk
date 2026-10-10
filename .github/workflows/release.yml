@@ -7,7 +7,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock]
+    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py"]
   workflow_dispatch:
 
 permissions:
@@ -52,6 +52,10 @@ jobs:
 
       - name: Offline PDF extraction and panic containment smoke
         run: cargo test --release --locked --target ${{ matrix.target }} --test pdf_cli
+
+      - name: Check packaged binary has no test observer
+        if: runner.os != 'Windows'
+        run: python3 scripts/check_release_no_observer.py target/${{ matrix.target }}/release/seyk
 
       - name: Inspect linked libraries
         shell: bash

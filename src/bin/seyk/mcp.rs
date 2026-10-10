@@ -236,6 +236,15 @@ impl Hub {
     /// Index `root`, then keep it fresh, reporting into `cell`. Runs on its own
     /// thread for the hub's lifetime.
     fn background_index(&self, root: &Path, cell: &Mutex<IndexStatus>) {
+        self.background_index_with_options(root, cell, &WatchOptions::default());
+    }
+
+    fn background_index_with_options(
+        &self,
+        root: &Path,
+        cell: &Mutex<IndexStatus>,
+        options: &WatchOptions,
+    ) {
         let set = |s: IndexStatus| {
             if let Ok(mut g) = cell.lock() {
                 *g = s;
@@ -265,7 +274,7 @@ impl Hub {
             &engine,
             &[root.to_path_buf()],
             &DiscoveryOptions::default(),
-            &WatchOptions::default(),
+            options,
             Some(&progress),
             |pass| {
                 set(match pass {
@@ -1023,9 +1032,29 @@ mod tests {
     /// Run with: cargo test --bin seyk measure_disjoint_watcher_inline_sync -- --ignored --nocapture
     #[test]
     #[ignore = "synthetic latency measurement; no timing threshold"]
+    #[cfg(debug_assertions)]
     fn measure_disjoint_watcher_inline_sync() {
         use seyk_core::LeaseEvent;
         use std::sync::mpsc;
+
+        struct SampleWatcher(Option<std::thread::JoinHandle<()>>);
+        impl SampleWatcher {
+            fn join(mut self) {
+                if let Some(worker) = self.0.take() {
+                    worker.join().unwrap();
+                }
+            }
+        }
+        impl Drop for SampleWatcher {
+            fn drop(&mut self) {
+                if let Some(worker) = self.0.take() {
+                    let joined = worker.join();
+                    if !std::thread::panicking() {
+                        joined.unwrap();
+                    }
+                }
+            }
+        }
 
         struct TimedEmbedder {
             inner: WordHash,
@@ -1125,13 +1154,32 @@ mod tests {
                 let hub = Hub::new(Box::new(|| unreachable!()), false);
                 *hub.engine.lock().unwrap() = Some(engine.clone());
                 let server = SeykServer::new(vec![b.clone()], hub.clone()).unwrap();
-                if files > 0 {
+                let watcher = if files > 0 {
                     let a = a.canonicalize().unwrap();
                     let cell = Arc::new(Mutex::new(IndexStatus::LoadingModel));
                     hub.watched.lock().unwrap().push((a.clone(), cell.clone()));
-                    std::thread::spawn(move || hub.background_index(&a, &cell));
-                    entered_rx.recv_timeout(Duration::from_secs(20)).unwrap();
-                }
+                    let watcher = std::thread::spawn(move || {
+                        hub.background_index_with_options(
+                            &a,
+                            &cell,
+                            &WatchOptions {
+                                stop_after_first_pass: true,
+                                ..WatchOptions::default()
+                            },
+                        );
+                    });
+                    // Keep the handle even if the arrival signal fails, so cleanup joins.
+                    let arrival = entered_rx.recv_timeout(Duration::from_secs(20));
+                    if arrival.is_err() {
+                        let _ = release_tx.send(());
+                        watcher.join().unwrap();
+                        panic!("watcher did not enter its first batch: {arrival:?}");
+                    }
+                    Some(watcher)
+                } else {
+                    None
+                };
+                let watcher = SampleWatcher(watcher);
                 let started = Instant::now();
                 let observations = Arc::new(Mutex::new(Vec::new()));
                 let recorded = observations.clone();
@@ -1141,8 +1189,12 @@ mod tests {
                         release_tx.send(()).unwrap();
                     }
                 }));
-                let response = server.run_search(params(&[b])).unwrap();
+                let response = server.run_search(params(&[b]));
                 let elapsed = started.elapsed();
+                // Join while the temp roots and SQLite cache still exist, including
+                // if the search returned an error. No watcher survives a sample.
+                watcher.join();
+                let response = response.unwrap();
                 assert_eq!(response.segments_embedded, 1);
                 assert_eq!(response.hits.len(), 1);
                 let observed = observations.lock().unwrap();
@@ -1159,8 +1211,6 @@ mod tests {
                     elapsed.as_secs_f64() * 1000.0,
                     wait.as_secs_f64() * 1000.0
                 );
-                // Hub watchers live for the process lifetime, as in production.
-                // Drop the observer before temporary roots disappear.
                 drop(observed);
                 engine.observe_indexing_lease(Arc::new(|_| {}));
             }

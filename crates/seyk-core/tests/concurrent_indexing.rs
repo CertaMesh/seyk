@@ -1,3 +1,6 @@
+// Observation hooks are intentionally absent from optimized release builds.
+#![cfg(debug_assertions)]
+
 mod common;
 
 use std::fs;

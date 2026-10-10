@@ -76,6 +76,8 @@ name = "eval_corpus"
 required-features = ["onnx"]
 
 [profile.release]
+# Debug test-support instrumentation must never enter packaged binaries.
+debug-assertions = false
 lto = "thin"
 codegen-units = 1
 
