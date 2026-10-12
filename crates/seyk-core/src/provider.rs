@@ -3,7 +3,9 @@
 use crate::discovery::{DiscoveryOptions, ResourceKind, discover, modified_ns};
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs::{File, Metadata};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 /// Opaque freshness token. Unknown tokens never establish freshness.
 ///
@@ -145,10 +147,7 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
-        let path = file_path(id)?;
-        Ok(Box::new(
-            std::fs::File::open(&path).map_err(|e| Error::io(path, e))?,
-        ))
+        Ok(Box::new(open_local_content(&file_path(id)?)?))
     }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
         let paths = scope
@@ -172,7 +171,11 @@ impl ResourceProvider for FsProvider {
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;
-        std::fs::read(&path).map_err(|e| Error::io(path, e))
+        let mut file = open_local_content(&path)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| Error::io(path, e))?;
+        Ok(bytes)
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
         let path = file_path(id)?;
@@ -208,5 +211,94 @@ impl ResourceProvider for FsProvider {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
             Err(e) => Err(Error::io(path, e)),
         }
+    }
+}
+
+fn placeholder_marker(path: &Path) -> bool {
+    path.components().any(|part| {
+        let bytes = part.as_os_str().as_encoded_bytes();
+        bytes[bytes.len().saturating_sub(7)..].eq_ignore_ascii_case(b".icloud")
+    })
+}
+
+fn unavailable_content() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "unmaterialized local content is unavailable; choose a fully local copy",
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_materialized_flags(flags: u32) -> io::Result<()> {
+    // Darwin sys/stat.h: read-only synthetic SF_DATALESS, not a settable user flag.
+    const SF_DATALESS: u32 = 0x4000_0000;
+    if flags & SF_DATALESS != 0 {
+        Err(unavailable_content())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_content_metadata(metadata: &Metadata) -> io::Result<()> {
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "content source is not a regular file",
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::darwin::fs::MetadataExt;
+        ensure_materialized_flags(metadata.st_flags())?;
+    }
+    Ok(())
+}
+
+/// Check again for each content open; discovery/version metadata is never permission to read.
+/// This rejects observed placeholders before open and checks the actual descriptor afterward.
+/// A provider can still change materialization between check and open: this is not atomic
+/// protection against every hydration race. Ordinary explicit filesystem symlinks remain supported.
+fn open_local_content(path: &Path) -> Result<File> {
+    if placeholder_marker(path) {
+        return Err(Error::io(path, unavailable_content()));
+    }
+    let resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
+    if placeholder_marker(&resolved) {
+        return Err(Error::io(path, unavailable_content()));
+    }
+    let before = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
+    ensure_content_metadata(&before).map_err(|e| Error::io(path, e))?;
+    let mut options = File::options();
+    options.read(true);
+    // A substitution with a FIFO must not block before descriptor validation.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|e| Error::io(path, e))?;
+    let actual = file.metadata().map_err(|e| Error::io(path, e))?;
+    ensure_content_metadata(&actual).map_err(|e| Error::io(path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != actual.dev() || before.ino() != actual.ino() {
+            return Err(Error::ChangedWhileReading {
+                resource: ResourceId::from_path(path)?,
+            });
+        }
+    }
+    Ok(file)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod materialization_tests {
+    use super::*;
+    #[test]
+    fn darwin_dataless_flag_is_denied_without_manufacturing_a_cloud_file() {
+        assert!(ensure_materialized_flags(0x4000_0000).is_err());
+        assert!(ensure_materialized_flags(0x4000_8000).is_err());
+        assert!(ensure_materialized_flags(0).is_ok());
+        assert!(ensure_materialized_flags(0x8000).is_ok());
     }
 }
