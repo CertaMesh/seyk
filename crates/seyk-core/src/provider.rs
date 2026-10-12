@@ -229,7 +229,7 @@ fn unavailable_content() -> io::Error {
 }
 
 #[cfg(target_os = "macos")]
-fn ensure_materialized_flags(flags: u32) -> io::Result<()> {
+pub(crate) fn ensure_materialized_flags(flags: u32) -> io::Result<()> {
     // Darwin sys/stat.h: read-only synthetic SF_DATALESS, not a settable user flag.
     const SF_DATALESS: u32 = 0x4000_0000;
     if flags & SF_DATALESS != 0 {

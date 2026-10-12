@@ -222,6 +222,10 @@ enum Command {
         /// first. Implies --standalone.
         #[arg(long)]
         no_watch: bool,
+        /// Fixed local-content policy v1 with confined no-follow reads. Requires
+        /// explicit real directory roots; implies --standalone (Unix only).
+        #[arg(long)]
+        local_content: bool,
         #[command(flatten)]
         model: ModelArgs,
     },
@@ -531,8 +535,38 @@ fn run(cli: Cli) -> Result<ExitCode> {
             roots,
             standalone,
             no_watch,
+            local_content,
             model,
         } => {
+            if local_content {
+                #[cfg(not(unix))]
+                bail!("--local-content is only supported on Unix");
+                #[cfg(unix)]
+                {
+                    if roots.is_empty() {
+                        bail!("--local-content requires explicit directory roots");
+                    }
+                    let roots = roots
+                        .into_iter()
+                        .map(|p| {
+                            let p = seyk::expand_tilde(&p);
+                            if p.is_absolute() { p } else { cwd().join(p) }
+                        })
+                        .collect::<Vec<_>>();
+                    let provider = std::sync::Arc::new(
+                        seyk::local_content::LocalContentProvider::new(&roots)?,
+                    );
+                    let engine_provider = provider.clone();
+                    mcp::serve_local_content(
+                        provider,
+                        Box::new(move || {
+                            engine_with_provider(&model, false, Some(engine_provider.clone()))
+                        }),
+                        !no_watch,
+                    )?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
             let roots = default_paths(roots)?;
             #[cfg(unix)]
             if !standalone && !no_watch {
@@ -835,6 +869,14 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
 }
 
 fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
+    engine_with_provider(args, ephemeral, None)
+}
+
+fn engine_with_provider(
+    args: &ModelArgs,
+    ephemeral: bool,
+    provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
+) -> Result<SearchEngine> {
     let window = args.embedding_window()?;
     let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(|error| {
         if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
@@ -847,6 +889,10 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
         .embedder(embedder)
         .batch_size(window)
         .max_audio_duration_secs(args.max_audio_duration_secs);
+    let builder = match provider {
+        Some(provider) => builder.shared_provider(provider),
+        None => builder,
+    };
     #[cfg(feature = "audio-stt")]
     let builder = builder.audio_extractor(audio_extractor(
         args.stt_model_dir.as_deref(),
