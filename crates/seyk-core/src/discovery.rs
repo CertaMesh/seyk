@@ -142,6 +142,28 @@ impl Matcher {
     }
 }
 
+/// Match request globs without requiring a missing resource to exist. Excluding
+/// a directory also excludes its descendants, just as discovery prunes the walk.
+pub(crate) fn matches_scope_filters(
+    path: &Path,
+    root: &Path,
+    opts: &DiscoveryOptions,
+) -> Result<bool> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Ok(false);
+    };
+    let include = Matcher::new(&opts.include)?;
+    let exclude = Matcher::new(&opts.exclude)?;
+    if relative
+        .ancestors()
+        .filter(|p| !p.as_os_str().is_empty())
+        .any(|p| exclude.is_match(p))
+    {
+        return Ok(false);
+    }
+    Ok(include.empty || include.is_match(relative))
+}
+
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
 ///
 /// Files passed explicitly are always considered, even when hidden. Files with

@@ -5,17 +5,19 @@
 //! cloud-state or namespace snapshot: a directory can be renamed while traversed,
 //! and a file can become dataless between the precheck and content open.
 
-use crate::discovery::discover_with_policy;
+use crate::discovery::{discover_with_policy, matches_scope_filters};
 use crate::provider::ReadSeek;
 use crate::{
     Error, ProvidedResource, ResourceId, ResourceProvider, ResourceScope, ResourceVersion, Result,
 };
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Advertised by the opt-in MCP server. Incompatible policy changes require a new version.
 pub const LOCAL_CONTENT_POLICY_VERSION: u32 = 1;
@@ -96,6 +98,9 @@ struct Root {
 #[derive(Debug)]
 pub struct LocalContentProvider {
     roots: Vec<Root>,
+    // Keep the first verified directory identity for each requested deletion
+    // scope. Never adopt its replacement during this provider's lifetime.
+    deletion_roots: Mutex<HashMap<PathBuf, Arc<Root>>>,
 }
 
 fn denied(path: &Path) -> Error {
@@ -220,6 +225,15 @@ fn version(stat: &libc::stat) -> ResourceVersion {
     ))
 }
 
+// libc time_t and the nanosecond field can independently be i32 or i64.
+// Normalize both before arithmetic; unknown timestamps do not exclude a file.
+fn timestamp_ns(seconds: impl Into<i64>, nanos: impl Into<i64>) -> Option<i64> {
+    seconds
+        .into()
+        .checked_mul(1_000_000_000)?
+        .checked_add(nanos.into())
+}
+
 impl LocalContentProvider {
     pub fn new(paths: &[PathBuf]) -> Result<Self> {
         if paths.is_empty() {
@@ -240,7 +254,10 @@ impl LocalContentProvider {
                 identity,
             });
         }
-        Ok(Self { roots })
+        Ok(Self {
+            roots,
+            deletion_roots: Mutex::new(HashMap::new()),
+        })
     }
     /// Exact, non-canonicalized scope names validated when the provider was created.
     pub fn roots(&self) -> Vec<PathBuf> {
@@ -317,6 +334,26 @@ impl LocalContentProvider {
         let (directory, name) = self.parent(path)?;
         open_at(&directory, &name, false).map_err(|e| Error::io(path, e))
     }
+    fn directory(&self, path: &Path) -> Result<File> {
+        let root = self.root_for(path)?;
+        if path == root.path {
+            self.validate_root(root)?;
+            return root.directory.try_clone().map_err(|e| Error::io(path, e));
+        }
+        let (directory, name) = self.parent(path)?;
+        open_at(&directory, &name, true).map_err(|e| Error::io(path, e))
+    }
+    fn validate_deletion_root(&self, root: &Root) -> Result<()> {
+        let current = self.directory(&root.path)?;
+        if identity(&descriptor_stat(&current).map_err(|e| Error::io(&root.path, e))?)
+            != root.identity
+        {
+            return Err(Error::ChangedWhileReading {
+                resource: ResourceId::from_path(&root.path)?,
+            });
+        }
+        Ok(())
+    }
 }
 impl ResourceProvider for LocalContentProvider {
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
@@ -342,10 +379,7 @@ impl ResourceProvider for LocalContentProvider {
                     id: ResourceId::from_path(&r.path).ok()?,
                     kind: r.kind,
                     size_bytes: stat.st_size as u64,
-                    modified_ns: stat
-                        .st_mtime
-                        .checked_mul(1_000_000_000)?
-                        .checked_add(stat.st_mtime_nsec),
+                    modified_ns: timestamp_ns(stat.st_mtime, stat.st_mtime_nsec),
                     version: version(&stat),
                     title: r.path.file_stem().map(|s| s.to_string_lossy().into_owned()),
                 }))
@@ -384,6 +418,107 @@ impl ResourceProvider for LocalContentProvider {
         ensure_kind(&stat, false).map_err(|e| Error::io(&path, e))?;
         Ok(version(&stat))
     }
-    // Excluded or unavailable entries are conservatively retained, never treated
-    // as deletion. Each future content access still applies the fixed policy.
+    fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
+        let mut verified = Vec::new();
+        for id in &scope.roots {
+            let path = id
+                .to_file_path()
+                .ok_or_else(|| Error::Config("local-content requires file resources".into()))?;
+            let directory = self.directory(&path)?;
+            let identity = identity(&descriptor_stat(&directory).map_err(|e| Error::io(&path, e))?);
+            verified.push(Root {
+                path,
+                directory,
+                identity,
+            });
+        }
+        let mut anchors = self
+            .deletion_roots
+            .lock()
+            .map_err(|_| Error::Config("deletion scope lock poisoned".into()))?;
+        for root in verified {
+            if let Some(pinned) = anchors.get(&root.path) {
+                if root.identity != pinned.identity {
+                    return Err(Error::ChangedWhileReading {
+                        resource: ResourceId::from_path(&root.path)?,
+                    });
+                }
+            } else {
+                anchors.insert(root.path.clone(), Arc::new(root));
+            }
+        }
+        Ok(scope.clone())
+    }
+    fn is_deleted(&self, id: &ResourceId, scope: &ResourceScope) -> Result<bool> {
+        let Some(path) = id.to_file_path() else {
+            return Ok(false);
+        };
+        if !scope.contains(id) {
+            return Ok(false);
+        }
+        let Ok(configured_root) = self.root_for(&path) else {
+            return Ok(false);
+        };
+        let mut eligible = Vec::new();
+        for id in &scope.roots {
+            let Some(root) = id.to_file_path() else {
+                continue;
+            };
+            if path.starts_with(&root) && matches_scope_filters(&path, &root, &scope.discovery)? {
+                eligible.push(root);
+            }
+        }
+        let Some(root) = eligible.into_iter().max_by_key(|r| r.components().count()) else {
+            return Ok(false);
+        };
+        let pinned = self
+            .deletion_roots
+            .lock()
+            .map_err(|_| Error::Config("deletion scope lock poisoned".into()))?
+            .get(&root)
+            .cloned()
+            .ok_or_else(|| Error::Config("deletion scope has not been verified".into()))?;
+        self.validate_root(configured_root)?;
+        self.validate_deletion_root(&pinned)?;
+        let mut directory = pinned
+            .directory
+            .try_clone()
+            .map_err(|e| Error::io(&path, e))?;
+        let relative = path.strip_prefix(&root).map_err(|_| denied(&path))?;
+        let mut parts = relative.components().peekable();
+        while let Some(Component::Normal(name)) = parts.next() {
+            match stat_at(&directory, name) {
+                Ok(_) if parts.peek().is_none() => return Ok(false),
+                Ok(_) => {
+                    directory = open_at(&directory, name, true).map_err(|e| Error::io(&path, e))?
+                }
+                Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
+                    // A missing child never authorizes deletion if either the
+                    // configured root or requested scope changed during the walk.
+                    self.validate_root(configured_root)?;
+                    self.validate_deletion_root(&pinned)?;
+                    return Ok(true);
+                }
+                Err(e) => return Err(Error::io(&path, e)),
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::timestamp_ns;
+    #[test]
+    fn native_i32_and_i64_timestamp_fields_produce_i64_nanoseconds() {
+        let expected: Option<i64> = Some(2_000_000_007);
+        assert_eq!(timestamp_ns(2_i32, 7_i32), expected);
+        assert_eq!(timestamp_ns(2_i64, 7_i32), expected);
+        assert_eq!(timestamp_ns(2_i64, 7_i64), expected);
+        assert_eq!(
+            timestamp_ns(i32::MAX, 7_i32),
+            Some(2_147_483_647_000_000_007)
+        );
+        assert_eq!(timestamp_ns(i64::MAX, 0_i32), None);
+    }
 }
