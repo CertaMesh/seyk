@@ -149,19 +149,36 @@ pub(crate) fn matches_scope_filters(
     root: &Path,
     opts: &DiscoveryOptions,
 ) -> Result<bool> {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return Ok(false);
-    };
-    let include = Matcher::new(&opts.include)?;
-    let exclude = Matcher::new(&opts.exclude)?;
-    if relative
-        .ancestors()
-        .filter(|p| !p.as_os_str().is_empty())
-        .any(|p| exclude.is_match(p))
-    {
-        return Ok(false);
+    Ok(ScopeFilters::new(opts)?.matches(path, root))
+}
+
+/// Compile once for a cached-identity query; excludes prune ancestors too.
+pub(crate) struct ScopeFilters {
+    include: Matcher,
+    exclude: Matcher,
+}
+
+impl ScopeFilters {
+    pub(crate) fn new(opts: &DiscoveryOptions) -> Result<Self> {
+        Ok(Self {
+            include: Matcher::new(&opts.include)?,
+            exclude: Matcher::new(&opts.exclude)?,
+        })
     }
-    Ok(include.empty || include.is_match(relative))
+
+    pub(crate) fn matches(&self, path: &Path, root: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        if relative
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .any(|p| self.exclude.is_match(p))
+        {
+            return false;
+        }
+        self.include.empty || self.include.is_match(relative)
+    }
 }
 
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
