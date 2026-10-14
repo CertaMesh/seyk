@@ -14,6 +14,13 @@ try:
     for line in sys.stdin:
         request = json.loads(line)
         start = time.perf_counter()
+        if request.get("op") == "status":
+            manager = searcher.passage_manager
+            paths = {manager.get_passage(key)["metadata"]["file_path"]
+                     for offsets in manager.offset_maps.values() for key in offsets}
+            protocol.write(json.dumps({"id": request["id"], "paths": sorted(paths),
+                                       "passages": len(manager)}) + "\n")
+            continue
         hits = searcher.search(request["q"], top_k=200)
         protocol.write(json.dumps({"id": request["id"], "hits": [
             {"path": h.metadata["file_path"], "score": float(h.score)} for h in hits

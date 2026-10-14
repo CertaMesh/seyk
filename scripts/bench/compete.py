@@ -107,7 +107,7 @@ def environment(work):
                XDG_CONFIG_HOME=str(work / "config"), HF_HOME=str(INSTALL / "hf"),
                HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
                TOKENIZERS_PARALLELISM="false", OMP_NUM_THREADS="2", MKL_NUM_THREADS="2",
-               LEANN_EMBEDDING_DEVICE="cpu", LEANN_EMBEDDING_SERVER_HOST="127.0.0.1",
+               LEANN_EMBEDDING_DEVICE="cpu", LEANN_CPU_THREADS="1", LEANN_EMBEDDING_SERVER_HOST="127.0.0.1",
                DIGUP_MODELS=str(INSTALL / "digup-models"), QMD_LLAMA_GPU="metal",
                QMD_EMBED_PARALLELISM="2", GGML_METAL_NO_RESIDENCY="1", NO_COLOR="1")
     return env
@@ -212,8 +212,9 @@ def commands(tool, work, corpus):
         return ([executable, "index", corpus, "--include-datasets", "--index", work / "index"],
                 [executable, "search-service", corpus, "--index", work / "index"])
     return ([INSTALL / "leann-env/bin/leann", "build", "bench", "--docs", corpus,
+             "--include-hidden", "--file-types", ".txt",
              "--embedding-model", INSTALL / "leann-models", "--embedding-mode", "sentence-transformers",
-             "--backend-name", "hnsw", "--num-threads", "2"],
+             "--backend-name", "hnsw", "--num-threads", "1"],
             [INSTALL / "leann-env/bin/python", HERE / "leann_worker.py",
              work / ".leann/indexes/bench/documents.leann"])
 
@@ -234,6 +235,8 @@ def run(args):
     work = bench.confined(bench.ROOT / "competitor-runs" / args.label / tool / ds)
     work.mkdir(parents=True, exist_ok=True)
     env = environment(work)
+    if tool == "leann":
+        env.update(OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
     index_command, query_command = commands(tool, work, corpus)
     marker = work / "indexed.json"
     identity = {"tool": tool, "version": VERSIONS[tool], "manifest_blake3": manifest_hash, **provenance}
@@ -250,7 +253,13 @@ def run(args):
                     bench.require(mode == "bm25" or reply["status"]["needsEmbedding"] == 0, "incomplete QMD embeddings")
                 else:
                     run_index(index_command, work, env, log, args.timeout)
-                bench.write_json(marker, {**identity, "index_ms": (time.monotonic() - start) * 1000,
+                index_ms = (time.monotonic() - start) * 1000
+                if tool == "leann":
+                    worker = Worker(query_command, work, env, log)
+                    status = worker.request({"op": "status"})
+                    bench.require(set(status["paths"]) == {str(corpus / name) for name in manifest["files"]},
+                                  "incomplete LEANN index")
+                bench.write_json(marker, {**identity, "index_ms": index_ms,
                     "vectors": mode != "bm25", "load_before": load, "load_after": os.getloadavg(), "offline": proof})
                 print(marker)
                 return
@@ -268,7 +277,7 @@ def run(args):
                 "profile_id": f"{tool}-{VERSIONS[tool]}-{mode}", "depth": 200,
                 "lexical_weight": None, "manifest_blake3": manifest_hash, "run_id": run_id,
                 "threads": 1 if tool == "leann" else 2, "competitor": tool, "competitor_version": VERSIONS[tool],
-                "thread_settings": {"leann": "LEANN forces OMP/MKL=1; index num_threads=2",
+                "thread_settings": {"leann": "LEANN_CPU_THREADS=1; OMP/MKL/OPENBLAS=1; index num_threads=1",
                     "qmd": "QMD embedding parallelism=2; native runtime defaults",
                     "digup": "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"}[tool],
                 "competitor_mode": mode, "hardware_path": "CPU" if tool == "leann" or mode == "bm25" else "Metal",

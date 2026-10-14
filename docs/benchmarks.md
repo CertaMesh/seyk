@@ -465,6 +465,15 @@ files. A silent keyword fallback is an error. LEANN's `contriever` mode explicit
 selects local Contriever with its stock HNSW CLI ingestion/chunking and persistent
 search API on CPU; Contriever is not the current macOS CLI default (MiniLM is).
 Its embedding process is started inside the sandbox, without reusing a daemon.
+LEANN receives `--include-hidden --file-types .txt` because its directory reader
+otherwise filters files under the harness's `.cache` ancestor. The adapter first
+checks that the corpus contains exactly the manifest's files, then verifies that
+every file appears in the built passage metadata. The reported index time excludes
+this post-build integrity check. LEANN uses one CPU thread for PyTorch, HNSW and
+OpenMP/BLAS: the initial multi-thread configuration crashed in `libomp` during model
+initialization, matching the stack in this [upstream PyTorch/Faiss issue](https://github.com/pytorch/pytorch/issues/149201).
+The one-thread configuration passed offline indexing and retrieval. Treat its
+timings as measurements of this configuration, not maximum LEANN throughput.
 
 Mapping uses the opaque corpus filename, never QMD's content-derived docid.
 Unexpected paths, unknown document keys, invalid scores or incomplete indexing

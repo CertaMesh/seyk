@@ -118,6 +118,38 @@ class Tests(unittest.TestCase):
                 self.assertEqual(worker.return_value.request.call_count, 3)
                 bench.score("scifact", [out])
 
+    def test_leann_success_exit_cannot_publish_an_incomplete_index(self):
+        bench.ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=bench.ROOT) as directory:
+            root = Path(directory)
+            corpus = root / "corpus/scifact"
+            corpus.mkdir(parents=True)
+            files = {}
+            for key in self.docmap:
+                name = key + ".txt"
+                (corpus / name).write_text("Synthetic fixture")
+                files[name] = compete.blake3.blake3(b"Synthetic fixture").hexdigest()
+            manifest = {"files": files}
+            meta = root / "meta/scifact"
+            meta.mkdir(parents=True)
+            (meta / "manifest.json").write_text(json.dumps(manifest))
+            args = SimpleNamespace(tool="leann", dataset="scifact", mode="contriever",
+                                   phase="index", label="fixture", timeout=30, max_queries=2)
+            with mock.patch.object(bench, "ROOT", root), \
+                 mock.patch.object(bench, "gold", return_value=(manifest, self.docmap, [])), \
+                 mock.patch.object(compete, "network_probe", return_value="fixture"), \
+                 mock.patch.object(compete, "installed_provenance", return_value={}), \
+                 mock.patch.object(compete, "run_index"), \
+                 mock.patch.object(compete, "Worker") as worker, mock.patch("sys.stdout"):
+                marker = root / "competitor-runs/fixture/leann/scifact/indexed.json"
+                worker.return_value.request.return_value = {"paths": [str(corpus / (self.a + ".txt"))]}
+                with self.assertRaisesRegex(ValueError, "incomplete LEANN"):
+                    compete.run(args)
+                self.assertFalse(marker.exists())
+                worker.return_value.request.return_value = {"paths": [str(corpus / name) for name in files]}
+                compete.run(args)
+                self.assertTrue(marker.is_file())
+
     def test_competitor_scored_with_same_metrics_without_seyk_bm25_band(self):
         bench.ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=bench.ROOT) as directory:
