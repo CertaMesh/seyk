@@ -858,10 +858,14 @@ fn local_content_server(
     hub: Arc<Hub>,
 ) -> Result<SeykServer> {
     let roots = provider.roots();
+    let resolved_roots = roots
+        .iter()
+        .map(|root| root.canonicalize())
+        .collect::<std::io::Result<Vec<_>>>()?;
     let watchers = hub.watch_roots(&roots)?;
     Ok(SeykServer {
         local_content: Some(provider),
-        resolved_roots: Arc::new(roots.clone()),
+        resolved_roots: Arc::new(resolved_roots),
         roots: Arc::new(roots),
         hub,
         watchers: Arc::new(watchers),
@@ -997,6 +1001,28 @@ mod tests {
             None => builder,
         };
         Ok(builder.build()?)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_content_root_validation_uses_stored_spelling() {
+        let temp = tempfile::Builder::new()
+            .prefix("local-content-case-")
+            .tempdir()
+            .unwrap();
+        let stored = temp.path().canonicalize().unwrap().join("scope");
+        std::fs::create_dir(&stored).unwrap();
+        let supplied = stored.with_file_name("SCOPE");
+        // Exercise the case-insensitive filesystem boundary when available.
+        if supplied.canonicalize().ok().as_ref() != Some(&stored) {
+            return;
+        }
+        let provider =
+            Arc::new(seyk::local_content::LocalContentProvider::new(&[supplied]).unwrap());
+        let server =
+            local_content_server(provider, Hub::new(Box::new(fake_engine), false)).unwrap();
+        server.validate_roots().unwrap();
+        assert_eq!(server.resolved_roots.as_ref(), &[stored]);
     }
 
     #[cfg(unix)]
