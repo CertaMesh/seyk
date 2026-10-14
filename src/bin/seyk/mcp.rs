@@ -1615,7 +1615,18 @@ mod tests {
         ] {
             assert!(confine(&path, &server.roots).is_err(), "{}", path.display());
         }
-        assert!(search(&server, "quartz").hits.is_empty());
+        // The permitted but unembedded sibling now triggers lexical fallback.
+        // The logical Docker config must still never enter the candidate set.
+        let response = search(&server, "quartz");
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            response.hits[0].resource.to_file_path().unwrap(),
+            store.join("safe.txt").canonicalize().unwrap()
+        );
+        assert_eq!(
+            response.degraded.unwrap().reason,
+            seyk::DegradedReason::NotYetEmbedded
+        );
         let old = serde_json::to_value(to_response(old)).unwrap();
         assert!(
             server
