@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 6;
+const JSON_SCHEMA_VERSION: u32 = 7;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -342,7 +342,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, no_cache)?;
+            let engine = search_engine(&model, no_cache)?;
             let paths = default_paths(paths)?;
             let progress = Progress::new(!json);
             let report = |e: ProgressEvent| progress.event(e);
@@ -540,7 +540,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::SUCCESS);
             }
             let _ = standalone;
-            mcp::serve_standalone(roots, Box::new(move || engine(&model, false)), !no_watch)?;
+            mcp::serve_standalone(
+                roots,
+                Box::new(move || search_engine(&model, false)),
+                !no_watch,
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         #[cfg(all(feature = "mcp", unix))]
@@ -549,7 +553,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             match action {
                 DaemonAction::Run { idle_minutes } => daemon::run(
                     &endpoint,
-                    Box::new(move || engine(&model, false)),
+                    Box::new(move || search_engine(&model, false)),
                     std::time::Duration::from_secs(idle_minutes * 60),
                 )?,
                 DaemonAction::Status { json } => match daemon::status(&endpoint)? {
@@ -791,9 +795,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=6)
+        Some(2..=7)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4, 5 or 6");
+        bail!("expected search JSON schema_version 2, 3, 4, 5, 6 or 7");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -832,6 +836,21 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
         config.vision = cfg!(feature = "image") && !args.text_only;
         config
     })
+}
+
+fn search_engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
+    match engine(args, ephemeral) {
+        Ok(engine) => Ok(engine),
+        Err(error)
+            if matches!(
+                error.downcast_ref::<seyk_embed::Error>(),
+                Some(seyk_embed::Error::ModelNotFound(_))
+            ) =>
+        {
+            Ok(SearchEngine::lexical()?)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
@@ -1114,6 +1133,14 @@ fn format_summary(r: &SearchResults) -> String {
         format_sync(&r.stats.sync),
         r.stats.total_ms as f64 / 1000.0
     );
+    if let Some(degraded) = r.degraded {
+        let reason = match degraded.reason {
+            seyk::DegradedReason::ModelLoading => "model loading",
+            seyk::DegradedReason::NotYetEmbedded => "files awaiting embeddings",
+            seyk::DegradedReason::NoModel => "model unavailable",
+        };
+        out.push_str(&format!("  Keyword and filename matches only ({reason})\n"));
+    }
     for s in r.stats.sync.skipped.iter().take(5) {
         out.push_str(&format!(
             "  skipped {}: {}\n",
@@ -1241,6 +1268,7 @@ mod tests {
 
     fn results() -> SearchResults {
         SearchResults {
+            degraded: None,
             queries: vec!["father".into()],
             mode: SearchMode::Semantic,
             hits: vec![
@@ -1390,7 +1418,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 6);
+        assert_eq!(v["schema_version"], 7);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1410,12 +1438,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["schema_version"], 7);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            6
+            7
         );
     }
 
@@ -1446,7 +1474,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["schema_version"], 7);
         assert!(
             value["hits"]
                 .as_array()

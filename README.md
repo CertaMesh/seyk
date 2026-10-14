@@ -98,7 +98,8 @@ seyk model info                # where they are, whether they are present
 This is the only command that uses the network. It fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
 standard Hugging Face cache. Searching never downloads anything: if the weights are
-missing it stops and tells you to run `model download`.
+missing, search returns keyword and filename matches with a `no_model` degradation marker.
+Run `model download` explicitly to enable semantic search. Indexing still requires weights.
 
 To use weights you already have, pass a directory with the same layout
 (`tokenizer.json`, `onnx/model_quantized.onnx` + `.onnx_data`, …):
@@ -184,8 +185,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4`, `5` or `6`, not a bare hit. The extraction document uses
-version 6 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5`, `6` or `7`, not a bare hit. The extraction document uses
+version 7 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -339,7 +340,12 @@ meaning.
 it to rank within one search; it is not a calibrated probability, and unrelated
 text rarely scores near zero, so pick a `--min-score` by looking at your own
 results. `--mode lexical` never embeds the query. The CLI still loads the model
-and uses it to index new or changed files before searching.
+and uses it to index new or changed files before searching when weights are available.
+Without weights, it builds an in-memory keyword index of text and PDF text without
+embedding. Search responses mark this as
+`"degraded": {"mode": "lexical_only", "reason": "no_model"}`. A requested semantic
+search also falls back and carries this marker; cosine thresholds do not filter
+keyword matches. Images, scanned PDF pages and audio require their normal models.
 
 ## Agents (MCP)
 
@@ -366,8 +372,10 @@ claude mcp add seyk -- seyk mcp .
 - **The model stays loaded.** After the first call, a search takes well under a
   second on a warm cache.
 - **Indexing runs in the background.** On start the server indexes its folders,
-  then re-indexes on change. Searches never wait for it: they answer from what is
-  already indexed and report `index.state` (`loading_model`, `indexing` with
+  then re-indexes on change. While the model loads or discovered files await
+  embedding, searches prepare keyword and filename matches from text and PDF text.
+  They report `degraded.reason` as `model_loading` or `not_yet_embedded`; the marker
+  disappears once semantic indexing catches up. They also report `index.state` (`loading_model`, `indexing` with
   progress, `ready`, `pass_failed` or `stopped`).
 - **Confined to its folders.** The tool refuses paths outside the folders the
   server was started with.
@@ -464,12 +472,18 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 6`.
+CLI JSON objects and MCP search responses include `schema_version: 7`.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
 See the [Phase 2 report](docs/architecture.md#phase-2-report-resource-identity-and-providers)
 for all API changes and cache upgrade details.
+
+Library callers can use `SearchEngine::lexical()?` without an embedder, or opt into
+`.sync(false).lexical_fallback(true)` while another thread indexes. The latter
+uses a separate in-memory keyword index for new or changed resources, leaving
+the semantic cache untouched. Ordinary `.sync(false)` remains cache-only. All
+surfaces use the same optional `degraded` object; ready results omit it.
 
 The engine uses `ResourceProvider` for enumeration, reads, freshness and deletion
 checks. `FsProvider` is the default. `ResourceProvider`, `ResourceScope`,

@@ -22,6 +22,7 @@ mod embedding;
 mod engine;
 mod error;
 pub mod extractor;
+mod lexical_engine;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 #[cfg(feature = "pdf")]
@@ -41,9 +42,10 @@ pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};
 pub use embedding::{Dimension, Embedding};
 pub use engine::{
-    IndexReport, IndexRequest, MatchSignals, PageDiagnostic, ProgressEvent, ProgressFn,
-    SearchEngine, SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults,
-    SearchStats, SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
+    DegradedMode, DegradedReason, IndexReport, IndexRequest, MatchSignals, PageDiagnostic,
+    ProgressEvent, ProgressFn, SearchDegradation, SearchEngine, SearchEngineBuilder, SearchHit,
+    SearchMode, SearchRequest, SearchResults, SearchStats, SkipCode, SkippedCount, SkippedResource,
+    SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
 pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};

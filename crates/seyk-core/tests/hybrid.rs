@@ -1112,3 +1112,163 @@ mod hydration {
         // TempDir removes the generated PDFs and SQLite cache on return.
     }
 }
+
+#[test]
+fn lexical_fallback_finds_unembedded_files_without_touching_semantic_cache() {
+    let root = corpus();
+    let (engine, counter) = engine(MemoryCache::new());
+    let before = engine.with_cache(|c| c.stats()).unwrap();
+    let results = engine
+        .search("INC-18372")
+        .query("father.md")
+        .paths([root.path()])
+        .sync(false)
+        .lexical_fallback(true)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        results.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NotYetEmbedded
+    );
+    assert!(results.hits.iter().any(|h| h.signals.lexical.is_some()));
+    assert!(results.hits.iter().any(|h| h.signals.filename));
+    assert!(results.hits.iter().all(|h| h.signals.semantic.is_none()));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+    assert_eq!(counter.queries.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(engine.with_cache(|c| c.stats()).unwrap()).unwrap()
+    );
+    for hit in &results.hits {
+        engine.extract(hit).unwrap();
+    }
+}
+
+#[test]
+fn ready_results_are_byte_identical_with_lexical_fallback_enabled() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    engine.index().paths([root.path()]).execute().unwrap();
+    for mode in [
+        SearchMode::Hybrid,
+        SearchMode::Lexical,
+        SearchMode::Semantic,
+    ] {
+        let request = |fallback| {
+            engine
+                .search("father")
+                .query("INC-18372")
+                .paths([root.path()])
+                .mode(mode)
+                .sync(false)
+                .lexical_fallback(fallback)
+                .execute()
+                .unwrap()
+        };
+        let mut baseline = request(false);
+        let mut candidate = request(true);
+        // Elapsed wall time is deliberately nondeterministic; every other byte,
+        // including hits, scores, signals, locators, previews and stats, must match.
+        baseline.stats.total_ms = 0;
+        candidate.stats.total_ms = 0;
+        assert!(candidate.degraded.is_none());
+        assert_eq!(
+            serde_json::to_vec(&baseline).unwrap(),
+            serde_json::to_vec(&candidate).unwrap()
+        );
+    }
+}
+
+#[test]
+fn model_free_lexical_search_refreshes_changes_and_honors_filters() {
+    let root = corpus();
+    let engine = SearchEngine::lexical().unwrap();
+    let request = || {
+        engine
+            .search("INC-18372")
+            .paths([root.path()])
+            .sync(false)
+            .execute()
+            .unwrap()
+    };
+    let first = request();
+    assert_eq!(
+        first.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NoModel
+    );
+    assert_eq!(first.hits.len(), 1);
+    fs::write(root.path().join("new.md"), "INC-18372 new evidence").unwrap();
+    assert_eq!(request().hits.len(), 2);
+    let filtered = engine
+        .search("INC-18372")
+        .paths([root.path()])
+        .exclude("new.md")
+        .execute()
+        .unwrap();
+    assert_eq!(filtered.hits.len(), 1);
+    assert_eq!(
+        engine.with_cache(|c| c.stats()).unwrap().profiles[0].embeddings,
+        0
+    );
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn model_free_pdf_words_and_names_have_extractable_page_locators() {
+    #[path = "support/pdf_fixture.rs"]
+    mod fixture;
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("quartz.pdf"),
+        fixture::pdf(&["quartz lighthouse keeper"], fixture::Kind::Plain),
+    )
+    .unwrap();
+    let engine = SearchEngine::lexical().unwrap();
+    let results = engine
+        .search("quartz")
+        .paths([root.path()])
+        .execute()
+        .unwrap();
+    assert_eq!(results.hits.len(), 1);
+    let hit = &results.hits[0];
+    assert!(hit.signals.lexical.is_some() && hit.signals.filename);
+    assert!(matches!(
+        hit.locator,
+        seyk_core::ResourceLocator::PageText { page: 1, .. }
+    ));
+    assert!(engine.extract(hit).unwrap().text.contains("quartz"));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+}
+
+#[test]
+fn fallback_search_in_embedding_callback_does_not_wait_for_indexing_lease() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    let checked = AtomicUsize::new(0);
+    let progress = |event| {
+        if matches!(event, seyk_core::ProgressEvent::Embedding { done: 0, total } if total > 0) {
+            let results = engine
+                .search("INC-18372")
+                .query("father.md")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap();
+            assert_eq!(
+                results.degraded.unwrap().reason,
+                seyk_core::DegradedReason::NotYetEmbedded
+            );
+            assert!(results.hits.iter().any(|hit| hit.signals.filename));
+            assert!(results.hits.iter().any(|hit| hit.signals.lexical.is_some()));
+            checked.fetch_add(1, Ordering::SeqCst);
+        }
+    };
+    engine
+        .index()
+        .paths([root.path()])
+        .progress(&progress)
+        .execute()
+        .unwrap();
+    assert_eq!(checked.load(Ordering::SeqCst), 1);
+}

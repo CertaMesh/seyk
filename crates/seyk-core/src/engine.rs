@@ -55,6 +55,37 @@ impl std::str::FromStr for SearchMode {
     }
 }
 
+/// Why a response contains only keyword and filename matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DegradedReason {
+    ModelLoading,
+    NotYetEmbedded,
+    NoModel,
+}
+
+/// Additive response metadata, shared by library, CLI JSON and MCP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchDegradation {
+    pub mode: DegradedMode,
+    pub reason: DegradedReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DegradedMode {
+    LexicalOnly,
+}
+
+impl SearchDegradation {
+    pub fn lexical(reason: DegradedReason) -> Self {
+        Self {
+            mode: DegradedMode::LexicalOnly,
+            reason,
+        }
+    }
+}
+
 /// Which signals found a hit, with their raw scores.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MatchSignals {
@@ -161,6 +192,9 @@ pub struct SearchResults {
     pub queries: Vec<String>,
     pub mode: SearchMode,
     pub hits: Vec<SearchHit>,
+    /// Present only when semantic retrieval was unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degraded: Option<SearchDegradation>,
     pub stats: SearchStats,
 }
 
@@ -287,6 +321,7 @@ impl SearchEngineBuilder {
             #[cfg(feature = "audio")]
             audio_extractor: self.audio_extractor,
             embedder,
+            lexical_only: false,
             cache: Arc::new(Mutex::new(cache)),
             indexing: Arc::new(Mutex::new(())),
             pdf_diagnostics: Mutex::new(HashMap::new()),
@@ -315,6 +350,7 @@ pub struct SearchEngine {
     #[cfg(feature = "audio")]
     audio_extractor: Option<crate::audio::AudioExtractor>,
     embedder: Arc<dyn Embedder>,
+    lexical_only: bool,
     cache: Arc<Mutex<Box<dyn EmbeddingCache>>>,
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
@@ -439,6 +475,24 @@ impl SearchEngine {
         Ok(guard)
     }
 
+    /// Search text and PDF text without model weights or stored vectors.
+    /// Uses an isolated in-memory keyword index; never downloads a model.
+    pub fn lexical() -> Result<Self> {
+        let mut engine = Self::builder()
+            .embedder(crate::lexical_engine::LexicalIdentity::default())
+            .build()?;
+        engine.lexical_only = true;
+        Ok(engine)
+    }
+
+    fn lexical_fallback(&self) -> Result<Self> {
+        let mut engine = Self::lexical()?;
+        engine.provider = self.provider.clone();
+        engine.segmenter = self.segmenter.clone();
+        engine.max_audio_duration_secs = self.max_audio_duration_secs;
+        Ok(engine)
+    }
+
     pub fn builder() -> SearchEngineBuilder {
         SearchEngineBuilder {
             provider: Arc::new(FsProvider),
@@ -550,6 +604,7 @@ impl SearchEngine {
             sync: true,
             mode: SearchMode::default(),
             lexical_weight: None,
+            lexical_fallback: false,
         }
     }
 
@@ -893,6 +948,12 @@ impl SearchEngine {
                 }),
                 Err(reason) => stats.skipped.push(skip(&r.id, reason)),
             }
+        }
+
+        if self.lexical_only {
+            self.write_resources(&pending, 0, pending.len(), &HashMap::new(), &mut stats)?;
+            stats.skipped_counts = skipped_counts(&stats.skipped);
+            return Ok(stats);
         }
 
         // Only inputs the cache has never seen go to the model.
@@ -1300,6 +1361,10 @@ impl SearchEngine {
         if batch.is_empty() {
             return Ok(None);
         }
+        if self.lexical_only {
+            records.extend(batch.drain(..).map(|j| (j.segment, j.lexical_body)));
+            return Ok(None);
+        }
         let hashes: Vec<_> = batch.iter().map(|j| j.segment.input_hash.clone()).collect();
         let already = self.with_cache(|c| c.known_inputs(&self.profile_id, &hashes))?;
         let mut queued = HashSet::new();
@@ -1684,6 +1749,7 @@ pub struct SearchRequest<'e> {
     sync: bool,
     mode: SearchMode,
     lexical_weight: Option<f32>,
+    lexical_fallback: bool,
 }
 
 impl<'e> SearchRequest<'e> {
@@ -1772,9 +1838,21 @@ impl<'e> SearchRequest<'e> {
         self
     }
 
-    pub fn execute(self) -> Result<SearchResults> {
+    /// Allow a cached search to prepare an ephemeral keyword index when any
+    /// supported resource is new or changed. Never waits for embedding or writes
+    /// to the semantic cache. Without this opt-in, `sync(false)` stays cache-only.
+    pub fn lexical_fallback(mut self, enabled: bool) -> Self {
+        self.lexical_fallback = enabled;
+        self
+    }
+
+    pub fn execute(mut self) -> Result<SearchResults> {
         let started = Instant::now();
         let engine = self.engine;
+        if engine.lexical_only {
+            self.sync = true;
+            self.mode = SearchMode::Lexical;
+        }
         if self
             .lexical_weight
             .is_some_and(|w| !w.is_finite() || w < 0.0)
@@ -1786,14 +1864,34 @@ impl<'e> SearchRequest<'e> {
         if self.paths.is_empty() && self.roots.is_empty() {
             return Err(Error::Config("no paths to search".into()));
         }
-        let mut discovery = self.discovery;
+        let mut discovery = self.discovery.clone();
         discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
-        let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
+        let scope = ResourceScope::from_paths(&self.paths, self.roots.clone(), discovery)?;
         let resources = engine.provider.list(&scope)?;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
             });
+        }
+        if self.lexical_fallback && !self.sync && !engine.lexical_only {
+            let cached = engine.with_cache(|c| c.resource_index(&engine.profile_id))?;
+            if resources.iter().any(|r| {
+                engine.supports_kind(r.kind)
+                    && !cached
+                        .get(&r.id)
+                        .is_some_and(|m| !r.version.is_known() || m.version.matches(&r.version))
+            }) {
+                let lexical = engine.lexical_fallback()?;
+                let mut results = SearchRequest {
+                    engine: &lexical,
+                    sync: true,
+                    ..self
+                }
+                .execute()?;
+                results.degraded = Some(SearchDegradation::lexical(DegradedReason::NotYetEmbedded));
+                results.stats.total_ms = started.elapsed().as_millis() as u64;
+                return Ok(results);
+            }
         }
         let mut sync = if self.sync {
             let indexing = engine.acquire_indexing_lease()?;
@@ -2019,6 +2117,9 @@ impl<'e> SearchRequest<'e> {
             queries: self.queries,
             mode: self.mode,
             hits,
+            degraded: engine
+                .lexical_only
+                .then(|| SearchDegradation::lexical(DegradedReason::NoModel)),
             stats: SearchStats {
                 sync,
                 segments_searched: searched,

@@ -1,6 +1,15 @@
 # MCP indexing and inline search latency
 
-A search covered by a running watcher uses the existing index. With no active
+A search covered by a running watcher uses the existing index once all discovered
+supported resources are current. While the model loads, it uses an independent
+in-memory keyword index and returns `degraded: {"mode": "lexical_only", "reason":
+"model_loading"}`. New or changed resources awaiting embedding trigger the same
+fallback with `reason: "not_yet_embedded"`. Missing weights use `reason: "no_model"`.
+The keyword index covers text and PDF text, respects request filters and root
+confinement, and creates no vectors. Preparing it still takes discovery and text
+parsing time; no hard latency bound is promised. Ready-state ranking is unchanged.
+
+CLI JSON, MCP and library results share this optional marker (protocol 7). With no active
 overlapping watcher, a search may sync inline, but it still shares the
 engine-wide indexing lease with watchers on disjoint roots. It can wait for an
 entire remaining pass, including resource commits and deletion/pruning. The
