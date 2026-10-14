@@ -624,21 +624,29 @@ fn opaque_pdf_provider_and_no_preview_reads() {
     assert_eq!(notes.reads.load(Ordering::SeqCst), before);
 }
 
+/// The refusal must come from the placeholder check itself. Ids are built on
+/// canonical paths (macOS temp directories sit behind the /var link), or the
+/// link refusal would make these tests pass without that check.
+fn assert_unmaterialized<T>(result: seyk_core::Result<T>, what: &str) {
+    match result {
+        Err(Error::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::PermissionDenied
+                && source.to_string().contains("unmaterialized") => {}
+        Err(other) => panic!("{what}: expected the placeholder refusal, got {other}"),
+        Ok(_) => panic!("{what}: placeholder content was admitted"),
+    }
+}
+
 #[test]
 fn filesystem_placeholder_markers_refuse_both_content_read_seams() {
     let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
     for suffix in ["document.txt.icloud", "document.txt.ICLOUD"] {
-        let path = temp.path().join(suffix);
+        let path = base.join(suffix);
         std::fs::write(&path, b"Synthetic unmaterialized-content sentinel").unwrap();
         let id = ResourceId::from_path(&path).unwrap();
-        assert!(
-            FsProvider.read(&id).is_err(),
-            "placeholder read was admitted"
-        );
-        assert!(
-            FsProvider.open(&id).is_err(),
-            "placeholder seekable open was admitted"
-        );
+        assert_unmaterialized(FsProvider.read(&id), "placeholder read");
+        assert_unmaterialized(FsProvider.open(&id), "placeholder seekable open");
     }
 }
 
@@ -686,13 +694,18 @@ fn symlinked_ids_fail_closed_but_explicit_symlink_roots_resolve_to_canonical_ids
         b"Synthetic local alias content"
     );
     assert!(FsProvider.open(&listed[0].id).is_ok());
-    // A placeholder behind an alias is denied either way.
+    // A placeholder behind an alias is denied either way: the alias id as a
+    // link, the canonical id it resolves to as unmaterialized content.
     std::fs::remove_file(&alias).unwrap();
     let placeholder = base.join("source.md.icloud");
     std::fs::write(&placeholder, b"Synthetic placeholder sentinel").unwrap();
     std::os::unix::fs::symlink(&placeholder, &alias).unwrap();
-    assert!(FsProvider.read(&id).is_err());
+    let error = FsProvider.read(&id).unwrap_err().to_string();
+    assert!(error.contains("symbolic link"), "{error}");
     assert!(FsProvider.open(&id).is_err());
+    let canonical = ResourceId::from_path(alias.canonicalize().unwrap()).unwrap();
+    assert_unmaterialized(FsProvider.read(&canonical), "placeholder read");
+    assert_unmaterialized(FsProvider.open(&canonical), "placeholder seekable open");
 }
 
 #[test]
@@ -719,14 +732,14 @@ fn fresh_listing_does_not_admit_missing_or_replaced_nonregular_content() {
 fn placeholder_ancestors_refuse_content_and_model_free_extraction() {
     use seyk_core::{Modality, ResourceLocator, ResourceMetadata, TextExtractor, extract_resource};
     let temp = tempfile::tempdir().unwrap();
-    let folder = temp.path().join("pending.icloud");
+    let folder = temp.path().canonicalize().unwrap().join("pending.icloud");
     std::fs::create_dir(&folder).unwrap();
     let path = folder.join("note.md");
     let bytes = b"Synthetic local bytes behind a placeholder marker";
     std::fs::write(&path, bytes).unwrap();
     let id = ResourceId::from_path(&path).unwrap();
-    assert!(FsProvider.read(&id).is_err());
-    assert!(FsProvider.open(&id).is_err());
+    assert_unmaterialized(FsProvider.read(&id), "placeholder ancestor read");
+    assert_unmaterialized(FsProvider.open(&id), "placeholder ancestor open");
     let metadata = ResourceMetadata {
         media_type: Some("text/plain".into()),
         modality: Modality::Text,
@@ -740,7 +753,10 @@ fn placeholder_ancestors_refuse_content_and_model_free_extraction() {
         line_start: None,
         line_end: None,
     };
-    assert!(extract_resource(&FsProvider, &TextExtractor, &id, &locator, &metadata).is_err());
+    assert_unmaterialized(
+        extract_resource(&FsProvider, &TextExtractor, &id, &locator, &metadata),
+        "placeholder ancestor extraction",
+    );
 }
 
 #[cfg(feature = "pdf")]
