@@ -1518,6 +1518,7 @@ mod tests {
         std::fs::create_dir(root.join("Library")).unwrap();
         std::fs::write(root.join("Library/hidden.txt"), "quartz excluded").unwrap();
         let missing = root.join("missing-model");
+        std::fs::create_dir(&missing).unwrap();
         let cli = Cli::try_parse_from([
             "seyk",
             "search",
