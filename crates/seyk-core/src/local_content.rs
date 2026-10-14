@@ -9,16 +9,17 @@ use crate::discovery::{
     ResourceKind, ScopeFilters, audio_byte_limit, discover_with_policy, ensure_allowed_path,
     matches_scope_filters,
 };
+use crate::pinned_dir::{
+    descriptor_stat, ensure_kind, identity, materialized, open_at, open_directory, stat_at,
+};
 use crate::provider::ReadSeek;
 use crate::{
     Error, ProvidedResource, ResourceId, ResourceListing, ResourceProvider, ResourceScope,
     ResourceVersion, Result,
 };
 use std::collections::HashMap;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -115,106 +116,6 @@ fn denied(path: &Path) -> Error {
             "path is outside the fixed local-content policy",
         ),
     )
-}
-fn c_name(name: &std::ffi::OsStr) -> io::Result<CString> {
-    CString::new(name.as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid filesystem name"))
-}
-fn stat_at(directory: &File, name: &std::ffi::OsStr) -> io::Result<libc::stat> {
-    let name = c_name(name)?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: live directory fd, NUL-terminated name, writable stat storage.
-    if unsafe {
-        libc::fstatat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            stat.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: successful fstatat initialized the complete output.
-    Ok(unsafe { stat.assume_init() })
-}
-fn descriptor_stat(file: &File) -> io::Result<libc::stat> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: live fd and writable output; success initializes the output.
-    if unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(unsafe { stat.assume_init() })
-}
-#[allow(clippy::unnecessary_cast)] // stat integer types vary between Unix targets.
-fn identity(stat: &libc::stat) -> (u64, u64) {
-    (stat.st_dev as u64, stat.st_ino as u64)
-}
-fn materialized(stat: &libc::stat) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    crate::provider::ensure_materialized_flags(stat.st_flags)?;
-    #[cfg(not(target_os = "macos"))]
-    let _ = stat;
-    Ok(())
-}
-fn ensure_kind(stat: &libc::stat, directory: bool) -> io::Result<()> {
-    let expected = if directory {
-        libc::S_IFDIR
-    } else {
-        libc::S_IFREG
-    };
-    if stat.st_mode & libc::S_IFMT != expected {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "local-content source has an unsupported type",
-        ));
-    }
-    materialized(stat)
-}
-fn open_at(directory: &File, name: &std::ffi::OsStr, is_dir: bool) -> io::Result<File> {
-    let before = stat_at(directory, name)?;
-    ensure_kind(&before, is_dir)?;
-    let name = c_name(name)?;
-    let flags = libc::O_RDONLY
-        | libc::O_NOFOLLOW
-        | libc::O_CLOEXEC
-        | libc::O_NONBLOCK
-        | if is_dir { libc::O_DIRECTORY } else { 0 };
-    // SAFETY: live directory fd and NUL-terminated name; no creation mode needed.
-    let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: successful openat returned a new fd owned only by this File.
-    let file = unsafe { File::from_raw_fd(fd) };
-    let after = descriptor_stat(&file)?;
-    ensure_kind(&after, is_dir)?;
-    if identity(&before) != identity(&after) {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "local-content path changed while opening",
-        ));
-    }
-    Ok(file)
-}
-fn open_directory(path: &Path) -> io::Result<File> {
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "local-content root must be an absolute normalized directory",
-        ));
-    }
-    let mut directory = File::open("/")?;
-    for c in path.components() {
-        if let Component::Normal(name) = c {
-            directory = open_at(&directory, name, true)?;
-        }
-    }
-    Ok(directory)
 }
 fn version(stat: &libc::stat) -> ResourceVersion {
     ResourceVersion::known(format!(

@@ -510,6 +510,56 @@ fn mcp_relays_through_a_daemon_it_starts() {
         .stdout(predicate::str::contains("Stopped."));
 }
 
+#[cfg(unix)]
+#[test]
+fn extract_reads_a_hit_found_through_a_symlinked_root() {
+    use seyk::{Dimension, ResourceId, SearchEngine};
+    let temp = TempDir::new().unwrap();
+    // Uncanonicalized: on macOS the root also passes through the /var alias.
+    std::fs::create_dir(temp.path().join("real")).unwrap();
+    let text = "quartz garden note behind a linked root\n";
+    std::fs::write(temp.path().join("real/note.md"), text).unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(temp.path().join("real"), &link).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "cli-link"))
+        .build()
+        .unwrap();
+    let results = engine
+        .search("quartz")
+        .paths([&link])
+        .previews(None)
+        .execute()
+        .unwrap();
+    let real = temp.path().join("real/note.md").canonicalize().unwrap();
+    assert_eq!(
+        results.hits[0].resource,
+        ResourceId::from_path(&real).unwrap()
+    );
+    let output = binary()
+        .args(["extract", "--from-json", "-", "--json"])
+        .env("SEYK_MODEL", temp.path().join("no-model"))
+        .env("HF_HUB_OFFLINE", "1")
+        .write_stdin({
+            let mut value = serde_json::to_value(&results).unwrap();
+            value["schema_version"] = 8.into();
+            value.to_string()
+        })
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let extracted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(text.contains(extracted["text"].as_str().unwrap()));
+    assert_eq!(
+        extracted["source"],
+        serde_json::to_value(&results.hits[0].resource).unwrap()
+    );
+}
+
 #[test]
 fn extract_round_trip_without_a_model() {
     use seyk::{Dimension, ResourceLocator, SearchEngine};

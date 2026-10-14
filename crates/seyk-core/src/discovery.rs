@@ -1,14 +1,12 @@
 //! Finding searchable resources under the paths a caller passes in.
 
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use caseless::Caseless;
 use unicode_normalization::UnicodeNormalization;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
-use walkdir::WalkDir;
 
 use crate::segment::TextFormat;
 use crate::{Error, Modality, Result};
@@ -531,77 +529,19 @@ pub(crate) fn discover_with_policy(
         walked_roots.push(root.clone());
         #[cfg(all(feature = "test-support", debug_assertions))]
         test_hooks::root_resolved(&logical_root);
-        let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
-        if meta.is_file() {
-            let kind =
-                ResourceKind::from_path(&root).unwrap_or(ResourceKind::Text(TextFormat::Plain));
-            if let Some(r) = to_resource(&root, kind, &meta, opts) {
-                out.push(r);
-            }
-            continue;
-        }
-
-        let walker = WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                // WalkDir never follows descendant links, so stored entry names
-                // need only the name policy. Do not resolve every ancestor again.
-                if e.file_type().is_symlink() {
-                    return false;
-                }
-                let rel = e.path().strip_prefix(&root).unwrap_or(e.path());
-                let is_dir = e.file_type().is_dir();
-                if secret_path(e.path(), is_dir)
-                    || secret_path(&logical_root.join(rel), is_dir)
-                    || (e.depth() == 1
-                        && checked
-                            .aliases
-                            .iter()
-                            .any(|alias| secret_path(&Path::new(alias).join(rel), is_dir)))
-                    || !allowed(e.path())
-                {
-                    return false;
-                }
-                if e.depth() == 0 {
-                    return true;
-                }
-                let name = e.file_name().to_string_lossy();
-                if !opts.include_hidden && name.starts_with('.') {
-                    return false;
-                }
-                if e.file_type().is_dir()
-                    && opts.default_excludes
-                    && DEFAULT_EXCLUDED_DIRS.contains(&name.as_ref())
-                {
-                    return false;
-                }
-                let rel = e.path().strip_prefix(&root).unwrap_or(e.path());
-                !exclude.is_match(rel)
-            });
-
-        for entry in walker {
-            let entry = match entry {
-                Ok(e) => e,
-                // Unreadable directories are skipped rather than failing the whole search.
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let rel = path.strip_prefix(&root).unwrap_or(path);
-            if !include.empty && !include.is_match(rel) {
-                continue;
-            }
-            let Some(kind) = ResourceKind::from_path(path) else {
-                continue;
-            };
-            let Ok(meta) = entry.metadata() else { continue };
-            if let Some(r) = to_resource(path, kind, &meta, opts) {
-                out.push(r);
-            }
-        }
+        let filters = WalkFilters {
+            root: &root,
+            logical_root: &logical_root,
+            aliases: &checked.aliases,
+            opts,
+            include: &include,
+            exclude: &exclude,
+            allowed: &allowed,
+        };
+        #[cfg(unix)]
+        walk_root_pinned(&filters, &mut out)?;
+        #[cfg(not(unix))]
+        walk_root_by_path(&filters, &mut out)?;
     }
 
     out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -612,6 +552,300 @@ pub(crate) fn discover_with_policy(
     })
 }
 
+/// One resolved root and every filter its walk applies.
+struct WalkFilters<'a, F> {
+    root: &'a Path,
+    logical_root: &'a Path,
+    aliases: &'a [std::ffi::OsString],
+    opts: &'a DiscoveryOptions,
+    include: &'a Matcher,
+    exclude: &'a Matcher,
+    allowed: &'a F,
+}
+
+impl<F: Fn(&Path) -> bool> WalkFilters<'_, F> {
+    /// Whether to visit an entry and, for a directory, descend into it.
+    /// Links below the root are never followed, so stored entry names need
+    /// only the name policy. Do not resolve every ancestor again.
+    fn admit(&self, path: &Path, depth: usize, is_dir: bool, is_symlink: bool) -> bool {
+        if is_symlink {
+            return false;
+        }
+        let rel = path.strip_prefix(self.root).unwrap_or(path);
+        if secret_path(path, is_dir)
+            || secret_path(&self.logical_root.join(rel), is_dir)
+            || (depth == 1
+                && self
+                    .aliases
+                    .iter()
+                    .any(|alias| secret_path(&Path::new(alias).join(rel), is_dir)))
+            || !(self.allowed)(path)
+        {
+            return false;
+        }
+        if depth == 0 {
+            return true;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if !self.opts.include_hidden && name.starts_with('.') {
+            return false;
+        }
+        if is_dir && self.opts.default_excludes && DEFAULT_EXCLUDED_DIRS.contains(&name.as_ref()) {
+            return false;
+        }
+        !self.exclude.is_match(rel)
+    }
+
+    /// An admitted regular file, if the include globs, kind and size allow it.
+    fn resource(&self, path: &Path, len: u64, modified: Option<i64>) -> Option<DiscoveredResource> {
+        let rel = path.strip_prefix(self.root).unwrap_or(path);
+        if !self.include.empty && !self.include.is_match(rel) {
+            return None;
+        }
+        to_resource(
+            path,
+            ResourceKind::from_path(path)?,
+            len,
+            modified,
+            self.opts,
+        )
+    }
+
+    /// A root passed as a file is considered whatever its extension.
+    fn explicit_file(&self, len: u64, modified: Option<i64>) -> Option<DiscoveredResource> {
+        let kind =
+            ResourceKind::from_path(self.root).unwrap_or(ResourceKind::Text(TextFormat::Plain));
+        to_resource(self.root, kind, len, modified, self.opts)
+    }
+}
+
+/// Ancestor directory handles a walk keeps open. Deeper levels are reopened
+/// from the nearest kept one when the walk returns to them.
+#[cfg(unix)]
+const MAX_OPEN_ANCESTORS: usize = 64;
+
+#[cfg(unix)]
+struct Frame {
+    path: PathBuf,
+    name: std::ffi::OsString,
+    depth: usize,
+    identity: (u64, u64),
+    dir: Option<crate::pinned_dir::PinnedDir>,
+    entries: std::vec::IntoIter<crate::pinned_dir::Entry>,
+}
+
+/// Walk from one directory handle opened on the resolved root. Every child
+/// is opened or statted relative to its parent's handle without following a
+/// link, so swapping the root or an ancestor for a link mid-walk cannot list
+/// anything outside the inode tree resolved here.
+#[cfg(unix)]
+fn walk_root_pinned<F: Fn(&Path) -> bool>(
+    filters: &WalkFilters<'_, F>,
+    out: &mut Vec<DiscoveredResource>,
+) -> Result<()> {
+    use crate::pinned_dir::{EntryType, PinnedDir, entry_type, modified_ns};
+    let root = filters.root;
+    let changed = || -> Result<()> {
+        Err(Error::ChangedWhileReading {
+            resource: crate::ResourceId::from_path(root)?,
+        })
+    };
+    // The resolved root has no link component; finding one now means it changed.
+    let link = |e: &std::io::Error| e.kind() == std::io::ErrorKind::InvalidInput;
+    let parent = match root.file_name() {
+        None => None,
+        Some(_) => match PinnedDir::open_parent(root) {
+            Ok(parent) => Some(parent),
+            Err(e) if link(&e) => return changed(),
+            Err(e) => return Err(Error::io(root, e)),
+        },
+    };
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    test_hooks::root_opening(filters.logical_root);
+    // Open the root first and take its identity from the handle; never stat it
+    // first and compare. On Linux a stat does not trigger an automount (autofs,
+    // systemd automount) but the open does, so the two would name different
+    // inodes and every walk of an idle automounted root would fail. O_NOFOLLOW
+    // on the open and the type check on the handle keep the root link-free.
+    let opened = match &parent {
+        None => PinnedDir::open_absolute(root, true),
+        Some((parent, name)) => parent.open_dir(name, true),
+    };
+    let dir = match opened {
+        Ok(dir) => dir,
+        Err(e) if link(&e) => return changed(),
+        // Not a directory, or one that cannot be opened: decide by a no-follow
+        // stat. A root file has no automount and is never opened here.
+        Err(open_error) => {
+            let stat = match &parent {
+                None => return Err(Error::io(root, open_error)),
+                Some((parent, name)) => parent.stat(name),
+            };
+            let stat = match stat {
+                Ok(stat) => stat,
+                Err(e) if link(&e) => return changed(),
+                Err(e) => return Err(Error::io(root, e)),
+            };
+            return match entry_type(&stat) {
+                EntryType::File => {
+                    out.extend(filters.explicit_file(stat.st_size as u64, modified_ns(&stat)));
+                    Ok(())
+                }
+                EntryType::Symlink => changed(),
+                // Like an unreadable directory, a root that cannot be listed
+                // yields nothing.
+                EntryType::Dir | EntryType::Other => Ok(()),
+            };
+        }
+    };
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    test_hooks::root_pinned(filters.logical_root);
+    if !filters.admit(root, 0, true, false) {
+        return Ok(());
+    }
+    let Ok(entries) = dir.entries() else {
+        return Ok(());
+    };
+    let mut stack = vec![Frame {
+        path: root.to_path_buf(),
+        name: std::ffi::OsString::new(),
+        depth: 0,
+        identity: dir.identity(),
+        dir: Some(dir),
+        entries: entries.into_iter(),
+    }];
+    while let Some(top) = stack.len().checked_sub(1) {
+        if stack[top].dir.is_none() && !reopen(&mut stack) {
+            continue;
+        }
+        let frame = &mut stack[top];
+        let Some(entry) = frame.entries.next() else {
+            stack.pop();
+            continue;
+        };
+        let parent = frame.dir.as_ref().expect("the walked directory is open");
+        let path = frame.path.join(&entry.name);
+        let depth = frame.depth + 1;
+        let kind = match entry.kind {
+            Some(kind) => kind,
+            None => match parent.stat(&entry.name) {
+                Ok(stat) => entry_type(&stat),
+                Err(_) => continue,
+            },
+        };
+        if !filters.admit(
+            &path,
+            depth,
+            kind == EntryType::Dir,
+            kind == EntryType::Symlink,
+        ) {
+            continue;
+        }
+        match kind {
+            EntryType::File => {
+                let Ok(stat) = parent.stat(&entry.name) else {
+                    continue;
+                };
+                if entry_type(&stat) == EntryType::File {
+                    out.extend(filters.resource(&path, stat.st_size as u64, modified_ns(&stat)));
+                }
+            }
+            EntryType::Dir => {
+                // Unreadable or replaced directories are skipped rather than
+                // failing the whole search.
+                let Ok(child) = parent.open_dir(&entry.name, true) else {
+                    continue;
+                };
+                let Ok(entries) = child.entries() else {
+                    continue;
+                };
+                if top >= MAX_OPEN_ANCESTORS {
+                    stack[top].dir = None;
+                }
+                stack.push(Frame {
+                    path,
+                    name: entry.name,
+                    depth,
+                    identity: child.identity(),
+                    dir: Some(child),
+                    entries: entries.into_iter(),
+                });
+            }
+            EntryType::Symlink | EntryType::Other => {}
+        }
+    }
+    Ok(())
+}
+
+/// Reopen the top frame's directory from the nearest open ancestor, by name
+/// and without following links. If any level is no longer the directory
+/// first walked, drop it and everything below: that subtree is skipped, like
+/// an unreadable directory. Returns whether the top frame is open again.
+#[cfg(unix)]
+fn reopen(stack: &mut Vec<Frame>) -> bool {
+    let top = stack.len() - 1;
+    let open = stack
+        .iter()
+        .rposition(|f| f.dir.is_some())
+        .expect("the root frame stays open");
+    let mut current: Option<crate::pinned_dir::PinnedDir> = None;
+    for level in open + 1..=top {
+        let base = current
+            .as_ref()
+            .or(stack[open].dir.as_ref())
+            .expect("an open base directory");
+        match base.open_dir(&stack[level].name, false) {
+            Ok(dir) if dir.identity() == stack[level].identity => current = Some(dir),
+            _ => {
+                stack.truncate(level);
+                return false;
+            }
+        }
+    }
+    stack[top].dir = current;
+    true
+}
+
+/// Path-based walk: the Windows implementation, and the parity reference for
+/// the pinned walk in tests. It does not pin the walk to the resolved root.
+#[cfg(any(not(unix), test))]
+fn walk_root_by_path<F: Fn(&Path) -> bool>(
+    filters: &WalkFilters<'_, F>,
+    out: &mut Vec<DiscoveredResource>,
+) -> Result<()> {
+    use walkdir::WalkDir;
+    let root = filters.root;
+    let meta = std::fs::metadata(root).map_err(|e| Error::io(root, e))?;
+    if meta.is_file() {
+        out.extend(filters.explicit_file(meta.len(), modified_ns(&meta)));
+        return Ok(());
+    }
+    let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            filters.admit(
+                e.path(),
+                e.depth(),
+                e.file_type().is_dir(),
+                e.file_type().is_symlink(),
+            )
+        });
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            // Unreadable directories are skipped rather than failing the whole search.
+            Err(_) => continue,
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        out.extend(filters.resource(entry.path(), meta.len(), modified_ns(&meta)));
+    }
+    Ok(())
+}
+
 /// Deterministic seam for races between root resolution and the walk.
 #[cfg(all(feature = "test-support", debug_assertions))]
 pub mod test_hooks {
@@ -620,6 +854,8 @@ pub mod test_hooks {
 
     type Hook = Box<dyn FnOnce() + Send>;
     static ROOT_RESOLVED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+    static ROOT_OPENING: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+    static ROOT_PINNED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
     /// Run `hook` once, after discovery has resolved the logical `root` and
     /// before it walks the resolved directory. Keyed by root so parallel tests
@@ -631,9 +867,41 @@ pub mod test_hooks {
             .push((root, Box::new(hook)));
     }
 
+    /// Run `hook` once, after discovery has opened the parent of the directory
+    /// resolved for the logical `root` and just before it opens that directory.
+    pub fn before_root_opened(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        ROOT_OPENING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root, Box::new(hook)));
+    }
+
+    /// Run `hook` once, after discovery has opened the handle it walks from
+    /// for the logical `root` and before it lists any entry.
+    pub fn after_root_pinned(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        ROOT_PINNED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root, Box::new(hook)));
+    }
+
     pub(super) fn root_resolved(root: &Path) {
+        run(&ROOT_RESOLVED, root);
+    }
+
+    #[cfg(unix)]
+    pub(super) fn root_opening(root: &Path) {
+        run(&ROOT_OPENING, root);
+    }
+
+    #[cfg(unix)]
+    pub(super) fn root_pinned(root: &Path) {
+        run(&ROOT_PINNED, root);
+    }
+
+    fn run(registry: &Mutex<Vec<(PathBuf, Hook)>>, root: &Path) {
         let hook = {
-            let mut hooks = ROOT_RESOLVED.lock().unwrap_or_else(|e| e.into_inner());
+            let mut hooks = registry.lock().unwrap_or_else(|e| e.into_inner());
             hooks
                 .iter()
                 .position(|(r, _)| r == root)
@@ -648,7 +916,8 @@ pub mod test_hooks {
 fn to_resource(
     path: &Path,
     kind: ResourceKind,
-    meta: &std::fs::Metadata,
+    len: u64,
+    modified_ns: Option<i64>,
     opts: &DiscoveryOptions,
 ) -> Option<DiscoveredResource> {
     let limit = if kind == ResourceKind::Audio {
@@ -656,20 +925,21 @@ fn to_resource(
     } else {
         opts.max_file_bytes
     };
-    if meta.len() > limit {
+    if len > limit {
         return None;
     }
     Some(DiscoveredResource {
         path: path.to_path_buf(),
         kind,
-        size_bytes: meta.len(),
-        modified_ns: modified_ns(meta),
+        size_bytes: len,
+        modified_ns,
     })
 }
 
+#[cfg(any(not(unix), test))]
 pub(crate) fn modified_ns(meta: &std::fs::Metadata) -> Option<i64> {
     let t = meta.modified().ok()?;
-    let d = t.duration_since(UNIX_EPOCH).ok()?;
+    let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
     i64::try_from(d.as_nanos()).ok()
 }
 
@@ -779,5 +1049,164 @@ mod tests {
         let found = discover(&[f], &DiscoveryOptions::default()).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, ResourceKind::Text(TextFormat::Plain));
+    }
+
+    /// Run both walkers over one root exactly as `discover_with_policy` does.
+    #[cfg(unix)]
+    fn both_walks(
+        root: &Path,
+        opts: &DiscoveryOptions,
+        allowed: impl Fn(&Path) -> bool,
+    ) -> (Vec<DiscoveredResource>, Vec<DiscoveredResource>) {
+        let checked = resolve_allowed_path(root).unwrap();
+        let logical_root = logical_absolute_path(root).unwrap();
+        let (include, exclude) = (
+            Matcher::new(&opts.include).unwrap(),
+            Matcher::new(&opts.exclude).unwrap(),
+        );
+        let filters = WalkFilters {
+            root: &checked.path,
+            logical_root: &logical_root,
+            aliases: &checked.aliases,
+            opts,
+            include: &include,
+            exclude: &exclude,
+            allowed: &allowed,
+        };
+        let (mut pinned, mut by_path) = (Vec::new(), Vec::new());
+        walk_root_pinned(&filters, &mut pinned).unwrap();
+        walk_root_by_path(&filters, &mut by_path).unwrap();
+        pinned.sort_by(|a, b| a.path.cmp(&b.path));
+        by_path.sort_by(|a, b| a.path.cmp(&b.path));
+        (pinned, by_path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_walk_matches_the_path_walk() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let root = base.join("root");
+        for d in [
+            "sub/deep",
+            ".hiddendir",
+            "target",
+            "node_modules",
+            "excluded",
+            "empty",
+            "real-docker",
+            ".git",
+        ] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for (f, body) in [
+            ("a.md", "alpha"),
+            ("b.txt", "beta"),
+            ("c.rs", "fn c() {}"),
+            ("unknown.xyz", "no kind"),
+            ("big.txt", "0123456789abcdef"),
+            (".hidden.md", "hidden"),
+            (".hiddendir/x.md", "hidden dir"),
+            ("target/x.rs", "excluded by default"),
+            ("node_modules/y.js", "excluded by default"),
+            ("sub/deep/d.md", "deep"),
+            ("sub/secret.pem", "secret"),
+            ("sub/id_rsa", "secret"),
+            ("sub/.env", "secret"),
+            ("excluded/e.md", "glob excluded"),
+            ("real-docker/config.json", "docker"),
+            ("real-docker/notes.md", "docker notes"),
+            (".git/HEAD.txt", "vcs"),
+            ("song.mp3", "not really audio"),
+        ] {
+            std::fs::write(root.join(f), body).unwrap();
+        }
+        symlink(root.join("a.md"), root.join("link.md")).unwrap();
+        symlink(root.join("sub"), root.join("linkdir")).unwrap();
+        symlink(root.join("real-docker"), base.join(".docker")).unwrap();
+        let mut deep = root.join("tall");
+        // Stay below PATH_MAX (1024 on macOS) for the path-based reference.
+        for _ in 0..150 {
+            deep = deep.join("l");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("bottom.md"), "bottom").unwrap();
+        std::fs::write(root.join("tall/l/l/mid.md"), "mid").unwrap();
+
+        let small = DiscoveryOptions {
+            max_file_bytes: 10,
+            ..Default::default()
+        };
+        let everything = DiscoveryOptions {
+            include_hidden: true,
+            default_excludes: false,
+            ..Default::default()
+        };
+        let globbed = DiscoveryOptions {
+            include: vec!["*.md".into(), "sub/**".into()],
+            exclude: vec!["excluded".into(), "tall/l/l/l/l".into()],
+            ..Default::default()
+        };
+        let denied = root.join("sub");
+        type Allowed = Box<dyn Fn(&Path) -> bool>;
+        let cases: Vec<(PathBuf, DiscoveryOptions, Allowed)> = vec![
+            (
+                root.clone(),
+                DiscoveryOptions::default(),
+                Box::new(|_| true),
+            ),
+            (root.clone(), small, Box::new(|_| true)),
+            (root.clone(), everything.clone(), Box::new(|_| true)),
+            (root.clone(), globbed, Box::new(|_| true)),
+            (
+                root.clone(),
+                everything.clone(),
+                Box::new(move |p: &Path| !p.starts_with(&denied)),
+            ),
+            (base.join(".docker"), everything, Box::new(|_| true)),
+            (
+                root.join("a.md"),
+                DiscoveryOptions::default(),
+                Box::new(|_| true),
+            ),
+            (
+                root.join("unknown.xyz"),
+                DiscoveryOptions::default(),
+                Box::new(|_| true),
+            ),
+        ];
+        for (i, (path, opts, allowed)) in cases.into_iter().enumerate() {
+            let (pinned, by_path) = both_walks(&path, &opts, allowed);
+            assert!(!pinned.is_empty(), "case {i} found nothing");
+            assert_eq!(pinned, by_path, "case {i}");
+        }
+        let (pinned, _) = both_walks(&root, &DiscoveryOptions::default(), |_| true);
+        let names: Vec<_> = pinned
+            .iter()
+            .map(|r| r.path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect();
+        assert!(names.contains(&deep.strip_prefix(&root).unwrap().join("bottom.md")));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.starts_with("linkdir") || n == Path::new("link.md"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deep_pinned_walk_matches_the_path_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut deep = root.clone();
+        for _ in 0..300 {
+            deep = deep.join("d");
+            std::fs::create_dir(&deep).unwrap();
+            std::fs::write(deep.join("n.md"), "note").unwrap();
+        }
+        let (pinned, by_path) = both_walks(&root, &DiscoveryOptions::default(), |_| true);
+        assert_eq!(pinned.len(), 300);
+        assert_eq!(pinned, by_path);
     }
 }

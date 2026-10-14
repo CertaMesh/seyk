@@ -3458,8 +3458,10 @@ mod pre_split_golden {
         use crate::pdf::fixture::{Kind, pdf};
 
         let dir = tempfile::tempdir().unwrap();
+        // Content ids are canonical; macOS temp directories sit behind /var.
+        let root = dir.path().canonicalize().unwrap();
         let fixture = |name: &str, texts: &[&str]| {
-            let path = dir.path().join(name);
+            let path = root.join(name);
             let source = ResourceId::from_path(&path).unwrap();
             let bytes = pdf(texts, Kind::Plain);
             std::fs::write(&path, &bytes).unwrap();
@@ -3552,7 +3554,7 @@ mod pre_split_golden {
     fn preview_rejects_a_valid_page_in_a_corrupt_resource() {
         use crate::pdf::fixture::{Kind, pdf};
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("broken.pdf");
+        let path = dir.path().canonicalize().unwrap().join("broken.pdf");
         let source = ResourceId::from_path(&path).unwrap();
         let text =
             crate::pdf::read_page(&pdf(&["garden basil", "second"], Kind::Plain), &source, 1)
