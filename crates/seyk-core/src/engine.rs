@@ -1975,8 +1975,9 @@ impl<'e> SearchRequest<'e> {
         // Failed preparation must never expose a previous version's evidence,
         // including filename-only hits and requests without previews. Apply this
         // to normal synchronized searches as well as the model-free engine.
+        let skipped: HashSet<_> = sync.skipped.iter().map(|s| s.resource.clone()).collect();
         for r in &resources {
-            if sync.skipped.iter().any(|s| s.resource == r.id)
+            if skipped.contains(&r.id)
                 || engine.skipped_at_current_version(r)?
                 || (self.lexical_fallback
                     && r.version.is_known()
@@ -1988,7 +1989,7 @@ impl<'e> SearchRequest<'e> {
             }
         }
         for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
-            let failed = sync.skipped.iter().any(|s| s.resource == r.id);
+            let failed = skipped.contains(&r.id);
             if failed {
                 wanted.remove(&r.id);
                 continue;
@@ -2507,10 +2508,21 @@ impl<'e> IndexRequest<'e> {
         let pid = engine.profile_id.as_str();
         let present: HashSet<&ResourceId> = resources.iter().map(|r| &r.id).collect();
         let known = engine.with_cache(|c| c.resource_index(pid))?;
+        // A skipped resource may never have acquired a cache row. Include those
+        // identities in the same conservative, scope-aware deletion checks.
+        let mut candidates: HashSet<_> = known.keys().cloned().collect();
+        candidates.extend(
+            engine
+                .skipped_versions
+                .lock()
+                .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?
+                .keys()
+                .cloned(),
+        );
         let mut gone = Vec::new();
         match engine.provider.deletion_scope(&scope) {
             Ok(deletion_scope) => {
-                for id in known.into_keys() {
+                for id in candidates {
                     if present.contains(&id) || !deletion_scope.contains(&id) {
                         continue;
                     }
@@ -2533,10 +2545,16 @@ impl<'e> IndexRequest<'e> {
             if !gone.is_empty() {
                 c.prune_orphans(pid)?;
             }
-            Ok(gone.len())
+            Ok(gone.iter().filter(|id| known.contains_key(*id)).count())
         })?;
 
         if !gone.is_empty() {
+            let gone: HashSet<_> = gone.iter().collect();
+            engine
+                .skipped_versions
+                .lock()
+                .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?
+                .retain(|resource, _| !gone.contains(resource));
             engine
                 .pdf_diagnostics
                 .lock()
@@ -2649,6 +2667,77 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_versions_stay_bounded_after_delete_cycles() {
+        // Based on the review allocator probe: new identities in every cycle,
+        // including skipped-only resources that never had cache bindings.
+        let root = tempfile::tempdir().unwrap();
+        let engine = SearchEngine::lexical().unwrap();
+        for batch in 0..3 {
+            for i in 0..1000 {
+                std::fs::write(root.path().join(format!("bad-{batch}-{i}.txt")), [0xff]).unwrap();
+            }
+            let report = engine.index().paths([root.path()]).execute().unwrap();
+            assert_eq!(report.sync.skipped.len(), 1000);
+            assert_eq!(engine.skipped_versions.lock().unwrap().len(), 1000);
+            for i in 0..1000 {
+                std::fs::remove_file(root.path().join(format!("bad-{batch}-{i}.txt"))).unwrap();
+            }
+            let report = engine.index().paths([root.path()]).execute().unwrap();
+            assert_eq!(report.sync.resources_discovered, 0);
+            assert_eq!(report.resources_removed, 0, "no cached resources existed");
+            assert!(engine.skipped_versions.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn skipped_versions_prune_only_confirmed_deletions_in_scope() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let deleted = first.path().join("deleted.txt");
+        let excluded = first.path().join("excluded.txt");
+        let outside = second.path().join("outside.txt");
+        for path in [&deleted, &excluded, &outside] {
+            std::fs::write(path, [0xff]).unwrap();
+        }
+        let engine = SearchEngine::lexical().unwrap();
+        engine
+            .index()
+            .paths([first.path(), second.path()])
+            .execute()
+            .unwrap();
+        let excluded_id = ResourceId::from_path(excluded.canonicalize().unwrap()).unwrap();
+        let outside_id = ResourceId::from_path(outside.canonicalize().unwrap()).unwrap();
+        std::fs::remove_file(deleted).unwrap();
+        std::fs::remove_file(outside).unwrap();
+        let report = engine
+            .index()
+            .paths([first.path()])
+            .discovery(DiscoveryOptions {
+                exclude: vec!["excluded.txt".into()],
+                ..Default::default()
+            })
+            .execute()
+            .unwrap();
+        assert_eq!(report.sync.resources_discovered, 0);
+        {
+            let skipped = engine.skipped_versions.lock().unwrap();
+            assert_eq!(skipped.len(), 2);
+            assert!(
+                skipped.contains_key(&excluded_id),
+                "excluded is not deleted"
+            );
+            assert!(
+                skipped.contains_key(&outside_id),
+                "other scopes must survive"
+            );
+        }
+        engine.index().paths([second.path()]).execute().unwrap();
+        let skipped = engine.skipped_versions.lock().unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped.contains_key(&excluded_id));
+    }
 
     fn worker_engine() -> SearchEngine {
         struct NoInference(crate::ModelIdentity);
