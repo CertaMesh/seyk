@@ -540,7 +540,11 @@ fn extract_reads_a_hit_found_through_a_symlinked_root() {
         .args(["extract", "--from-json", "-", "--json"])
         .env("SEYK_MODEL", temp.path().join("no-model"))
         .env("HF_HUB_OFFLINE", "1")
-        .write_stdin(serde_json::to_string(&results).unwrap())
+        .write_stdin({
+            let mut value = serde_json::to_value(&results).unwrap();
+            value["schema_version"] = 8.into();
+            value.to_string()
+        })
         .output()
         .unwrap();
     assert!(
