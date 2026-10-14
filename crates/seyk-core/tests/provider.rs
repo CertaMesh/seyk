@@ -623,3 +623,161 @@ fn opaque_pdf_provider_and_no_preview_reads() {
     assert!(warm.hits.iter().all(|h| h.preview.is_none()));
     assert_eq!(notes.reads.load(Ordering::SeqCst), before);
 }
+
+#[test]
+fn filesystem_placeholder_markers_refuse_both_content_read_seams() {
+    let temp = tempfile::tempdir().unwrap();
+    for suffix in ["document.txt.icloud", "document.txt.ICLOUD"] {
+        let path = temp.path().join(suffix);
+        std::fs::write(&path, b"Synthetic unmaterialized-content sentinel").unwrap();
+        let id = ResourceId::from_path(&path).unwrap();
+        assert!(
+            FsProvider.read(&id).is_err(),
+            "placeholder read was admitted"
+        );
+        assert!(
+            FsProvider.open(&id).is_err(),
+            "placeholder seekable open was admitted"
+        );
+    }
+}
+
+#[test]
+fn ordinary_local_content_remains_readable_through_both_seams() {
+    use std::io::Read;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("ordinary.md");
+    let bytes = b"Public synthetic ordinary local content";
+    std::fs::write(&path, bytes).unwrap();
+    let id = ResourceId::from_path(&path).unwrap();
+    assert_eq!(FsProvider.read(&id).unwrap(), bytes);
+    let mut opened = FsProvider.open(&id).unwrap();
+    let mut actual = Vec::new();
+    opened.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_explicit_symlink_remains_supported_but_placeholder_alias_is_denied() {
+    let temp = tempfile::tempdir().unwrap();
+    let local = temp.path().join("local.md");
+    std::fs::write(&local, b"Synthetic local alias content").unwrap();
+    let alias = temp.path().join("alias.md");
+    std::os::unix::fs::symlink(&local, &alias).unwrap();
+    let id = ResourceId::from_path(&alias).unwrap();
+    assert_eq!(
+        FsProvider.read(&id).unwrap(),
+        b"Synthetic local alias content"
+    );
+    assert!(FsProvider.open(&id).is_ok());
+    std::fs::remove_file(&alias).unwrap();
+    let placeholder = temp.path().join("source.md.icloud");
+    std::fs::write(&placeholder, b"Synthetic placeholder sentinel").unwrap();
+    std::os::unix::fs::symlink(&placeholder, &alias).unwrap();
+    assert!(FsProvider.read(&id).is_err());
+    assert!(FsProvider.open(&id).is_err());
+}
+
+#[test]
+fn fresh_listing_does_not_admit_missing_or_replaced_nonregular_content() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("note.md");
+    std::fs::write(&path, b"Synthetic initially local note").unwrap();
+    let scope = ResourceScope {
+        roots: vec![ResourceId::from_path(temp.path()).unwrap()],
+        discovery: DiscoveryOptions::default(),
+    };
+    let listed = FsProvider.list(&scope).unwrap();
+    assert_eq!(listed.len(), 1);
+    let id = &listed[0].id;
+    std::fs::remove_file(&path).unwrap();
+    assert!(FsProvider.read(id).is_err());
+    assert!(FsProvider.open(id).is_err());
+    std::fs::create_dir(&path).unwrap();
+    assert!(FsProvider.read(id).is_err());
+    assert!(FsProvider.open(id).is_err());
+}
+
+#[test]
+fn placeholder_ancestors_refuse_content_and_model_free_extraction() {
+    use seyk_core::{Modality, ResourceLocator, ResourceMetadata, TextExtractor, extract_resource};
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("pending.icloud");
+    std::fs::create_dir(&folder).unwrap();
+    let path = folder.join("note.md");
+    let bytes = b"Synthetic local bytes behind a placeholder marker";
+    std::fs::write(&path, bytes).unwrap();
+    let id = ResourceId::from_path(&path).unwrap();
+    assert!(FsProvider.read(&id).is_err());
+    assert!(FsProvider.open(&id).is_err());
+    let metadata = ResourceMetadata {
+        media_type: Some("text/plain".into()),
+        modality: Modality::Text,
+        size_bytes: bytes.len() as u64,
+        modified_ns: None,
+        content_hash: blake3::hash(bytes).to_hex().to_string(),
+    };
+    let locator = ResourceLocator::Text {
+        byte_start: 0,
+        byte_end: bytes.len() as u64,
+        line_start: None,
+        line_end: None,
+    };
+    assert!(extract_resource(&FsProvider, &TextExtractor, &id, &locator, &metadata).is_err());
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn pdf_extraction_refuses_placeholder_before_parser_dispatch() {
+    use seyk_core::{
+        Modality, PdfTextExtractor, ResourceLocator, ResourceMetadata, extract_resource,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("document.pdf.icloud");
+    let bytes = b"Synthetic bytes must not reach PDF parser";
+    std::fs::write(&path, bytes).unwrap();
+    let id = ResourceId::from_path(&path).unwrap();
+    let metadata = ResourceMetadata {
+        media_type: Some("application/pdf".into()),
+        modality: Modality::Document,
+        size_bytes: bytes.len() as u64,
+        modified_ns: None,
+        content_hash: blake3::hash(bytes).to_hex().to_string(),
+    };
+    let locator = ResourceLocator::PageText {
+        page: 1,
+        byte_start: 0,
+        byte_end: 1,
+        text_version: "synthetic".into(),
+        page_text_hash: "synthetic".into(),
+    };
+    assert!(
+        matches!(extract_resource(&FsProvider, &PdfTextExtractor, &id, &locator, &metadata), Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+}
+
+#[cfg(feature = "audio")]
+#[test]
+fn audio_extraction_refuses_placeholder_before_decoder_dispatch() {
+    use seyk_core::{Modality, ResourceLocator, ResourceMetadata};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("recording.wav.icloud");
+    let bytes = b"Synthetic bytes must not reach audio decoder";
+    std::fs::write(&path, bytes).unwrap();
+    let id = ResourceId::from_path(&path).unwrap();
+    let metadata = ResourceMetadata {
+        media_type: Some("audio/wav".into()),
+        modality: Modality::Audio,
+        size_bytes: bytes.len() as u64,
+        modified_ns: None,
+        content_hash: blake3::hash(bytes).to_hex().to_string(),
+    };
+    let locator = ResourceLocator::Time {
+        start_ms: 0,
+        end_ms: 10,
+    };
+    assert!(
+        matches!(seyk_core::audio::extract_samples(&FsProvider, &id, &locator, &metadata, 7200), Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+}
