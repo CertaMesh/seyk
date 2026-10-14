@@ -617,6 +617,14 @@ prompt templates, maximum input length and segmenter version. Within a profile i
 is keyed by a hash of the exact text sent to the model. Change any of these and
 the old vectors are simply never looked up. `cache stats` lists the profiles.
 
+The `text-literals-v1` model variant treats Gemma special-token spellings in
+text and titles as ordinary text. Earlier versions could skip media-token
+literals or cache a different embedding for control-token literals such as
+`<bos>`. This policy changes the cache profile, so the first index/search after
+upgrading re-embeds the entire selected collection (including unchanged files).
+The cache stores no reconstructable source text for an exact selective repair.
+Ordinary-text token ids and the segmenter version are unchanged.
+
 ## Where things are stored
 
 | What | Where (macOS) | Where (Linux) |
