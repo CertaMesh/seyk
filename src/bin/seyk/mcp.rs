@@ -57,6 +57,14 @@ struct MeasuredProgress {
     progress: seyk::IndexProgress,
 }
 
+/// The resolved root a watcher pass walked: `walked` arrives with Walked and
+/// becomes the pass's `measured` identity at Discovered.
+#[derive(Default)]
+struct PassIdentity {
+    walked: Option<PathBuf>,
+    measured: Option<PathBuf>,
+}
+
 /// One agent session: the folders it may search, and the watchers covering them.
 #[derive(Clone)]
 pub struct SeykServer {
@@ -441,7 +449,7 @@ impl Hub {
             })
         };
         indexing(0, 0);
-        let identity = Mutex::new(None);
+        let identity = Mutex::new(PassIdentity::default());
         let progress = |e: ProgressEvent| {
             self.record_progress(root, &identity, &e);
             if matches!(e, ProgressEvent::Discovered { .. }) {
@@ -490,20 +498,32 @@ impl Hub {
         });
     }
 
-    /// Keep a pass's snapshot under the canonical root that pass walks. Each pass
-    /// emits Discovered before its first count; a root that does not
-    /// canonicalize then records no snapshot at all.
-    fn record_progress(&self, root: &Path, identity: &Mutex<Option<PathBuf>>, e: &ProgressEvent) {
-        if matches!(e, ProgressEvent::Discovered { .. }) {
-            if let Ok(mut identity) = identity.lock() {
-                *identity = root.canonicalize().ok();
+    /// Keep a pass's snapshot under the root its listing actually walked, as
+    /// carried by Walked. Never re-resolve `root` here: the alias may name a
+    /// different directory by now. Discovered starts the pass's counts; without
+    /// a single carried root for that pass, nothing is recorded.
+    fn record_progress(&self, root: &Path, identity: &Mutex<PassIdentity>, e: &ProgressEvent) {
+        match e {
+            ProgressEvent::Walked { roots } => {
+                if let Ok(mut identity) = identity.lock() {
+                    identity.walked = match roots.as_slice() {
+                        [walked] => walked.to_file_path(),
+                        _ => None,
+                    };
+                }
             }
-            if let Ok(mut roots) = self.progress.lock() {
-                roots.remove(root);
+            ProgressEvent::Discovered { .. } => {
+                if let Ok(mut identity) = identity.lock() {
+                    identity.measured = identity.walked.take();
+                }
+                if let Ok(mut roots) = self.progress.lock() {
+                    roots.remove(root);
+                }
             }
+            _ => {}
         }
         if let ProgressEvent::IndexProgress { progress } = e
-            && let Some(identity) = identity.lock().ok().and_then(|id| id.clone())
+            && let Some(identity) = identity.lock().ok().and_then(|id| id.measured.clone())
             && let Ok(mut roots) = self.progress.lock()
         {
             roots.insert(
@@ -2048,7 +2068,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn watcher_snapshots_carry_the_canonical_root_their_pass_walked() {
+    fn watcher_snapshots_carry_the_root_their_listing_walked() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().canonicalize().unwrap();
         let outside = base.join("outside");
@@ -2056,9 +2076,16 @@ mod tests {
         let linked = base.join("linked");
         std::os::unix::fs::symlink(&outside, &linked).unwrap();
         let hub = Hub::new(Box::new(fake_engine), false);
-        let identity = Mutex::new(None);
+        let identity = Mutex::new(PassIdentity::default());
+        let record = |e: ProgressEvent| hub.record_progress(&linked, &identity, &e);
         let counts = || ProgressEvent::IndexProgress {
             progress: seyk::IndexProgress::default(),
+        };
+        let walked = |roots: &[&Path]| ProgressEvent::Walked {
+            roots: roots
+                .iter()
+                .map(|r| ResourceId::from_path(r).unwrap())
+                .collect(),
         };
         let recorded = || {
             hub.progress
@@ -2067,27 +2094,87 @@ mod tests {
                 .get(&linked)
                 .map(|s| s.identity.clone())
         };
-        hub.record_progress(&linked, &identity, &counts());
+        record(counts());
         assert_eq!(recorded(), None, "no identity before discovery");
-        hub.record_progress(
-            &linked,
-            &identity,
-            &ProgressEvent::Discovered { resources: 1 },
-        );
-        hub.record_progress(&linked, &identity, &counts());
-        assert_eq!(recorded(), Some(outside));
+        record(ProgressEvent::Discovered { resources: 1 });
+        record(counts());
+        assert_eq!(recorded(), None, "a pass without a carried root");
+        record(walked(&[&outside]));
+        record(ProgressEvent::Discovered { resources: 1 });
+        record(counts());
+        assert_eq!(recorded(), Some(outside.clone()));
+        // The carried root is kept even once the alias names something else.
         std::fs::remove_file(&linked).unwrap();
-        hub.record_progress(
-            &linked,
-            &identity,
-            &ProgressEvent::Discovered { resources: 0 },
-        );
-        hub.record_progress(&linked, &identity, &counts());
-        assert_eq!(
-            recorded(),
-            None,
-            "a root that does not resolve records nothing"
-        );
+        std::fs::create_dir(&linked).unwrap();
+        record(counts());
+        assert_eq!(recorded(), Some(outside.clone()));
+        record(walked(&[&outside, &linked]));
+        record(ProgressEvent::Discovered { resources: 1 });
+        record(counts());
+        assert_eq!(recorded(), None, "an ambiguous walk records nothing");
+    }
+
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn outside_counts_stay_hidden_when_the_alias_is_swapped_during_the_walk() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let (allowed, outside) = (base.join("allowed"), base.join("outside"));
+        let plain = allowed.join("plain");
+        for dir in [&plain, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for i in 0..3 {
+            std::fs::write(outside.join(format!("{i}.txt")), "outside inventory").unwrap();
+        }
+        std::fs::write(plain.join("p.txt"), "plain inventory").unwrap();
+        let linked = allowed.join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let confined = SeykServer::new(vec![allowed.clone()], hub.clone()).unwrap();
+        for root in [&linked, &plain] {
+            hub.watched
+                .lock()
+                .unwrap()
+                .push((root.clone(), Arc::new(Mutex::new(IndexStatus::Ready))));
+        }
+        // Discovery has resolved linked -> outside; before it walks, replace
+        // the alias with an ordinary, empty, in-scope directory.
+        let alias = linked.clone();
+        seyk::discovery::test_hooks::after_root_resolved(linked.clone(), move || {
+            std::fs::remove_file(&alias).unwrap();
+            std::fs::create_dir(&alias).unwrap();
+        });
+        // A real watcher pass: core events into the hub's own recorder.
+        let engine = hub.engine().unwrap();
+        for root in [&linked, &plain] {
+            let identity = Mutex::new(PassIdentity::default());
+            let progress = |e: ProgressEvent| hub.record_progress(root, &identity, &e);
+            engine
+                .index()
+                .paths([root])
+                .progress(&progress)
+                .execute()
+                .unwrap();
+        }
+        assert!(linked.is_dir() && !linked.is_symlink(), "hook ran");
+        let measured = hub.progress.lock().unwrap()[&linked].clone();
+        assert_eq!(measured.identity, outside, "counts carry the walked root");
+        assert_eq!(measured.progress.by_kind["text"].indexed, 3);
+        let roots = |progress: Vec<RootProgress>| -> Vec<_> {
+            progress
+                .into_iter()
+                .map(|p| (p.root.to_file_path().unwrap(), p.progress.is_some()))
+                .collect()
+        };
+        let status = confined.index_status_json().unwrap();
+        let status: Vec<RootProgress> =
+            serde_json::from_value(status["index_progress"].clone()).unwrap();
+        let mut request = params(&[]);
+        request.queries = vec!["inventory".into()];
+        let search = confined.run_search(request).unwrap().index_progress;
+        assert_eq!(roots(status), [(plain.clone(), true)], "index_status");
+        assert_eq!(roots(search), [(plain, true)], "search index_progress");
     }
 
     /// Record a snapshot the way a watcher pass does: under the root's

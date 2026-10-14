@@ -493,7 +493,16 @@ impl ScopeFilters {
 /// which return [`Error::SecretFile`]. No discovery option overrides this policy.
 /// Files with an unknown extension are treated as plain text only when passed explicitly.
 pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<DiscoveredResource>> {
-    discover_with_policy(roots, opts, |_| true)
+    Ok(discover_with_policy(roots, opts, |_| true)?.resources)
+}
+
+/// Discovered resources plus the canonical roots the walk actually used.
+pub(crate) struct WalkedDiscovery {
+    pub(crate) resources: Vec<DiscoveredResource>,
+    /// Each walked root as resolved once before its walk, in root order; roots
+    /// the policy skipped are absent. Retargeting a root alias during the walk
+    /// cannot change these, so every resource above lies under one of them.
+    pub(crate) walked_roots: Vec<PathBuf>,
 }
 
 /// An additional fixed policy may only narrow discovery, including explicit roots.
@@ -501,10 +510,11 @@ pub(crate) fn discover_with_policy(
     roots: &[PathBuf],
     opts: &DiscoveryOptions,
     allowed: impl Fn(&Path) -> bool,
-) -> Result<Vec<DiscoveredResource>> {
+) -> Result<WalkedDiscovery> {
     let include = Matcher::new(&opts.include)?;
     let exclude = Matcher::new(&opts.exclude)?;
     let mut out = Vec::new();
+    let mut walked_roots = Vec::new();
 
     for root in roots {
         // Resolve all root hops once, retaining intermediate directory names
@@ -518,6 +528,9 @@ pub(crate) fn discover_with_policy(
         if !allowed(&root) {
             continue;
         }
+        walked_roots.push(root.clone());
+        #[cfg(all(feature = "test-support", debug_assertions))]
+        test_hooks::root_resolved(&logical_root);
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
             let kind =
@@ -593,7 +606,43 @@ pub(crate) fn discover_with_policy(
 
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out.dedup_by(|a, b| a.path == b.path);
-    Ok(out)
+    Ok(WalkedDiscovery {
+        resources: out,
+        walked_roots,
+    })
+}
+
+/// Deterministic seam for races between root resolution and the walk.
+#[cfg(all(feature = "test-support", debug_assertions))]
+pub mod test_hooks {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn FnOnce() + Send>;
+    static ROOT_RESOLVED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+
+    /// Run `hook` once, after discovery has resolved the logical `root` and
+    /// before it walks the resolved directory. Keyed by root so parallel tests
+    /// on other paths never trigger it.
+    pub fn after_root_resolved(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        ROOT_RESOLVED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root, Box::new(hook)));
+    }
+
+    pub(super) fn root_resolved(root: &Path) {
+        let hook = {
+            let mut hooks = ROOT_RESOLVED.lock().unwrap_or_else(|e| e.into_inner());
+            hooks
+                .iter()
+                .position(|(r, _)| r == root)
+                .map(|i| hooks.remove(i).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }
 
 fn to_resource(

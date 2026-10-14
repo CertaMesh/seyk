@@ -55,7 +55,7 @@ pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};
 pub use seyk_embed::{EmbeddingRequest, EmbeddingTask, Modality};
 
 pub use provider::{
-    FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
+    FsProvider, ProvidedResource, ResourceListing, ResourceProvider, ResourceScope, ResourceVersion,
 };
 
 pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};

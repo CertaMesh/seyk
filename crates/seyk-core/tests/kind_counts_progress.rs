@@ -167,3 +167,54 @@ fn mixed_pdf_text_counts_and_cached_pdf_failures_are_distinct() {
         assert_eq!(progress.by_kind["pdf"].waiting, 0);
     }
 }
+
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn passes_carry_the_root_they_walked_even_if_its_alias_moves_mid_walk() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
+    let outside = base.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    for i in 0..3 {
+        std::fs::write(outside.join(format!("{i}.txt")), "quartz outside").unwrap();
+    }
+    let alias = base.join("alias");
+    std::os::unix::fs::symlink(&outside, &alias).unwrap();
+    // Resolution has already chosen `outside`; swap the alias before the walk.
+    let swapped = alias.clone();
+    seyk_core::discovery::test_hooks::after_root_resolved(alias.clone(), move || {
+        std::fs::remove_file(&swapped).unwrap();
+        std::fs::create_dir(&swapped).unwrap();
+    });
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D256, "walked"))
+        .build()
+        .unwrap();
+    let events = Mutex::new(Vec::new());
+    let observe = |event: ProgressEvent| events.lock().unwrap().push(event);
+    engine
+        .index()
+        .paths([&alias])
+        .progress(&observe)
+        .execute()
+        .unwrap();
+    assert!(alias.is_dir() && !alias.is_symlink(), "hook ran");
+    let events = events.into_inner().unwrap();
+    assert_eq!(
+        events[..2],
+        [
+            ProgressEvent::Walked {
+                roots: vec![seyk_core::ResourceId::from_path(&outside).unwrap()],
+            },
+            ProgressEvent::Discovered { resources: 3 },
+        ]
+    );
+    let Some(ProgressEvent::IndexProgress { progress }) = events
+        .iter()
+        .rev()
+        .find(|e| matches!(e, ProgressEvent::IndexProgress { .. }))
+    else {
+        panic!("no counts: {events:?}");
+    };
+    assert_eq!(progress.by_kind["text"].indexed, 3);
+}

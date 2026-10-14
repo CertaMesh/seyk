@@ -525,8 +525,8 @@ for all API changes and cache upgrade details.
 
 The engine uses `ResourceProvider` for enumeration, reads, freshness and deletion
 checks. `FsProvider` is the default. `ResourceProvider`, `ResourceScope`,
-`ProvidedResource` and `ResourceVersion` may change before 1.0; filesystem is the
-only supported provider. There are no remote connectors.
+`ProvidedResource`, `ResourceListing` and `ResourceVersion` may change before 1.0;
+filesystem is the only supported provider. There are no remote connectors.
 
 Other backends plug in through the `Embedder` trait:
 
@@ -965,7 +965,12 @@ and nullable `progress`.
 Existing `folders` and `index.state` fields remain unchanged. Library callers get
 `ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
 `SyncStats::progress`. A library request spanning several roots gets one combined
-pass snapshot; daemon watchers each index one root.
+pass snapshot; daemon watchers each index one root. Before `Discovered`, a pass
+also sends `ProgressEvent::Walked` with the roots its listing actually walked,
+resolved once before the walk, when the provider reports them through
+`ResourceProvider::list_walked` (`FsProvider` does; the default reports none).
+MCP sessions see a watcher's counts only when that walked root lies inside the
+session's pinned root; a pass without one exposes no counts.
 
 `progress.by_kind` uses resource kinds `text`, `pdf`, `image`, and `audio`.
 Each entry counts resources `indexed`, `waiting`, and `skipped` in the current

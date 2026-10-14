@@ -203,6 +203,13 @@ pub enum ProgressEvent {
     IndexProgress {
         progress: crate::IndexProgress,
     },
+    /// Roots this pass's listing actually walked, resolved once before the walk,
+    /// in scope order. Sent just before `Discovered`, and only when the provider
+    /// can attribute its listing to them; every later count in the pass then
+    /// describes resources found under these roots.
+    Walked {
+        roots: Vec<ResourceId>,
+    },
     Discovered {
         resources: usize,
     },
@@ -219,6 +226,12 @@ pub enum ProgressEvent {
 /// must not synchronously start another indexing pass or call `scrub_cache`
 /// on the same engine, since either would reacquire the indexing lease.
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
+
+fn report_walked(progress: Option<ProgressFn<'_>>, roots: Option<Vec<ResourceId>>) {
+    if let (Some(p), Some(roots)) = (progress, roots) {
+        p(ProgressEvent::Walked { roots });
+    }
+}
 
 pub struct SearchEngineBuilder {
     provider: Arc<dyn ResourceProvider>,
@@ -1870,7 +1883,9 @@ impl<'e> SearchRequest<'e> {
             let ids: Vec<_> = metadata.keys().cloned().collect();
             engine.provider.list_cached(&scope, &ids)?
         } else {
-            engine.provider.list(&scope)?
+            let listing = engine.provider.list_walked(&scope)?;
+            report_walked(self.progress, listing.walked_roots);
+            listing.resources
         };
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
@@ -2453,7 +2468,9 @@ impl<'e> IndexRequest<'e> {
         let mut discovery = self.discovery;
         discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
         let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
-        let resources = engine.provider.list(&scope)?;
+        let listing = engine.provider.list_walked(&scope)?;
+        report_walked(self.progress, listing.walked_roots);
+        let resources = listing.resources;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
