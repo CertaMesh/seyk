@@ -99,6 +99,8 @@ pub struct DaemonStatus {
     pub sessions: usize,
     pub folders: Vec<(PathBuf, IndexStatus)>,
     pub cache_status: Option<seyk::CacheStats>,
+    #[serde(default)]
+    pub index_progress: Vec<super::mcp::RootProgress>,
 }
 
 // ---- daemon side -----------------------------------------------------------
@@ -253,6 +255,7 @@ async fn handle(
                 version: env!("CARGO_PKG_VERSION").into(),
                 sessions: sessions.active(),
                 folders: hub.watched(),
+                index_progress: hub.root_progress(None),
                 cache_status: hub.cache_status().ok().flatten(),
             };
             reply(&mut write, Ok(Some(status))).await
@@ -310,11 +313,14 @@ async fn reply(
 /// Relay this process's stdio to a daemon session for `roots`, starting the
 /// daemon if needed. Returns when either side closes.
 pub fn relay(endpoint: &Endpoint, roots: Vec<PathBuf>) -> Result<()> {
-    // Canonical here, so the daemon sees the same folders whatever its cwd.
+    // Absolute, but retain logical directory names for the secret-file policy.
     let roots = roots
         .iter()
         .map(|r| {
+            seyk::discovery::ensure_allowed_path(r)?;
             r.canonicalize()
+                .with_context(|| format!("root {}", r.display()))?;
+            seyk::discovery::absolute_logical_path(r)
                 .with_context(|| format!("root {}", r.display()))
         })
         .collect::<Result<Vec<_>>>()?;

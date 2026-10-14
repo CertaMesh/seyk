@@ -1,9 +1,14 @@
 //! Resource access. Filesystem is the only supported production provider.
 
-use crate::discovery::{DiscoveryOptions, ResourceKind, discover, modified_ns};
+use crate::discovery::{
+    DiscoveryOptions, ResourceKind, absolute_logical_path, discover_with_policy,
+    ensure_allowed_path, modified_ns,
+};
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs::{File, Metadata};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 /// Opaque freshness token. Unknown tokens never establish freshness.
 ///
@@ -64,8 +69,17 @@ impl ResourceScope {
         mut roots: Vec<ResourceId>,
         discovery: DiscoveryOptions,
     ) -> Result<Self> {
+        for root in &roots {
+            if let Some(path) = root.to_file_path() {
+                ensure_allowed_path(&path)?;
+            }
+        }
         for p in paths {
-            let absolute = p.canonicalize().map_err(|e| Error::io(p, e))?;
+            ensure_allowed_path(p)?;
+            // Retain the caller's directory names (e.g. a .docker symlink).
+            // Discovery checks logical children before emitting canonical IDs.
+            p.canonicalize().map_err(|e| Error::io(p, e))?;
+            let absolute = absolute_logical_path(p)?;
             roots.push(ResourceId::from_path(absolute)?);
         }
         Ok(Self { roots, discovery })
@@ -113,6 +127,28 @@ pub trait ResourceProvider: Send + Sync {
     }
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
+    /// `list`, plus the resolved root identity each scope root was walked under
+    /// when the provider can prove it. The default proves nothing.
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
+        Ok(ResourceListing {
+            resources: self.list(scope)?,
+            walked_roots: None,
+        })
+    }
+    /// Opt in to authorizing indexed identities without discovering uncached descendants.
+    /// Other providers retain their normal listing behavior in cached-only searches.
+    fn supports_cached_listing(&self) -> bool {
+        false
+    }
+    /// Current eligibility for supplied cached identities, including scope and policy.
+    /// Called only after `supports_cached_listing` opts in; no content may be read here.
+    fn list_cached(
+        &self,
+        scope: &ResourceScope,
+        _ids: &[ResourceId],
+    ) -> Result<Vec<ProvidedResource>> {
+        self.list(scope)
+    }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>>;
     /// A known token must change when the resource bytes change. Use unknown
     /// when freshness cannot be established; the engine will reread and hash.
@@ -128,6 +164,15 @@ pub trait ResourceProvider: Send + Sync {
     fn is_deleted(&self, _id: &ResourceId, _scope: &ResourceScope) -> Result<bool> {
         Ok(false)
     }
+}
+
+/// A provider listing and, when known, the roots that listing actually walked.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceListing {
+    pub resources: Vec<ProvidedResource>,
+    /// Resolved once per walked scope root, before its walk, in scope order.
+    /// `None` when the provider cannot attribute its listing to resolved roots.
+    pub walked_roots: Option<Vec<ResourceId>>,
 }
 
 /// Local files, using the same discovery filters and no-follow walk as `discover`.
@@ -146,17 +191,21 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
         let path = file_path(id)?;
-        Ok(Box::new(
-            std::fs::File::open(&path).map_err(|e| Error::io(path, e))?,
-        ))
+        ensure_allowed_path(&path)?;
+        Ok(Box::new(open_local_content(&path)?))
     }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
+        Ok(self.list_walked(scope)?.resources)
+    }
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
         let paths = scope
             .roots
             .iter()
             .map(file_path)
             .collect::<Result<Vec<_>>>()?;
-        discover(&paths, &scope.discovery)?
+        let walked = discover_with_policy(&paths, &scope.discovery, |_| true)?;
+        let resources = walked
+            .resources
             .into_iter()
             .map(|r| {
                 Ok(ProvidedResource {
@@ -168,14 +217,30 @@ impl ResourceProvider for FsProvider {
                     title: r.path.file_stem().map(|s| s.to_string_lossy().into_owned()),
                 })
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(ResourceListing {
+            resources,
+            walked_roots: Some(
+                walked
+                    .walked_roots
+                    .iter()
+                    .map(ResourceId::from_path)
+                    .collect::<Result<_>>()?,
+            ),
+        })
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;
-        std::fs::read(&path).map_err(|e| Error::io(path, e))
+        ensure_allowed_path(&path)?;
+        let mut file = open_local_content(&path)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| Error::io(path, e))?;
+        Ok(bytes)
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         let meta = std::fs::metadata(&path).map_err(|e| Error::io(path, e))?;
         Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
     }
@@ -208,5 +273,94 @@ impl ResourceProvider for FsProvider {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
             Err(e) => Err(Error::io(path, e)),
         }
+    }
+}
+
+fn placeholder_marker(path: &Path) -> bool {
+    path.components().any(|part| {
+        let bytes = part.as_os_str().as_encoded_bytes();
+        bytes[bytes.len().saturating_sub(7)..].eq_ignore_ascii_case(b".icloud")
+    })
+}
+
+fn unavailable_content() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "unmaterialized local content is unavailable; choose a fully local copy",
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_materialized_flags(flags: u32) -> io::Result<()> {
+    // Darwin sys/stat.h: read-only synthetic SF_DATALESS, not a settable user flag.
+    const SF_DATALESS: u32 = 0x4000_0000;
+    if flags & SF_DATALESS != 0 {
+        Err(unavailable_content())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_content_metadata(metadata: &Metadata) -> io::Result<()> {
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "content source is not a regular file",
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::darwin::fs::MetadataExt;
+        ensure_materialized_flags(metadata.st_flags())?;
+    }
+    Ok(())
+}
+
+/// Check again for each content open; discovery/version metadata is never permission to read.
+/// This rejects observed placeholders before open and checks the actual descriptor afterward.
+/// A provider can still change materialization between check and open: this is not atomic
+/// protection against every hydration race. Ordinary explicit filesystem symlinks remain supported.
+fn open_local_content(path: &Path) -> Result<File> {
+    if placeholder_marker(path) {
+        return Err(Error::io(path, unavailable_content()));
+    }
+    let resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
+    if placeholder_marker(&resolved) {
+        return Err(Error::io(path, unavailable_content()));
+    }
+    let before = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
+    ensure_content_metadata(&before).map_err(|e| Error::io(path, e))?;
+    let mut options = File::options();
+    options.read(true);
+    // A substitution with a FIFO must not block before descriptor validation.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|e| Error::io(path, e))?;
+    let actual = file.metadata().map_err(|e| Error::io(path, e))?;
+    ensure_content_metadata(&actual).map_err(|e| Error::io(path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != actual.dev() || before.ino() != actual.ino() {
+            return Err(Error::ChangedWhileReading {
+                resource: ResourceId::from_path(path)?,
+            });
+        }
+    }
+    Ok(file)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod materialization_tests {
+    use super::*;
+    #[test]
+    fn darwin_dataless_flag_is_denied_without_manufacturing_a_cloud_file() {
+        assert!(ensure_materialized_flags(0x4000_0000).is_err());
+        assert!(ensure_materialized_flags(0x4000_8000).is_err());
+        assert!(ensure_materialized_flags(0).is_ok());
+        assert!(ensure_materialized_flags(0x8000).is_ok());
     }
 }

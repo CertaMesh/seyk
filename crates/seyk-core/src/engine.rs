@@ -97,6 +97,20 @@ pub struct MatchSignals {
     pub filename: bool,
 }
 
+/// Per-leg positions in the candidate lists used to rank a hit.
+/// Ranks are one-based; `None` means the leg did not contribute. These ranks
+/// precede fusion and the final result limit, so can exceed that limit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchReason {
+    pub semantic_rank: Option<usize>,
+    /// The BM25 leg, called `lexical` in [`MatchSignals`].
+    pub keyword_rank: Option<usize>,
+    pub filename_rank: Option<usize>,
+    /// Normalized query tokens from matching BM25 groups, deduplicated in query
+    /// order. Never extracted from source text. Empty without a keyword leg.
+    pub matched_terms: Vec<String>,
+}
+
 /// One ranked match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
@@ -108,6 +122,9 @@ pub struct SearchHit {
     pub score: f32,
     /// What found this hit. Use it to tell a meaning match from a name match.
     pub signals: MatchSignals,
+    /// Rank provenance, additive to the existing raw signal scores.
+    #[serde(default)]
+    pub r#match: MatchReason,
     pub metadata: ResourceMetadata,
     /// Markdown heading path of the segment, when there is one.
     pub heading: Option<String>,
@@ -164,6 +181,9 @@ pub struct PageDiagnostic {
 /// What happened while bringing the cache up to date.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStats {
+    /// Current-pass resource inventory (unavailable when synchronization is disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<crate::IndexProgress>,
     pub resources_discovered: usize,
     /// Reused from cache without re-embedding.
     pub resources_unchanged: usize,
@@ -196,6 +216,9 @@ pub struct SearchResults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub degraded: Option<SearchDegradation>,
     pub stats: SearchStats,
+    /// Counts of returned hits, after ranking and limit, keyed by locator kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_counts: Option<std::collections::BTreeMap<String, usize>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -210,6 +233,17 @@ pub struct IndexReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgressEvent {
+    /// Resource counts for this indexing pass; independent of batch-local segments.
+    IndexProgress {
+        progress: crate::IndexProgress,
+    },
+    /// Roots this pass's listing actually walked, resolved once before the walk,
+    /// in scope order. Sent just before `Discovered`, and only when the provider
+    /// can attribute its listing to them; every later count in the pass then
+    /// describes resources found under these roots.
+    Walked {
+        roots: Vec<ResourceId>,
+    },
     Discovered {
         resources: usize,
     },
@@ -220,11 +254,18 @@ pub enum ProgressEvent {
     },
 }
 
-/// Called without the cache mutex held. During embedding, the indexing lease
-/// is held: callbacks may inspect the cache or search with `sync(false)`, but
+/// Called without the cache mutex held. Resource-count and embedding events
+/// hold the indexing lease: callbacks may inspect the cache or search with
+/// `sync(false)`, but
 /// must not synchronously start another indexing pass or call `scrub_cache`
 /// on the same engine, since either would reacquire the indexing lease.
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
+
+fn report_walked(progress: Option<ProgressFn<'_>>, roots: Option<Vec<ResourceId>>) {
+    if let (Some(p), Some(roots)) = (progress, roots) {
+        p(ProgressEvent::Walked { roots });
+    }
+}
 
 pub struct SearchEngineBuilder {
     provider: Arc<dyn ResourceProvider>,
@@ -483,7 +524,13 @@ impl SearchEngine {
     /// Search text and PDF text without model weights or stored vectors.
     /// Uses an isolated in-memory keyword index; never downloads a model.
     pub fn lexical() -> Result<Self> {
+        Self::lexical_with_provider(Arc::new(FsProvider))
+    }
+
+    /// Model-free keyword search using the same access policy as the caller.
+    pub fn lexical_with_provider(provider: Arc<dyn ResourceProvider>) -> Result<Self> {
         let mut engine = Self::builder()
+            .shared_provider(provider)
             .embedder(crate::lexical_engine::LexicalIdentity::default())
             .build()?;
         engine.lexical_only = true;
@@ -491,8 +538,7 @@ impl SearchEngine {
     }
 
     fn lexical_fallback(&self) -> Result<Self> {
-        let mut engine = Self::lexical()?;
-        engine.provider = self.provider.clone();
+        let mut engine = Self::lexical_with_provider(self.provider.clone())?;
         engine.segmenter = self.segmenter.clone();
         engine.max_audio_duration_secs = self.max_audio_duration_secs;
         Ok(engine)
@@ -610,6 +656,7 @@ impl SearchEngine {
             mode: SearchMode::default(),
             lexical_weight: None,
             lexical_fallback: false,
+            kind_counts: false,
         }
     }
 
@@ -795,8 +842,14 @@ impl SearchEngine {
         let pid = self.profile_id.as_str();
         let known = self.with_cache(|c| c.resource_index(pid))?;
 
+        let telemetry = crate::progress::PassProgress::new(resources, progress);
         let mut pending: Vec<Pending> = Vec::new();
+        let mut reported_skips = 0;
         for r in resources {
+            for skipped in &stats.skipped[reported_skips..] {
+                telemetry.complete(&skipped.resource, false, false);
+            }
+            reported_skips = stats.skipped.len();
             let modality = r.kind.modality();
             if !self.supports_kind(r.kind) {
                 stats.skipped.push(skip(
@@ -832,6 +885,7 @@ impl SearchEngine {
                 } else {
                     stats.resources_unchanged += 1;
                     self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
+                    telemetry.complete(&r.id, stats.skipped.len() == reported_skips, false);
                 }
                 continue;
             }
@@ -895,6 +949,7 @@ impl SearchEngine {
                     metadata.modified_ns = r.modified_ns;
                     self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                     stats.resources_unchanged += 1;
+                    telemetry.complete(&r.id, true, false);
                     continue;
                 }
                 use std::io::{Read, Seek};
@@ -928,6 +983,8 @@ impl SearchEngine {
                 };
                 if let Some(reason) = self.sync_audio(r, source, target, &mut stats, progress)? {
                     stats.skipped.push(skip(&r.id, reason));
+                } else {
+                    telemetry.complete(&r.id, true, true);
                 }
                 continue;
             }
@@ -962,6 +1019,7 @@ impl SearchEngine {
                 self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                 stats.resources_unchanged += 1;
                 self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
+                telemetry.complete(&r.id, stats.skipped.len() == reported_skips, false);
                 continue;
             }
             let metadata = ResourceMetadata {
@@ -988,6 +1046,8 @@ impl SearchEngine {
                 };
                 if let Some(entry) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
                     stats.skipped.push(entry);
+                } else {
+                    telemetry.complete(&r.id, true, true);
                 }
                 continue;
             }
@@ -1005,8 +1065,20 @@ impl SearchEngine {
             }
         }
 
+        for skipped in &stats.skipped[reported_skips..] {
+            telemetry.complete(&skipped.resource, false, false);
+        }
+
         if self.lexical_only {
-            self.write_resources(&pending, 0, pending.len(), &HashMap::new(), &mut stats)?;
+            self.write_resources(
+                &pending,
+                0,
+                pending.len(),
+                &HashMap::new(),
+                &mut stats,
+                &telemetry,
+            )?;
+            stats.progress = Some(telemetry.snapshot());
             stats.skipped_counts = skipped_counts(&stats.skipped);
             return Ok(stats);
         }
@@ -1061,13 +1133,26 @@ impl SearchEngine {
             // Persist every resource whose segments are now all embedded, so an
             // interrupted run keeps its progress.
             let ready_upto = batch.last().map(|(ri, _)| *ri).unwrap_or(0);
-            written = self.write_resources(&pending, written, ready_upto, &failed, &mut stats)?;
+            written = self.write_resources(
+                &pending, written, ready_upto, &failed, &mut stats, &telemetry,
+            )?;
         }
-        self.write_resources(&pending, written, pending.len(), &failed, &mut stats)?;
+        self.write_resources(
+            &pending,
+            written,
+            pending.len(),
+            &failed,
+            &mut stats,
+            &telemetry,
+        )?;
         stats.embed_ms += started.elapsed().as_millis() as u64;
         if stats.resources_updated > 0 {
             self.with_cache(|c| c.prune_orphans(pid))?;
         }
+        for skipped in &stats.skipped {
+            telemetry.complete(&skipped.resource, false, false);
+        }
+        stats.progress = Some(telemetry.snapshot());
         stats.skipped_counts = skipped_counts(&stats.skipped);
         Ok(stats)
     }
@@ -1080,6 +1165,7 @@ impl SearchEngine {
         upto: usize,
         failed: &HashMap<String, String>,
         stats: &mut SyncStats,
+        telemetry: &crate::progress::PassProgress<'_>,
     ) -> Result<usize> {
         let pid = self.profile_id.as_str();
         for p in pending.iter().take(upto).skip(from) {
@@ -1089,6 +1175,7 @@ impl SearchEngine {
                 .find_map(|j| failed.get(&j.segment.input_hash))
             {
                 stats.skipped.push(skip(&p.resource, reason.clone()));
+                telemetry.complete(&p.resource, false, false);
                 continue;
             }
             let resource = ResourceWrite {
@@ -1106,6 +1193,7 @@ impl SearchEngine {
             };
             self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
             stats.resources_updated += 1;
+            telemetry.complete(&p.resource, true, true);
             stats.page_diagnostics.extend(p.page_diagnostics.clone());
         }
         Ok(upto.max(from))
@@ -1805,9 +1893,16 @@ pub struct SearchRequest<'e> {
     mode: SearchMode,
     lexical_weight: Option<f32>,
     lexical_fallback: bool,
+    kind_counts: bool,
 }
 
 impl<'e> SearchRequest<'e> {
+    /// Include counts of returned hits by locator kind; no second search is run.
+    pub fn kind_counts(mut self, enabled: bool) -> Self {
+        self.kind_counts = enabled;
+        self
+    }
+
     /// Add provider-specific roots without filesystem path conversion.
     pub fn roots(mut self, roots: impl IntoIterator<Item = ResourceId>) -> Self {
         self.roots.extend(roots);
@@ -1895,7 +1990,9 @@ impl<'e> SearchRequest<'e> {
 
     /// Allow a cached search to prepare an ephemeral keyword index when any
     /// supported resource is new or changed. Never waits for embedding or writes
-    /// to the semantic cache. Without this opt-in, `sync(false)` stays cache-only.
+    /// to the semantic cache. Providers opting into cached listing retain their
+    /// indexed-only scope; their background indexer discovers new resources.
+    /// Without this opt-in, `sync(false)` stays cache-only.
     pub fn lexical_fallback(mut self, enabled: bool) -> Self {
         self.lexical_fallback = enabled;
         self
@@ -1922,7 +2019,22 @@ impl<'e> SearchRequest<'e> {
         let mut discovery = self.discovery.clone();
         discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
         let scope = ResourceScope::from_paths(&self.paths, self.roots.clone(), discovery)?;
-        let resources = engine.provider.list(&scope)?;
+        let pid = engine.profile_id.as_str();
+        // Only opted-in providers authorize the indexed subset without walking
+        // uncached descendants. Default providers retain their original list path.
+        let cached_metadata = if !self.sync && engine.provider.supports_cached_listing() {
+            Some(engine.with_cache(|c| c.resource_index(pid))?)
+        } else {
+            None
+        };
+        let resources = if let Some(metadata) = &cached_metadata {
+            let ids: Vec<_> = metadata.keys().cloned().collect();
+            engine.provider.list_cached(&scope, &ids)?
+        } else {
+            let listing = engine.provider.list_walked(&scope)?;
+            report_walked(self.progress, listing.walked_roots);
+            listing.resources
+        };
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
@@ -1965,13 +2077,15 @@ impl<'e> SearchRequest<'e> {
             }
         };
 
-        let pid = engine.profile_id.as_str();
         let mut wanted: HashSet<ResourceId> = resources
             .iter()
             .filter(|r| engine.supports_kind(r.kind))
             .map(|r| r.id.clone())
             .collect();
-        let metadata = engine.with_cache(|c| c.resource_index(pid))?;
+        let metadata = match cached_metadata {
+            Some(metadata) => metadata,
+            None => engine.with_cache(|c| c.resource_index(pid))?,
+        };
         // Failed preparation must never expose a previous version's evidence,
         // including filename-only hits and requests without previews. Apply this
         // to normal synchronized searches as well as the model-free engine.
@@ -2158,8 +2272,27 @@ impl<'e> SearchRequest<'e> {
         };
         let ranked = rank(self.mode, &semantic, &lexical, weight, &named, self.limit);
 
+        // Annotate only after ranking. Keep the scoring arithmetic, candidate
+        // order, cutoffs and tie-breaking completely independent of provenance.
+        let semantic_ranks: HashMap<_, _> = semantic
+            .iter()
+            .enumerate()
+            .map(|(i, (key, _, _))| (key, i + 1))
+            .collect();
+        let keyword_ranks: HashMap<_, _> = lexical
+            .iter()
+            .enumerate()
+            .map(|(i, (key, _))| (key, i + 1))
+            .collect();
+        let filename_ranks: HashMap<_, _> = named
+            .iter()
+            .enumerate()
+            .map(|(i, key)| (key, i + 1))
+            .collect();
         let mut previews = PreviewReader::default();
         let mut hits = Vec::with_capacity(ranked.len());
+        let mut keyword_keys = Vec::new();
+        let mut keyword_positions = Vec::new();
         for (key, score, signals, query_index) in ranked {
             let Some(metadata) = metadata.get(&key.0).map(|s| s.metadata.clone()) else {
                 continue;
@@ -2179,11 +2312,27 @@ impl<'e> SearchRequest<'e> {
                     n,
                 )
             });
+            let keyword_rank = signals
+                .lexical
+                .and_then(|_| keyword_ranks.get(&key).copied());
+            let reason = MatchReason {
+                semantic_rank: signals
+                    .semantic
+                    .and_then(|_| semantic_ranks.get(&key).copied()),
+                keyword_rank,
+                filename_rank: signals.filename.then(|| filename_ranks[&key]),
+                matched_terms: Vec::new(),
+            };
+            if keyword_rank.is_some() {
+                keyword_keys.push(key.clone());
+                keyword_positions.push(hits.len());
+            }
             hits.push(SearchHit {
                 resource: key.0,
                 locator: segment.locator.clone(),
                 score,
                 signals,
+                r#match: reason,
                 metadata,
                 heading: segment.heading.clone(),
                 preview,
@@ -2191,7 +2340,24 @@ impl<'e> SearchRequest<'e> {
             });
         }
 
+        if !keyword_keys.is_empty() {
+            let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
+            let terms =
+                engine.with_cache(|c| c.lexical_matched_terms(pid, &query, &keyword_keys))?;
+            for (position, terms) in keyword_positions.into_iter().zip(terms) {
+                hits[position].r#match.matched_terms = terms;
+            }
+        }
+
+        let kind_counts = self.kind_counts.then(|| {
+            let mut counts = std::collections::BTreeMap::new();
+            for hit in &hits {
+                *counts.entry(hit.locator.kind().to_owned()).or_insert(0) += 1;
+            }
+            counts
+        });
         Ok(SearchResults {
+            kind_counts,
             queries: self.queries,
             mode: self.mode,
             hits,
@@ -2496,7 +2662,9 @@ impl<'e> IndexRequest<'e> {
         let mut discovery = self.discovery;
         discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
         let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
-        let resources = engine.provider.list(&scope)?;
+        let listing = engine.provider.list_walked(&scope)?;
+        report_walked(self.progress, listing.walked_roots);
+        let resources = listing.resources;
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),

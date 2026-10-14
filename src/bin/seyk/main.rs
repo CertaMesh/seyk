@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 7;
+const JSON_SCHEMA_VERSION: u32 = 8;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -155,6 +155,9 @@ enum Command {
         /// Do not read previews. JSON hits retain preview: null.
         #[arg(long)]
         no_preview: bool,
+        /// Include returned-hit counts by locator kind in JSON.
+        #[arg(long)]
+        kind_counts: bool,
         /// Print results as JSON.
         #[arg(long)]
         json: bool,
@@ -222,6 +225,10 @@ enum Command {
         /// first. Implies --standalone.
         #[arg(long)]
         no_watch: bool,
+        /// Fixed local-content policy v1 with confined no-follow reads. Requires
+        /// explicit real directory roots; implies --standalone (Unix only).
+        #[arg(long)]
+        local_content: bool,
         #[command(flatten)]
         model: ModelArgs,
     },
@@ -338,18 +345,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
             min_score,
             no_cache,
             no_preview,
+            kind_counts,
             json,
             filter,
             model,
         } => {
-            let engine = search_engine(&model, no_cache)?;
             let paths = default_paths(paths)?;
+            let engine = search_engine(&model, no_cache)?;
             let progress = Progress::new(!json);
             let report = |e: ProgressEvent| progress.event(e);
             let mut req = also
                 .into_iter()
                 .fold(engine.search(&query), |r, q| r.query(q))
                 .mode(mode)
+                .kind_counts(kind_counts)
                 .paths(&paths)
                 .limit(limit)
                 .discovery(filter.discovery())
@@ -472,8 +481,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, false)?;
             let paths = default_paths(paths)?;
+            let engine = engine(&model, false)?;
             #[cfg(feature = "watch")]
             if watch {
                 return watch_and_index(&engine, &paths, &filter.discovery(), json);
@@ -531,8 +540,42 @@ fn run(cli: Cli) -> Result<ExitCode> {
             roots,
             standalone,
             no_watch,
+            local_content,
             model,
         } => {
+            if local_content {
+                #[cfg(not(unix))]
+                bail!("--local-content is only supported on Unix");
+                #[cfg(unix)]
+                {
+                    if roots.is_empty() {
+                        bail!("--local-content requires explicit directory roots");
+                    }
+                    let roots = roots
+                        .into_iter()
+                        .map(|p| {
+                            let p = seyk::expand_tilde(&p);
+                            if p.is_absolute() { p } else { cwd().join(p) }
+                        })
+                        .collect::<Vec<_>>();
+                    let provider = std::sync::Arc::new(
+                        seyk::local_content::LocalContentProvider::new(&roots)?,
+                    );
+                    let engine_provider = provider.clone();
+                    mcp::serve_local_content(
+                        provider,
+                        Box::new(move || {
+                            search_engine_with_provider(
+                                &model,
+                                false,
+                                Some(engine_provider.clone()),
+                            )
+                        }),
+                        !no_watch,
+                    )?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
             let roots = default_paths(roots)?;
             #[cfg(unix)]
             if !standalone && !no_watch {
@@ -783,6 +826,22 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
             .and_then(|v| v["state"].as_str().map(str::to_string))
             .unwrap_or_default();
         out.push_str(&format!("  {state:<14} {}\n", folder.display()));
+        if let Some(progress) = s
+            .index_progress
+            .iter()
+            .find(|p| p.root.to_file_path().as_ref() == Some(folder))
+            .and_then(|p| p.progress.as_ref())
+        {
+            for (kind, counts) in &progress.by_kind {
+                out.push_str(&format!(
+                    "    {kind}: {} indexed, {} waiting, {} skipped\n",
+                    counts.indexed, counts.waiting, counts.skipped
+                ));
+            }
+            if let Some(seconds) = progress.eta_seconds {
+                out.push_str(&format!("    estimated remaining: {seconds}s\n"));
+            }
+        }
     }
     out
 }
@@ -795,9 +854,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=7)
+        Some(2..=8)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4, 5, 6 or 7");
+        bail!("expected search JSON schema_version 2, 3, 4, 5, 6, 7 or 8");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -839,7 +898,15 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
 }
 
 fn search_engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
-    match engine(args, ephemeral) {
+    search_engine_with_provider(args, ephemeral, None)
+}
+
+fn search_engine_with_provider(
+    args: &ModelArgs,
+    ephemeral: bool,
+    provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
+) -> Result<SearchEngine> {
+    match engine_with_provider(args, ephemeral, provider.clone()) {
         Ok(engine) => Ok(engine),
         Err(error)
             if matches!(
@@ -847,13 +914,24 @@ fn search_engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
                 Some(seyk_embed::Error::ModelNotFound(_))
             ) =>
         {
-            Ok(SearchEngine::lexical()?)
+            Ok(match provider {
+                Some(provider) => SearchEngine::lexical_with_provider(provider)?,
+                None => SearchEngine::lexical()?,
+            })
         }
         Err(error) => Err(error),
     }
 }
 
 fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
+    engine_with_provider(args, ephemeral, None)
+}
+
+fn engine_with_provider(
+    args: &ModelArgs,
+    ephemeral: bool,
+    provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
+) -> Result<SearchEngine> {
     let window = args.embedding_window()?;
     let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(|error| {
         if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
@@ -866,6 +944,10 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
         .embedder(embedder)
         .batch_size(window)
         .max_audio_duration_secs(args.max_audio_duration_secs);
+    let builder = match provider {
+        Some(provider) => builder.shared_provider(provider),
+        None => builder,
+    };
     #[cfg(feature = "audio-stt")]
     let builder = builder.audio_extractor(audio_extractor(
         args.stt_model_dir.as_deref(),
@@ -903,7 +985,11 @@ fn open_cache(path: Option<&Path>) -> Result<SqliteCache> {
 }
 
 fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    Ok(if paths.is_empty() { vec![cwd()] } else { paths })
+    let paths = if paths.is_empty() { vec![cwd()] } else { paths };
+    for path in &paths {
+        seyk::discovery::ensure_allowed_path(&seyk::expand_tilde(path))?;
+    }
+    Ok(paths)
 }
 
 fn cwd() -> PathBuf {
@@ -1259,6 +1345,10 @@ mod tests {
             heading: None,
             preview: preview.map(str::to_string),
             query_index: 0,
+            r#match: seyk::MatchReason {
+                semantic_rank: Some(1),
+                ..Default::default()
+            },
             signals: MatchSignals {
                 semantic: Some(score),
                 ..Default::default()
@@ -1269,6 +1359,7 @@ mod tests {
     fn results() -> SearchResults {
         SearchResults {
             degraded: None,
+            kind_counts: None,
             queries: vec!["father".into()],
             mode: SearchMode::Semantic,
             hits: vec![
@@ -1415,10 +1506,49 @@ mod tests {
         assert!(out.contains("kitchen.jpg  [name]\n"), "{out}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn missing_model_fallback_preserves_local_content_provider() {
+        let temp = tempfile::Builder::new()
+            .prefix("lexical-policy-")
+            .tempdir()
+            .unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("safe.txt"), "quartz lighthouse").unwrap();
+        std::fs::create_dir(root.join("Library")).unwrap();
+        std::fs::write(root.join("Library/hidden.txt"), "quartz excluded").unwrap();
+        let missing = root.join("missing-model");
+        let cli = Cli::try_parse_from([
+            "seyk",
+            "search",
+            "quartz",
+            "--model",
+            missing.to_str().unwrap(),
+        ])
+        .unwrap();
+        let Command::Search { model, .. } = cli.command else {
+            unreachable!()
+        };
+        let provider = std::sync::Arc::new(
+            seyk::local_content::LocalContentProvider::new(std::slice::from_ref(&root)).unwrap(),
+        );
+        let engine = search_engine_with_provider(&model, true, Some(provider)).unwrap();
+        let result = engine.search("quartz").paths([&root]).execute().unwrap();
+        assert_eq!(
+            result.degraded.unwrap().reason,
+            seyk::DegradedReason::NoModel
+        );
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(
+            result.hits[0].resource.to_file_path().unwrap(),
+            root.join("safe.txt")
+        );
+    }
+
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 7);
+        assert_eq!(v["schema_version"], 8);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1426,6 +1556,8 @@ mod tests {
                 .unwrap()
                 .as_str()
         );
+        assert_eq!(first["match"]["semantic_rank"], 1);
+        assert_eq!(first["match"]["matched_terms"], serde_json::json!([]));
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");
@@ -1438,12 +1570,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 7);
+        assert_eq!(value["schema_version"], 8);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            7
+            8
         );
     }
 
@@ -1474,7 +1606,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 7);
+        assert_eq!(value["schema_version"], 8);
         assert!(
             value["hits"]
                 .as_array()

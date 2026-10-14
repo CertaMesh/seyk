@@ -6,6 +6,11 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error(
+        "refusing secret file or directory: {path} (built-in deny policy cannot be overridden)"
+    )]
+    SecretFile { path: PathBuf },
+
     #[error("STT model {reason}; run `seyk model download --stt`")]
     SttModel { reason: &'static str },
     #[error("speech-to-text failed: {reason}")]

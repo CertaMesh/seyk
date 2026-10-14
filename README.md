@@ -7,8 +7,10 @@
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
 </p>
 
-Local semantic search over your own files, built on Google's
+Local hybrid search over your own files and code: semantic meaning, BM25
+keywords, and file names. Semantic retrieval runs on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
+Use the CLI, embed the Rust library, or connect an agent through MCP.
 
 Ask a question in your own words, or type an exact name, and get back the
 passages that match. Meaning, keywords and file names are searched together:
@@ -33,9 +35,24 @@ question; the tag in brackets says what found each hit.)
 It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
 
-What it is **not**: there is no chat, no answer generation, no summaries, no OCR and
-no transcription. It finds relevant resources and points at the exact place inside
-them. What happens next is up to the application.
+Seyk returns relevant resources and exact locations inside them. It does not
+generate answers or summaries. Audio retrieval and on-demand speech-to-text
+extraction are [opt-in](#speech-to-text-extraction-opt-in); scanned PDFs support
+image-based retrieval, with [OCR still a follow-up](#pdfs).
+
+## Benchmarks
+
+![Seyk hybrid, semantic and lexical retrieval compared with sourced published model scores; higher nDCG@10 is better](docs/assets/benchmarks.svg)
+
+nDCG@10 measures how well the first ten results rank relevant documents, giving
+more credit to relevant results near the top. Scores range from 0 to 1; published
+bars use different models and whole-document setups, so they provide context
+rather than a controlled comparison with Seyk's segmented-document retrieval.
+
+Seyk 0.1.0 at `28814a851ded` · EmbeddingGemma 2 · q8 · 256 dimensions · CPU ·
+Apple M5 Max (18 cores, 64 GiB), macOS 26.5 · 2 inference threads.
+Hybrid trails semantic-only on SciFact; fusion tuning is tracked in todo 4542.
+See [full results, sources and reproduction steps](docs/benchmarks.md#published-retrieval-comparison).
 
 ## Why EmbeddingGemma 2
 
@@ -167,6 +184,21 @@ seyk cache clear
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
 
+### Keyword search
+
+The default `hybrid` mode combines meaning, BM25 keyword relevance, and file-name
+matches. Use `lexical` to rank exact terms, identifiers, and names without
+embedding the query:
+
+```sh
+seyk search "INC-18372" ~/notes --mode lexical
+seyk search "Session::restore" ~/code --mode lexical
+```
+
+The CLI still loads a model to index new or changed files; lexical query ranking
+does not make this a model-free indexing mode. See [scores and tags](#scores-and-tags)
+for how the three match types are combined.
+
 ### Extract a search hit
 
 Search locates evidence; extraction reads a chosen hit and verifies its full
@@ -186,8 +218,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4`, `5`, `6` or `7`, not a bare hit. The extraction document uses
-version 7 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5`, `6`, `7` or `8`, not a bare hit. The extraction document uses
+version 8 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -395,6 +427,37 @@ same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
 Windows `seyk mcp` always runs standalone.
 
+For automatic local-content collections on Unix, opt into a fixed narrower
+policy with `seyk mcp --local-content /absolute/real/folder`. It requires explicit
+directory roots and always runs in-process, bypassing the daemon. MCP initialize
+advertises `serverInfo.name: seyk-local-content-v1`; clients relying on this
+policy must require that name and JSON schema 6 or later, and refuse an older helper
+instead of dropping the flag. Use `--no-watch` to disable background indexing.
+
+Local-content cached queries retain their indexed-only scope; their background
+indexer discovers new files. Model-loading and model-free fallback keep the
+same local-content access policy.
+
+The same policy filters discovery and every content read/open: hidden paths,
+`.icloud` markers, Library/cache/caches/build/dist/target/node_modules/__pycache__
+directory names (ASCII case-insensitive), and structural Rust outputs under
+target(s)/[up to two namespace components]/debug or release followed by
+incremental/.fingerprint/build/deps/examples are excluded. Ordinary `targets/data`
+remains eligible. Include/exclude options cannot widen this fixed policy. Roots
+and file/directory links are refused, including in-root aliases; supply real
+POSIX paths, since `/tmp` can itself be a symlink on macOS. Roots are pinned by
+directory descriptors and current device/inode checks. Other Seyk modes retain
+their existing discovery and explicit-link behavior.
+
+Observed macOS dataless files are refused before content open, with descriptor
+type/identity/flags checked again afterward. Neither this mode nor the ordinary
+filesystem guard guarantees atomic prevention of hydration: cloud state can
+change between the metadata check and open, and directories can move while
+traversed. Discovery is metadata-only and path-based, with the fixed policy and
+confined metadata checks before descending. A returned seekable audio handle
+is not rechecked at each later read. Model/cache/materializer reads and custom
+resource providers are separate from this content boundary.
+
 See [MCP indexing and inline search latency](docs/mcp.md) for how inline sync
 can wait behind a watcher indexing another root.
 
@@ -473,7 +536,16 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 7`.
+CLI JSON objects and MCP search responses include `schema_version: 8`. Version 7 added result-kind counts, per-root
+indexing progress and `index_status`; version 8 adds optional lexical-only
+`degraded` metadata and its reason.
+Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
+`semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
+containing only normalized query tokens confirmed by the keyword index. Ranks
+precede fusion and the final limit; `null` means the leg did not contribute.
+Match provenance leaves existing scores/signals and ranking unchanged; older
+JSON defaults to empty provenance. See
+[match provenance](docs/mcp.md#per-hit-match-provenance) for token and compatibility details.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -488,8 +560,8 @@ surfaces use the same optional `degraded` object; ready results omit it.
 
 The engine uses `ResourceProvider` for enumeration, reads, freshness and deletion
 checks. `FsProvider` is the default. `ResourceProvider`, `ResourceScope`,
-`ProvidedResource` and `ResourceVersion` may change before 1.0; filesystem is the
-only supported provider. There are no remote connectors.
+`ProvidedResource`, `ResourceListing` and `ResourceVersion` may change before 1.0;
+filesystem is the only supported provider. There are no remote connectors.
 
 Other backends plug in through the `Embedder` trait:
 
@@ -689,8 +761,48 @@ these fields; extraction still accepts search documents from versions 2–6.
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
 A file passed explicitly on the command line is searched as plain text even with
-an unknown extension. Directories skip `.git`, `target`, `node_modules`, `.hg`,
+an unknown extension, except the secret paths listed below. Directories skip `.git`, `target`, `node_modules`, `.hg`,
 `.svn`, `__pycache__`, `.venv` and hidden entries by default.
+
+### Files Seyk never indexes
+
+Seyk blocks these names before reading file contents. Matching uses Unicode
+compatibility normalization and full case folding on every platform (including
+long `ſ`, Kelvin `K`, and compatibility spellings):
+
+- Keys and certificate containers: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
+- SSH private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `id_xmss`,
+  including copies with a `.`, `_`, or `-` suffix (for example `id_rsa.backup`
+  or `id_ed25519_sk`). Names ending in `.pub` are exempt from this SSH rule.
+- Password stores: `*.kdbx`, `*.kdb`, `*.1pif`, and all contents of
+  `*.agilekeychain` and `*.opvault` directories.
+- Environment files: `.env`, `.env.*`, `*.env`, including examples and templates.
+- Keychain exports: `*.keychain`, `*.keychain-db`.
+- Credentials: `.netrc`, `netrc`, `_netrc`, `.pgpass`, `pgpass`, `pgpass.conf`,
+  `credentials` (including `.aws/credentials`), `credentials.json`, and
+  `.docker/config.json`.
+
+There is no override. `--include`, `--hidden`, disabling default directory
+exclusions, and library/MCP filters cannot admit these paths. The same policy
+applies to watching, cached-only search, previews, and extraction. Discovery
+skips blocked paths; explicitly naming one returns a `refusing secret file or
+directory` error. Every supplied component, intermediate symlink target, and final canonical path
+is checked. Resolution stops with an error after 40 symlink hops. Logical
+directory names survive every hop, so an alias through a `.docker` directory
+symlink still blocks its `config.json`, including paths containing `..`. Password-store directory components
+(`*.opvault`, `*.agilekeychain`) block every descendant; other rules apply to
+files only. An ordinary source directory such as `src/credentials/schema.rs`
+remains searchable.
+
+Previously cached entries for blocked paths are excluded from search and cannot
+be extracted. This does not erase old cache data; use `seyk cache clear` to
+remove it. The policy is centralized in `seyk-core/src/discovery.rs`. It checks
+names, not contents: secrets renamed to ordinary filenames, hard links with
+ordinary names, or credentials embedded in other documents are not detected.
+Names are checked before files are opened; concurrent filesystem changes can
+race those checks (TOCTOU). This policy is not a filesystem sandbox. A dotfiles target such as
+`~/dotfiles/docker/config.json` is blocked by the Docker rule only when the
+requested traversal passes through a `.docker` name.
 
 ### How text is segmented
 
@@ -870,3 +982,50 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
+
+### Result counts and indexing progress
+
+Opt in with `seyk search "query" ./folder --json --kind-counts`, MCP search
+`kind_counts: true`, or the Rust builder `.kind_counts(true)`. The optional
+`kind_counts` map counts **returned segment hits**, after filtering, ranking and
+limit. Keys are the existing locator kinds: `text`, `page_text` (PDF text),
+`page` (rendered/scanned PDF page), `time` (audio window), `whole_resource`
+(e.g. an image), and reserved `image_region`. Absent kinds have zero hits;
+an empty result has `{}`. These are not unique-file counts or corpus totals.
+No candidate-total query is added, and ranking and candidate depth are unchanged.
+
+Daemon status (including `--json`), MCP `index_status`, and MCP search expose
+`index_progress`: one entry per watched root, with `root` (a lossless file URI)
+and nullable `progress`.
+Existing `folders` and `index.state` fields remain unchanged. Library callers get
+`ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
+`SyncStats::progress`. A library request spanning several roots gets one combined
+pass snapshot; daemon watchers each index one root. Before `Discovered`, a pass
+also sends `ProgressEvent::Walked` with the roots its listing actually walked,
+resolved once before the walk, when the provider reports them through
+`ResourceProvider::list_walked` (`FsProvider` does; the default reports none).
+MCP sessions see a watcher's counts only when that walked root lies inside the
+session's pinned root; a pass without one exposes no counts.
+
+`progress.by_kind` uses resource kinds `text`, `pdf`, `image`, and `audio`.
+Each entry counts resources `indexed`, `waiting`, and `skipped` in the current
+or last completed discovery pass, **not a persistent cache inventory**. All
+resources initially wait; successful cache reuse or a committed update moves
+them to indexed, and observed whole-resource failures move them to skipped.
+An empty/partially searchable PDF committed successfully counts as indexed;
+individual failed pages remain in page diagnostics. Counts reset on rediscovery,
+so removed files disappear. Skips describe this pass only; durable skipped-version
+counts across process restarts are unavailable. No skipped-version storage is added.
+
+`eta_seconds` is `ceil(waiting_resources * elapsed_pass_seconds /
+newly_indexed_resources)`, using this process's current pass only. It stays null
+until at least two newly indexed resources complete and at least 1 ms elapses,
+and returns to null when nothing waits. Cache reuse and skips do not train the
+rate. This rough resource-throughput estimate includes discovery-following
+preparation/embedding/commit time and assumes the remaining resource mix has
+similar cost; it is not a segment-based prediction or a countdown. Snapshots
+update at resource completions. A large first PDF/audio resource can therefore
+keep ETA null until later resources finish. Failed/stopped watchers invalidate
+the snapshot. Loading/unavailable progress is null. A session confined to a child
+of a watched root receives null progress for its own root rather than revealing
+the parent's inventory. Status never starts indexing or loads a model.

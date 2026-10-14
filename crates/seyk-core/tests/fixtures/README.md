@@ -48,7 +48,9 @@ counts, continued indexing, and physical page locators for surviving pages.
 It covers hybrid, lexical and semantic search. The capture uses main's engine,
 not a second request through the changed implementation. Temporary root paths,
 source mtimes and elapsed milliseconds are normalized; scores, order, signals,
-locators, hashes, previews and deterministic stats remain intact.
+locators, hashes, previews and deterministic stats remain intact. The later
+additive `match` field is excluded from this historical fixture;
+`counts_ranking_golden.rs` checks complete hits including that field.
 
 To reproduce, create an isolated checkout of that main commit with `anvil`, copy
 `ready_main_golden.rs` into its core tests, remove `.lexical_fallback(true)`

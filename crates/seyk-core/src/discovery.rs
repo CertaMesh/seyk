@@ -3,6 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use caseless::Caseless;
+use unicode_normalization::UnicodeNormalization;
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -20,6 +23,309 @@ pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     "__pycache__",
     ".venv",
 ];
+
+/// Secret names are blocked independently of all discovery options. File rules
+/// apply to the final component (assumed to be a file); password-store directory
+/// rules apply throughout. Use `ensure_allowed_path` for filesystem paths where
+/// the final component may be a directory. This is not content inspection.
+/// Keep the list here; all filesystem entry points use this matcher.
+pub fn is_secret_path(path: &Path) -> bool {
+    secret_path(path, false)
+}
+
+fn secret_path(path: &Path, is_dir: bool) -> bool {
+    const SUFFIXES: &[&str] = &[
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+        ".jks",
+        ".keystore",
+        ".kdbx",
+        ".kdb",
+        ".1pif",
+        ".agilekeychain",
+        ".opvault",
+        ".env",
+        ".keychain",
+        ".keychain-db",
+    ];
+    const NAMES: &[&str] = &[
+        ".netrc",
+        "netrc",
+        "_netrc",
+        ".pgpass",
+        "pgpass",
+        "pgpass.conf",
+        "credentials",
+        "credentials.json",
+    ];
+    const SSH_KEYS: &[&str] = &["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_xmss"];
+    let mut previous = String::new();
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        // Unicode compatibility caseless normalization, including full folds
+        // (e.g. long s, Kelvin sign and sharp s). A conservative superset of
+        // case-insensitive filesystem equivalence, identical on all platforms.
+        let name = name.to_string_lossy();
+        let name: String = if name.is_ascii() {
+            name.to_ascii_lowercase()
+        } else {
+            name.nfd()
+                .default_case_fold()
+                .nfkd()
+                .default_case_fold()
+                .nfkd()
+                .collect()
+        };
+        if name.ends_with(".opvault") || name.ends_with(".agilekeychain") {
+            return true;
+        }
+        let file = components.peek().is_none() && !is_dir;
+        if file
+            && (SUFFIXES.iter().any(|suffix| name.ends_with(*suffix))
+                || NAMES.contains(&name.as_str())
+                || name == ".env"
+                || name.starts_with(".env.")
+                || (previous == ".docker" && name == "config.json")
+                || (!name.ends_with(".pub")
+                    && SSH_KEYS.iter().any(|key| {
+                        name == *key
+                            || name.strip_prefix(*key).is_some_and(|rest| {
+                                rest.starts_with('.')
+                                    || rest.starts_with('_')
+                                    || rest.starts_with('-')
+                            })
+                    })))
+        {
+            return true;
+        }
+        previous = name;
+    }
+    false
+}
+
+/// Check every supplied component and symlink target before opening a path.
+/// Missing paths are still checked (watcher removal events need this); ordinary
+/// I/O remains the caller's responsibility. Symlink loops fail after 40 hops.
+/// This name policy is not an atomic open or a filesystem sandbox.
+pub fn ensure_allowed_path(path: &Path) -> Result<()> {
+    resolve_allowed_path(path).map(|_| ())
+}
+
+struct CheckedPath {
+    path: PathBuf,
+    aliases: Vec<std::ffi::OsString>,
+}
+
+fn resolve_allowed_path(path: &Path) -> Result<CheckedPath> {
+    let absolute = unresolved_absolute_path(path)?;
+    let mut resolver = PolicyResolver {
+        original: path,
+        hops: 0,
+        aliases: std::collections::HashMap::new(),
+    };
+    let state = resolver.walk(ResolvedPath::default(), &absolute)?;
+    // No symlinks remain here. Also check the filesystem's stored spelling.
+    let real = state.path.canonicalize().unwrap_or(state.path.clone());
+    resolver.check(&real, state.is_dir())?;
+    let aliases = resolver.aliases.remove(&real).unwrap_or_default();
+    Ok(CheckedPath {
+        path: real,
+        aliases,
+    })
+}
+
+#[derive(Clone, Default)]
+struct ResolvedPath {
+    path: PathBuf,
+    directories: Vec<bool>,
+}
+
+impl ResolvedPath {
+    fn is_dir(&self) -> bool {
+        self.directories.last().copied().unwrap_or(true)
+    }
+}
+
+struct PolicyResolver<'a> {
+    original: &'a Path,
+    hops: usize,
+    // Retain every directory alias for this traversal, even after an absolute
+    // target or .. leaves and re-enters that directory. Canonical keys below
+    // only inspect prefixes whose symlink hops we have already checked.
+    aliases: std::collections::HashMap<PathBuf, Vec<std::ffi::OsString>>,
+}
+
+impl PolicyResolver<'_> {
+    fn check(&self, path: &Path, is_dir: bool) -> Result<()> {
+        if secret_path(path, is_dir) {
+            return Err(Error::SecretFile {
+                path: self.original.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_name(
+        &self,
+        parent: &ResolvedPath,
+        name: &std::ffi::OsStr,
+        is_dir: bool,
+    ) -> Result<()> {
+        self.check(&parent.path.join(name), is_dir)?;
+        if !self.aliases.is_empty() {
+            let key = parent
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| parent.path.clone());
+            if let Some(names) = self.aliases.get(&key) {
+                for alias in names {
+                    self.check(&Path::new(alias).join(name), is_dir)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn walk(&mut self, mut state: ResolvedPath, path: &Path) -> Result<ResolvedPath> {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        while let Some(component) = components.next() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    state.path.push(component);
+                    state.directories.clear();
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if !state.is_dir() {
+                        return Err(Error::io(
+                            self.original,
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotADirectory,
+                                "path component is not a directory",
+                            ),
+                        ));
+                    }
+                    if state.path.pop() {
+                        state.directories.pop();
+                    }
+                }
+                Component::Normal(name) => {
+                    // Intrinsically sensitive directories are refused even if
+                    // a later .. or absolute link target would erase the name.
+                    self.check_name(&state, name, true)?;
+                    let next = state.path.join(name);
+                    let metadata = match std::fs::symlink_metadata(&next) {
+                        Ok(metadata) => Some(metadata),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(e) => return Err(Error::io(self.original, e)),
+                    };
+                    if metadata
+                        .as_ref()
+                        .is_some_and(|m| m.file_type().is_symlink())
+                    {
+                        self.hops += 1;
+                        if self.hops > 40 {
+                            return Err(Error::io(
+                                self.original,
+                                std::io::Error::other("too many symbolic link hops (maximum 40)"),
+                            ));
+                        }
+                        let target =
+                            std::fs::read_link(&next).map_err(|e| Error::io(self.original, e))?;
+                        let resolved = self.walk(state.clone(), &target)?;
+                        self.check_name(&state, name, resolved.is_dir())?;
+                        if resolved.is_dir() {
+                            let key = resolved
+                                .path
+                                .canonicalize()
+                                .unwrap_or_else(|_| resolved.path.clone());
+                            self.aliases
+                                .entry(key)
+                                .or_default()
+                                .push(name.to_os_string());
+                        }
+                        state = resolved;
+                    } else {
+                        let is_dir = metadata
+                            .as_ref()
+                            .map_or(components.peek().is_some(), |m| m.is_dir());
+                        self.check_name(&state, name, is_dir)?;
+                        state.path = next;
+                        state.directories.push(is_dir);
+                    }
+                }
+            }
+        }
+        Ok(state)
+    }
+}
+
+// Unlike std::path::absolute on Windows, do not collapse caller-supplied ..
+// before the resolver can inspect the components and apply symlink semantics.
+fn unresolved_absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return Err(Error::io(
+            path,
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty path"),
+        ));
+    }
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
+        // Resolve only the drive's working directory for a drive-relative path
+        // such as C:notes/../file; keep all supplied normal/parent components.
+        let base =
+            std::path::absolute(Path::new(prefix.as_os_str())).map_err(|e| Error::io(path, e))?;
+        return Ok(base.join(path.components().skip(1).collect::<PathBuf>()));
+    }
+    std::env::current_dir()
+        .map(|base| base.join(path))
+        .map_err(|e| Error::io(path, e))
+}
+
+/// Make a logical root absolute without erasing symlink names used by policy.
+/// Resolve `..` with filesystem semantics before a file-URI codec can collapse
+/// it lexically. Keep the logical parent when it denotes that same directory.
+pub fn absolute_logical_path(path: &Path) -> Result<PathBuf> {
+    ensure_allowed_path(path)?;
+    logical_absolute_path(path)
+}
+
+fn logical_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = unresolved_absolute_path(path)?;
+    let mut logical = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                let real_parent = logical
+                    .join("..")
+                    .canonicalize()
+                    .map_err(|e| Error::io(path, e))?;
+                if logical
+                    .parent()
+                    .and_then(|p| p.canonicalize().ok())
+                    .as_ref()
+                    == Some(&real_parent)
+                {
+                    logical.pop();
+                } else {
+                    logical = real_parent;
+                }
+            }
+            std::path::Component::CurDir => {}
+            component => logical.push(component),
+        }
+    }
+    Ok(logical)
+}
 
 const MARKDOWN_EXT: &[&str] = &["md", "markdown", "mdown", "mkd"];
 const PLAIN_EXT: &[&str] = &["txt", "text", "rst", "org", "adoc", "tex"];
@@ -72,7 +378,7 @@ impl ResourceKind {
     }
 }
 
-/// Which files to consider.
+/// Which files to consider. Secret paths are always denied, regardless of these options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryOptions {
     /// If non-empty, only files matching one of these globs are searched.
@@ -80,7 +386,7 @@ pub struct DiscoveryOptions {
     pub include: Vec<String>,
     /// Files or directories matching any of these globs are skipped.
     pub exclude: Vec<String>,
-    /// Skip [`DEFAULT_EXCLUDED_DIRS`].
+    /// Skip [`DEFAULT_EXCLUDED_DIRS`]. Disabling this does not admit secret paths.
     pub default_excludes: bool,
     /// Visit files and directories whose name starts with `.`.
     pub include_hidden: bool,
@@ -142,17 +448,89 @@ impl Matcher {
     }
 }
 
+/// Match request globs without requiring a missing resource to exist. Excluding
+/// a directory also excludes its descendants, just as discovery prunes the walk.
+pub(crate) fn matches_scope_filters(
+    path: &Path,
+    root: &Path,
+    opts: &DiscoveryOptions,
+) -> Result<bool> {
+    Ok(ScopeFilters::new(opts)?.matches(path, root))
+}
+
+/// Compile once for a cached-identity query; excludes prune ancestors too.
+pub(crate) struct ScopeFilters {
+    include: Matcher,
+    exclude: Matcher,
+}
+
+impl ScopeFilters {
+    pub(crate) fn new(opts: &DiscoveryOptions) -> Result<Self> {
+        Ok(Self {
+            include: Matcher::new(&opts.include)?,
+            exclude: Matcher::new(&opts.exclude)?,
+        })
+    }
+
+    pub(crate) fn matches(&self, path: &Path, root: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        if relative
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .any(|p| self.exclude.is_match(p))
+        {
+            return false;
+        }
+        self.include.empty || self.include.is_match(relative)
+    }
+}
+
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
 ///
-/// Files passed explicitly are always considered, even when hidden. Files with
-/// an unknown extension are treated as plain text only when passed explicitly.
+/// Files passed explicitly are considered even when hidden, except secret paths,
+/// which return [`Error::SecretFile`]. No discovery option overrides this policy.
+/// Files with an unknown extension are treated as plain text only when passed explicitly.
 pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<DiscoveredResource>> {
+    Ok(discover_with_policy(roots, opts, |_| true)?.resources)
+}
+
+/// Discovered resources plus the canonical roots the walk actually used.
+pub(crate) struct WalkedDiscovery {
+    pub(crate) resources: Vec<DiscoveredResource>,
+    /// Each walked root as resolved once before its walk, in root order; roots
+    /// the policy skipped are absent. Retargeting a root alias during the walk
+    /// cannot change these, so every resource above lies under one of them.
+    pub(crate) walked_roots: Vec<PathBuf>,
+}
+
+/// An additional fixed policy may only narrow discovery, including explicit roots.
+pub(crate) fn discover_with_policy(
+    roots: &[PathBuf],
+    opts: &DiscoveryOptions,
+    allowed: impl Fn(&Path) -> bool,
+) -> Result<WalkedDiscovery> {
     let include = Matcher::new(&opts.include)?;
     let exclude = Matcher::new(&opts.exclude)?;
     let mut out = Vec::new();
+    let mut walked_roots = Vec::new();
 
     for root in roots {
-        let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
+        // Resolve all root hops once, retaining intermediate directory names
+        // (notably a .docker alias) that canonicalization would erase.
+        let checked = resolve_allowed_path(root)?;
+        let logical_root = logical_absolute_path(root)?;
+        if !allowed(root) {
+            continue;
+        }
+        let root = checked.path;
+        if !allowed(&root) {
+            continue;
+        }
+        walked_roots.push(root.clone());
+        #[cfg(all(feature = "test-support", debug_assertions))]
+        test_hooks::root_resolved(&logical_root);
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
             let kind =
@@ -167,6 +545,24 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
+                // WalkDir never follows descendant links, so stored entry names
+                // need only the name policy. Do not resolve every ancestor again.
+                if e.file_type().is_symlink() {
+                    return false;
+                }
+                let rel = e.path().strip_prefix(&root).unwrap_or(e.path());
+                let is_dir = e.file_type().is_dir();
+                if secret_path(e.path(), is_dir)
+                    || secret_path(&logical_root.join(rel), is_dir)
+                    || (e.depth() == 1
+                        && checked
+                            .aliases
+                            .iter()
+                            .any(|alias| secret_path(&Path::new(alias).join(rel), is_dir)))
+                    || !allowed(e.path())
+                {
+                    return false;
+                }
                 if e.depth() == 0 {
                     return true;
                 }
@@ -210,7 +606,43 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
 
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out.dedup_by(|a, b| a.path == b.path);
-    Ok(out)
+    Ok(WalkedDiscovery {
+        resources: out,
+        walked_roots,
+    })
+}
+
+/// Deterministic seam for races between root resolution and the walk.
+#[cfg(all(feature = "test-support", debug_assertions))]
+pub mod test_hooks {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn FnOnce() + Send>;
+    static ROOT_RESOLVED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+
+    /// Run `hook` once, after discovery has resolved the logical `root` and
+    /// before it walks the resolved directory. Keyed by root so parallel tests
+    /// on other paths never trigger it.
+    pub fn after_root_resolved(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        ROOT_RESOLVED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root, Box::new(hook)));
+    }
+
+    pub(super) fn root_resolved(root: &Path) {
+        let hook = {
+            let mut hooks = ROOT_RESOLVED.lock().unwrap_or_else(|e| e.into_inner());
+            hooks
+                .iter()
+                .position(|(r, _)| r == root)
+                .map(|i| hooks.remove(i).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }
 
 fn to_resource(
@@ -257,6 +689,28 @@ pub fn audio_byte_limit(seconds: u64) -> crate::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_policy_path_keeps_parent_components() {
+        let relative = Path::new("vault.opvault/../safe.txt");
+        assert!(
+            unresolved_absolute_path(relative)
+                .unwrap()
+                .ends_with(relative)
+        );
+        assert!(unresolved_absolute_path(Path::new("")).is_err());
+        #[cfg(windows)]
+        for input in [
+            r"C:\vault.opvault\..\safe.txt",
+            r"\\?\C:\vault.opvault\..\safe.txt",
+        ] {
+            assert_eq!(
+                unresolved_absolute_path(Path::new(input)).unwrap(),
+                Path::new(input)
+            );
+        }
+    }
+
     use std::fs;
 
     #[test]

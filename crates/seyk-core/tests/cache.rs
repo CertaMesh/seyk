@@ -2005,3 +2005,56 @@ fn forensic_scrub_erases_compressed_suffixes_from_database_and_wal_separately() 
         );
     }
 }
+
+#[test]
+fn matched_term_batches_keep_order_duplicates_missing_keys_and_profile_isolation() {
+    let check = |cache: &mut dyn EmbeddingCache| {
+        cache.register_profile("terms", &profile("terms")).unwrap();
+        cache.register_profile("other", &profile("other")).unwrap();
+        let id: ResourceId = "mem://notes/plain".parse().unwrap();
+        let value = resource(&["segment"; 405]);
+        cache
+            .put_resource("terms", &id, &write(&value, "Café restore INC-123"))
+            .unwrap();
+        cache
+            .put_resource("other", &id, &write(&value, "unrelated"))
+            .unwrap();
+        let query = seyk_core::lexical::LexicalQuery::new(["CAFÉ restore INC-123 inc-missing"]);
+        let mut keys: Vec<_> = (0..405).rev().map(|i| (id.clone(), i)).collect();
+        keys.insert(2, (id.clone(), 999));
+        keys.push((id.clone(), 0));
+        keys.push(("mem://notes/missing".parse().unwrap(), 0));
+        let terms = cache.lexical_matched_terms("terms", &query, &keys).unwrap();
+        assert_eq!(terms.len(), keys.len());
+        for (i, matched) in terms.iter().enumerate() {
+            if i == 2 || i == keys.len() - 1 {
+                assert!(matched.is_empty());
+            } else {
+                assert_eq!(matched, &["cafe", "restore", "inc", "123"]);
+            }
+        }
+        assert!(
+            cache
+                .lexical_matched_terms("other", &query, &keys)
+                .unwrap()
+                .iter()
+                .all(Vec::is_empty)
+        );
+        assert!(
+            cache
+                .lexical_matched_terms("unknown", &query, &keys)
+                .unwrap()
+                .iter()
+                .all(Vec::is_empty)
+        );
+        assert!(
+            cache
+                .lexical_matched_terms("terms", &query, &[])
+                .unwrap()
+                .is_empty()
+        );
+    };
+    check(&mut MemoryCache::new());
+    let dir = TempDir::new().unwrap();
+    check(&mut SqliteCache::open(dir.path().join("cache.db")).unwrap());
+}

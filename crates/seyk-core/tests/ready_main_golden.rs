@@ -15,6 +15,11 @@ fn normalize(value: &mut serde_json::Value, root: &str) {
             }
         }
         serde_json::Value::Object(object) => {
+            // Main added provenance after this historical golden was captured.
+            // Its complete value is covered by counts_ranking_golden and hybrid.
+            if object.contains_key("signals") && object.contains_key("locator") {
+                object.remove("match");
+            }
             for (key, value) in object {
                 if key == "modified_ns" || key.ends_with("_ms") {
                     *value = serde_json::json!(0);
