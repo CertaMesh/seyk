@@ -153,7 +153,11 @@ class Worker:
             self.process.wait(timeout=15)
         except subprocess.TimeoutExpired:
             os.killpg(self.process.pid, signal.SIGTERM)
-            self.process.wait(timeout=10)
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.process.pid, signal.SIGKILL)
+                self.process.wait()
         finally:
             self.process.stdout.close()
             self.selector.close()
@@ -255,7 +259,9 @@ def run(args):
                 "profile_id": f"{tool}-{VERSIONS[tool]}-{mode}", "depth": 200,
                 "lexical_weight": None, "manifest_blake3": manifest_hash, "run_id": run_id,
                 "threads": 1 if tool == "leann" else 2, "competitor": tool, "competitor_version": VERSIONS[tool],
-                "thread_settings": "LEANN forces OMP/MKL=1; index num_threads=2" if tool == "leann" else "QMD embedding parallelism=2; native runtime defaults",
+                "thread_settings": {"leann": "LEANN forces OMP/MKL=1; index num_threads=2",
+                    "qmd": "QMD embedding parallelism=2; native runtime defaults",
+                    "digup": "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"}[tool],
                 "competitor_mode": mode, "hardware_path": "CPU" if tool == "leann" or mode == "bm25" else "Metal",
                 "platform": platform.platform(), "cpu": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
                 **provenance, "index": index,

@@ -453,6 +453,10 @@ uses QMD's regex chunker and Metal. BM25 uses CPU and should get its own label i
 measuring lexical-only index time. Vector, hybrid and full can share the vector
 index, with separate run files. Full and hybrid use the scorer's `hybrid` slot;
 `competitor_mode` and the run ID distinguish them. Score these files separately.
+QMD's native query expansion samples with temperature 0.7, top-p 0.8 and top-k
+20, so repeat runs can vary. When hybrid and full share an index, run hybrid
+first: full then reuses the cached expansions. Their query times consequently
+reflect different cache states; they are not an isolated reranker latency test.
 
 DigUp's `hybrid` mode uses its stock `index --include-datasets` and persistent
 `search-service`, with `limit=200`, meaning search enabled and prefix completion
