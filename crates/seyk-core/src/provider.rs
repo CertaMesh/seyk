@@ -115,6 +115,20 @@ pub trait ResourceProvider: Send + Sync {
     }
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
+    /// Opt in to authorizing indexed identities without discovering uncached descendants.
+    /// Other providers retain their normal listing behavior in cached-only searches.
+    fn supports_cached_listing(&self) -> bool {
+        false
+    }
+    /// Current eligibility for supplied cached identities, including scope and policy.
+    /// Called only after `supports_cached_listing` opts in; no content may be read here.
+    fn list_cached(
+        &self,
+        scope: &ResourceScope,
+        _ids: &[ResourceId],
+    ) -> Result<Vec<ProvidedResource>> {
+        self.list(scope)
+    }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>>;
     /// A known token must change when the resource bytes change. Use unknown
     /// when freshness cannot be established; the engine will reread and hash.

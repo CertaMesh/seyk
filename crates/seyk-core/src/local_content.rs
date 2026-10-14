@@ -5,7 +5,9 @@
 //! cloud-state or namespace snapshot: a directory can be renamed while traversed,
 //! and a file can become dataless between the precheck and content open.
 
-use crate::discovery::{discover_with_policy, matches_scope_filters};
+use crate::discovery::{
+    ResourceKind, ScopeFilters, audio_byte_limit, discover_with_policy, matches_scope_filters,
+};
 use crate::provider::ReadSeek;
 use crate::{
     Error, ProvidedResource, ResourceId, ResourceProvider, ResourceScope, ResourceVersion, Result,
@@ -356,6 +358,89 @@ impl LocalContentProvider {
     }
 }
 impl ResourceProvider for LocalContentProvider {
+    fn supports_cached_listing(&self) -> bool {
+        true
+    }
+
+    fn list_cached(
+        &self,
+        scope: &ResourceScope,
+        ids: &[ResourceId],
+    ) -> Result<Vec<ProvidedResource>> {
+        let filters = ScopeFilters::new(&scope.discovery)?;
+        let mut roots = Vec::new();
+        for id in &scope.roots {
+            let path = id
+                .to_file_path()
+                .ok_or_else(|| Error::Config("local-content requires file resources".into()))?;
+            // Verify the requested scope through the configured root's pinned
+            // identity, even for an empty cache. No descendant enumeration.
+            let stat = self.stat(&path)?;
+            let file = stat.st_mode & libc::S_IFMT == libc::S_IFREG;
+            ensure_kind(&stat, !file).map_err(|e| Error::io(&path, e))?;
+            roots.push((path, file));
+        }
+        let mut resources = Vec::new();
+        for id in ids {
+            let Some(path) = id.to_file_path() else {
+                continue;
+            };
+            if !policy_allows(&path) {
+                continue;
+            }
+            let explicit = roots.iter().any(|(root, file)| *file && path == *root);
+            if !explicit
+                && !roots
+                    .iter()
+                    .any(|(root, file)| !file && filters.matches(&path, root))
+            {
+                continue;
+            }
+            // Explicit files retain discovery's unknown-extension and filter
+            // semantics; the fixed local policy cannot be disabled by either.
+            let kind = match ResourceKind::from_path(&path) {
+                Some(kind) => kind,
+                None if explicit => ResourceKind::Text(crate::segment::TextFormat::Plain),
+                None => continue,
+            };
+            let Ok(stat) = self.stat(&path) else { continue };
+            if ensure_kind(&stat, false).is_err() {
+                continue;
+            }
+            let limit = if kind == ResourceKind::Audio {
+                let Ok(limit) = audio_byte_limit(scope.discovery.max_audio_duration_secs) else {
+                    continue;
+                };
+                limit
+            } else {
+                scope.discovery.max_file_bytes
+            };
+            if stat.st_size < 0 || stat.st_size as u64 > limit {
+                continue;
+            }
+            resources.push((
+                path.clone(),
+                ProvidedResource {
+                    id: id.clone(),
+                    kind,
+                    size_bytes: stat.st_size as u64,
+                    modified_ns: timestamp_ns(stat.st_mtime, stat.st_mtime_nsec),
+                    version: version(&stat),
+                    title: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
+                },
+            ));
+        }
+        resources.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.id.as_str().cmp(b.1.id.as_str()))
+        });
+        resources.dedup_by(|a, b| a.0 == b.0);
+        Ok(resources
+            .into_iter()
+            .map(|(_, resource)| resource)
+            .collect())
+    }
+
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
         let paths = scope
             .roots
