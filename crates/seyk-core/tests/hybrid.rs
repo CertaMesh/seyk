@@ -113,7 +113,7 @@ fn top(r: &SearchResults) -> String {
         .into_owned()
 }
 
-fn both_caches(test: impl Fn(SearchEngine, Arc<Counting>, &Path)) {
+fn both_caches(mut test: impl FnMut(SearchEngine, Arc<Counting>, &Path)) {
     let temp = corpus();
     let (e, c) = engine(MemoryCache::new());
     test(e, c, temp.path());
@@ -677,6 +677,7 @@ mod hydration {
         count: AtomicUsize,
         readback: Mutex<Readback>,
         partial_vectors: AtomicBool,
+        term_batches: Mutex<Vec<Vec<(ResourceId, usize)>>>,
     }
     impl Reads {
         fn next_readback(&self) -> Readback {
@@ -767,6 +768,15 @@ mod hydration {
         ) -> Result<Vec<LexicalHit>> {
             self.inner.lexical_search(p, q, r, n)
         }
+        fn lexical_matched_terms(
+            &self,
+            p: &str,
+            q: &LexicalQuery,
+            keys: &[(ResourceId, usize)],
+        ) -> Result<Vec<Vec<String>>> {
+            self.reads.term_batches.lock().unwrap().push(keys.to_vec());
+            self.inner.lexical_matched_terms(p, q, keys)
+        }
         fn prune_orphans(&mut self, p: &str) -> Result<u64> {
             self.inner.prune_orphans(p)
         }
@@ -837,6 +847,76 @@ mod hydration {
             .previews(None)
             .sync(false)
             .execute()
+    }
+
+    #[test]
+    fn terms_are_requested_only_for_final_contributing_hits() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                (0..80)
+                    .map(|i| format!("# Section {i}\n\nbasil garden {i}\n\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            for (mode, weight, query) in [
+                (SearchMode::Hybrid, 1.0, "basil"),
+                (SearchMode::Lexical, 1.0, "basil"),
+                (SearchMode::Hybrid, 0.0, "basil"),
+                (SearchMode::Semantic, 1.0, "basil"),
+                (SearchMode::Hybrid, 1.0, "absent"),
+            ] {
+                reads.term_batches.lock().unwrap().clear();
+                let result = e
+                    .search(query)
+                    .paths([&path])
+                    .mode(mode)
+                    .lexical_weight(weight)
+                    .limit(2)
+                    .sync(false)
+                    .previews(None)
+                    .execute()
+                    .unwrap();
+                let batches = reads.term_batches.lock().unwrap();
+                let expected = result
+                    .hits
+                    .iter()
+                    .filter(|h| h.signals.lexical.is_some())
+                    .count();
+                if expected == 0 {
+                    assert!(batches.is_empty());
+                } else {
+                    assert_eq!(batches.len(), 1);
+                    assert_eq!(batches[0].len(), expected);
+                    for (resource, ordinal) in &batches[0] {
+                        let cached = e
+                            .with_cache(|c| c.resource(e.profile_id(), resource))
+                            .unwrap()
+                            .unwrap();
+                        assert!(result.hits.iter().any(|h| h.resource == *resource
+                            && h.locator == cached.segments[*ordinal].locator));
+                    }
+                }
+            }
+            // Hits discarded during final hydration never request term metadata.
+            reads.term_batches.lock().unwrap().clear();
+            *reads.readback.lock().unwrap() = Readback::MissingResource;
+            assert!(
+                e.search("basil")
+                    .paths([&path])
+                    .mode(SearchMode::Lexical)
+                    .sync(false)
+                    .execute()
+                    .unwrap()
+                    .hits
+                    .is_empty()
+            );
+            assert!(reads.term_batches.lock().unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -1110,5 +1190,208 @@ mod hydration {
             }
         }
         // TempDir removes the generated PDFs and SQLite cache on return.
+    }
+}
+
+// Captured on main 71f9a184 before match provenance was implemented. Compare
+// f32 bits (not rounded scores), order, locators and existing signal fields.
+#[test]
+fn ranking_matches_pre_match_golden() {
+    let mut cases = Vec::new();
+    both_caches(|engine, _, root| {
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+        ] {
+            for queries in [
+                vec!["father"],
+                vec!["FATHER.MD"],
+                vec!["where did the restore path fail"],
+                vec!["INC-18372"],
+                vec!["garden.md", "father"],
+                vec!["where is the"],
+                vec!["absent"],
+            ] {
+                for limit in [1, 10] {
+                    for weight in [None, Some(0.0)] {
+                        let mut request = engine
+                            .search(queries[0])
+                            .mode(mode)
+                            .paths([root])
+                            .limit(limit);
+                        for q in &queries[1..] {
+                            request = request.query(*q);
+                        }
+                        if let Some(w) = weight {
+                            request = request.lexical_weight(w);
+                        }
+                        let r = request.execute().unwrap();
+                        cases.push(serde_json::json!({
+                            "mode": mode, "queries": queries, "limit": limit, "weight": weight,
+                            "hits": r.hits.iter().map(|h| serde_json::json!({
+                                "file": h.resource.to_file_path().unwrap().file_name().unwrap().to_str().unwrap(),
+                                "locator": h.locator, "score_bits": h.score.to_bits(),
+                                "semantic_bits": h.signals.semantic.map(f32::to_bits),
+                                "lexical_bits": h.signals.lexical.map(f32::to_bits),
+                                "filename": h.signals.filename, "query_index": h.query_index,
+                            })).collect::<Vec<_>>()
+                        }));
+                    }
+                }
+            }
+        }
+    });
+    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-main.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(cases, expected);
+}
+
+#[test]
+fn match_reasons_report_contributing_ranks_and_query_terms() {
+    both_caches(|engine, _, root| {
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+        ] {
+            let r = engine
+                .search("father.md")
+                .mode(mode)
+                .paths([root])
+                .limit(1)
+                .execute()
+                .unwrap();
+            let h = &r.hits[0];
+            assert_eq!(
+                h.r#match.semantic_rank.is_some(),
+                h.signals.semantic.is_some()
+            );
+            assert_eq!(
+                h.r#match.keyword_rank.is_some(),
+                h.signals.lexical.is_some()
+            );
+            assert_eq!(h.r#match.filename_rank.is_some(), h.signals.filename);
+            if mode == SearchMode::Semantic {
+                assert_eq!(h.r#match.semantic_rank, Some(1));
+                assert!(h.r#match.matched_terms.is_empty());
+            } else {
+                assert_eq!(h.r#match.keyword_rank, Some(1));
+                assert_eq!(h.r#match.filename_rank, Some(1));
+                assert_eq!(h.r#match.matched_terms, ["father", "md"]);
+            }
+        }
+        let disabled = engine
+            .search("father.md")
+            .paths([root])
+            .lexical_weight(0.0)
+            .execute()
+            .unwrap();
+        for h in &disabled.hits {
+            assert_eq!(h.r#match.keyword_rank, None);
+            assert!(h.r#match.matched_terms.is_empty());
+        }
+        let r = engine
+            .search("INC-18372 absent")
+            .query("RESTORE inc-18372")
+            .mode(SearchMode::Lexical)
+            .paths([root])
+            .execute()
+            .unwrap();
+        assert_eq!(r.hits[0].r#match.matched_terms, ["inc", "18372", "restore"]);
+        // An incomplete identifier group must not report its partial match.
+        let r = search(&engine, root, "INC-missing restore", SearchMode::Lexical);
+        assert_eq!(r.hits[0].r#match.matched_terms, ["restore"]);
+        // Old envelopes still deserialize with empty provenance.
+        let mut old = serde_json::to_value(&r.hits[0]).unwrap();
+        old.as_object_mut().unwrap().remove("match");
+        let restored: seyk_core::SearchHit = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.r#match, seyk_core::MatchReason::default());
+    });
+}
+
+#[test]
+fn match_terms_use_cached_index_without_reading_source_text() {
+    for sqlite in [false, true] {
+        let root = TempDir::new().unwrap();
+        let file = root.path().join("notes.md");
+        fs::write(&file, "Café privatecanary RESTORE").unwrap();
+        let db = TempDir::new().unwrap();
+        let e = if sqlite {
+            engine(SqliteCache::open(db.path().join("index.sqlite")).unwrap()).0
+        } else {
+            engine(MemoryCache::new()).0
+        };
+        e.index().paths([root.path()]).execute().unwrap();
+        let e = if sqlite {
+            drop(e);
+            engine(SqliteCache::open(db.path().join("index.sqlite")).unwrap()).0
+        } else {
+            e
+        };
+        fs::write(&file, "unrelated replacement").unwrap();
+        let r = e
+            .search("the CAFÉ restore CAFÉ absent")
+            .mode(SearchMode::Lexical)
+            .paths([root.path()])
+            .sync(false)
+            .previews(None)
+            .execute()
+            .unwrap();
+        assert_eq!(r.hits[0].r#match.matched_terms, ["cafe", "restore"]);
+        assert!(r.hits[0].preview.is_none());
+    }
+}
+
+#[test]
+fn filename_ranks_preserve_discovery_positions_after_fusion() {
+    for sqlite in [false, true] {
+        let dir = TempDir::new().unwrap();
+        for name in ["a", "b", "c"] {
+            fs::create_dir(dir.path().join(name)).unwrap();
+            fs::write(dir.path().join(name).join("note.md"), "shared content").unwrap();
+        }
+        let db = TempDir::new().unwrap();
+        let (e, _) = if sqlite {
+            engine(SqliteCache::open(db.path().join("cache.db")).unwrap())
+        } else {
+            engine(MemoryCache::new())
+        };
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Lexical,
+            SearchMode::Semantic,
+        ] {
+            let result = e
+                .search("note.md")
+                .paths([dir.path()])
+                .mode(mode)
+                .limit(10)
+                .execute()
+                .unwrap();
+            assert_eq!(result.hits.len(), 3);
+            for hit in result.hits {
+                let path = hit.resource.to_file_path().unwrap();
+                let parent = path
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let expected = match parent {
+                    "a" => 1,
+                    "b" => 2,
+                    "c" => 3,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    hit.r#match.filename_rank,
+                    (mode != SearchMode::Semantic).then_some(expected)
+                );
+            }
+        }
     }
 }
