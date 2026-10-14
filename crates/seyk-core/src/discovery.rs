@@ -643,7 +643,7 @@ fn walk_root_pinned<F: Fn(&Path) -> bool>(
     filters: &WalkFilters<'_, F>,
     out: &mut Vec<DiscoveredResource>,
 ) -> Result<()> {
-    use crate::pinned_dir::{EntryType, PinnedDir, entry_type, identity, modified_ns};
+    use crate::pinned_dir::{EntryType, PinnedDir, entry_type, modified_ns};
     let root = filters.root;
     let changed = || -> Result<()> {
         Err(Error::ChangedWhileReading {
@@ -651,33 +651,53 @@ fn walk_root_pinned<F: Fn(&Path) -> bool>(
         })
     };
     // The resolved root has no link component; finding one now means it changed.
-    let stat = match root.file_name() {
-        None => crate::pinned_dir::descriptor_stat(
-            &std::fs::File::open(root).map_err(|e| Error::io(root, e))?,
-        ),
-        Some(_) => PinnedDir::open_parent(root).and_then(|(parent, name)| parent.stat(name)),
+    let link = |e: &std::io::Error| e.kind() == std::io::ErrorKind::InvalidInput;
+    let parent = match root.file_name() {
+        None => None,
+        Some(_) => match PinnedDir::open_parent(root) {
+            Ok(parent) => Some(parent),
+            Err(e) if link(&e) => return changed(),
+            Err(e) => return Err(Error::io(root, e)),
+        },
     };
-    let stat = match stat {
-        Ok(stat) => stat,
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return changed(),
-        Err(e) => return Err(Error::io(root, e)),
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    test_hooks::root_opening(filters.logical_root);
+    // Open the root first and take its identity from the handle; never stat it
+    // first and compare. On Linux a stat does not trigger an automount (autofs,
+    // systemd automount) but the open does, so the two would name different
+    // inodes and every walk of an idle automounted root would fail. O_NOFOLLOW
+    // on the open and the type check on the handle keep the root link-free.
+    let opened = match &parent {
+        None => PinnedDir::open_absolute(root, true),
+        Some((parent, name)) => parent.open_dir(name, true),
     };
-    match entry_type(&stat) {
-        EntryType::File => {
-            out.extend(filters.explicit_file(stat.st_size as u64, modified_ns(&stat)));
-            return Ok(());
+    let dir = match opened {
+        Ok(dir) => dir,
+        Err(e) if link(&e) => return changed(),
+        // Not a directory, or one that cannot be opened: decide by a no-follow
+        // stat. A root file has no automount and is never opened here.
+        Err(open_error) => {
+            let stat = match &parent {
+                None => return Err(Error::io(root, open_error)),
+                Some((parent, name)) => parent.stat(name),
+            };
+            let stat = match stat {
+                Ok(stat) => stat,
+                Err(e) if link(&e) => return changed(),
+                Err(e) => return Err(Error::io(root, e)),
+            };
+            return match entry_type(&stat) {
+                EntryType::File => {
+                    out.extend(filters.explicit_file(stat.st_size as u64, modified_ns(&stat)));
+                    Ok(())
+                }
+                EntryType::Symlink => changed(),
+                // Like an unreadable directory, a root that cannot be listed
+                // yields nothing.
+                EntryType::Dir | EntryType::Other => Ok(()),
+            };
         }
-        EntryType::Dir => {}
-        EntryType::Symlink => return changed(),
-        EntryType::Other => return Ok(()),
-    }
-    // Like an unreadable directory, a root that cannot be listed yields nothing.
-    let Ok(dir) = PinnedDir::open_absolute(root, true) else {
-        return Ok(());
     };
-    if dir.identity() != identity(&stat) {
-        return changed();
-    }
     #[cfg(all(feature = "test-support", debug_assertions))]
     test_hooks::root_pinned(filters.logical_root);
     if !filters.admit(root, 0, true, false) {
@@ -834,6 +854,7 @@ pub mod test_hooks {
 
     type Hook = Box<dyn FnOnce() + Send>;
     static ROOT_RESOLVED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+    static ROOT_OPENING: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
     static ROOT_PINNED: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
     /// Run `hook` once, after discovery has resolved the logical `root` and
@@ -841,6 +862,15 @@ pub mod test_hooks {
     /// on other paths never trigger it.
     pub fn after_root_resolved(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
         ROOT_RESOLVED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root, Box::new(hook)));
+    }
+
+    /// Run `hook` once, after discovery has opened the parent of the directory
+    /// resolved for the logical `root` and just before it opens that directory.
+    pub fn before_root_opened(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+        ROOT_OPENING
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push((root, Box::new(hook)));
@@ -857,6 +887,11 @@ pub mod test_hooks {
 
     pub(super) fn root_resolved(root: &Path) {
         run(&ROOT_RESOLVED, root);
+    }
+
+    #[cfg(unix)]
+    pub(super) fn root_opening(root: &Path) {
+        run(&ROOT_OPENING, root);
     }
 
     #[cfg(unix)]
