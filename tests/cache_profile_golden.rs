@@ -6,8 +6,8 @@ use seyk_embeddinggemma::EmbeddingGemma2;
 
 #[test]
 #[ignore = "needs the pinned q8 EmbeddingGemma 2 weights in the local HF cache"]
-fn real_gemma_and_engine_match_pre_split_profile() {
-    let golden: serde_json::Value = serde_json::from_str(include_str!(
+fn real_gemma_profile_changes_only_for_literal_token_policy() {
+    let mut golden: serde_json::Value = serde_json::from_str(include_str!(
         "../crates/seyk-core/tests/fixtures/pre_split_preparation.json"
     ))
     .unwrap();
@@ -18,11 +18,12 @@ fn real_gemma_and_engine_match_pre_split_profile() {
         .build()
         .unwrap();
     let engine = SearchEngine::builder().embedder(model).build().unwrap();
+    golden["profile"]["model"]["variant"] = "onnx-q8;text-literals-v1".into();
     assert_eq!(
         serde_json::to_value(engine.profile()).unwrap(),
         golden["profile"]
     );
-    assert_eq!(engine.profile_id(), golden["profile_id"].as_str().unwrap());
+    assert_ne!(engine.profile_id(), golden["profile_id"].as_str().unwrap());
 }
 
 #[test]
