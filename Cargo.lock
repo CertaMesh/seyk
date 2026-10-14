@@ -3139,6 +3139,7 @@ dependencies = [
  "flate2",
  "globset",
  "hayro",
+ "libc",
  "notify",
  "pdf-extract",
  "rusqlite",
