@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -57,6 +58,46 @@ class Tests(unittest.TestCase):
                 compete.resume_rows(path, header, list(reversed(queries)))
             with self.assertRaisesRegex(ValueError, "git_sha"):
                 compete.resume_rows(path, {**header, "git_sha": "changed"}, queries)
+
+    def test_checkpoint_then_complete_is_scored_without_losing_empty_queries(self):
+        bench.ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=bench.ROOT) as directory:
+            root = Path(directory)
+            corpus = root / "corpus/scifact"
+            corpus.mkdir(parents=True)
+            (corpus / (self.a + ".txt")).write_text("Synthetic fixture")
+            meta = root / "meta/scifact"
+            meta.mkdir(parents=True)
+            manifest = {"files": {self.a + ".txt": compete.blake3.blake3(b"Synthetic fixture").hexdigest()}}
+            (meta / "manifest.json").write_text(json.dumps(manifest))
+            (meta / "queries.jsonl").write_text("".join(json.dumps({"qid": f"q{i}", "text": "fixture"}) + "\n" for i in range(3)))
+            model = {"models": [], "install_sha256": "fixture"}
+            marker = root / "competitor-runs/fixture/qmd/scifact/indexed.json"
+            marker.parent.mkdir(parents=True)
+            marker.write_text(json.dumps({"tool": "qmd", "version": compete.VERSIONS["qmd"],
+                "manifest_blake3": compete.blake3.blake3((meta / "manifest.json").read_bytes()).hexdigest(),
+                "vectors": False, **model}))
+            args = SimpleNamespace(tool="qmd", dataset="scifact", mode="bm25", label="fixture",
+                                   phase="query", timeout=30, max_queries=2)
+            with mock.patch.object(bench, "ROOT", root), \
+                 mock.patch.object(bench, "gold", return_value=(manifest, self.docmap, [bench.ir.Qrel(f"q{i}", "doc one", 1) for i in range(3)])), \
+                 mock.patch.object(compete, "network_probe", return_value="fixture"), \
+                 mock.patch.object(compete, "installed_provenance", return_value=model), \
+                 mock.patch.object(compete, "Worker") as worker, mock.patch("sys.stdout"):
+                worker.return_value.request.return_value = {"hits": []}
+                compete.run(args)
+                out = root / "runs/scifact/qmd-bm25-fixture.jsonl"
+                partial = out.with_suffix(".jsonl.partial")
+                self.assertFalse(out.exists())
+                with self.assertRaisesRegex(ValueError, "incomplete"):
+                    bench.read_run(partial)
+                compete.run(args)
+                self.assertFalse(partial.exists())
+                _, rows, complete = bench.read_run(out)
+                self.assertEqual(set(rows), {"q0", "q1", "q2"})
+                self.assertEqual(complete["queries"], 3)
+                self.assertEqual(worker.return_value.request.call_count, 3)
+                bench.score("scifact", [out])
 
     def test_competitor_scored_with_same_metrics_without_seyk_bm25_band(self):
         bench.ROOT.mkdir(parents=True, exist_ok=True)
