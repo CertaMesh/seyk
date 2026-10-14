@@ -308,7 +308,7 @@ impl Hub {
             .map_err(|_| anyhow!("watcher list lock poisoned"))?;
         let mut cells = Vec::new();
         for root in roots {
-            if let Some((_, cell)) = watched.iter().find(|(w, _)| root == *w) {
+            if let Some((_, cell)) = watched.iter().find(|(w, _)| watcher_covers(w, root)) {
                 cells.push(cell.clone());
                 continue;
             }
@@ -606,6 +606,21 @@ fn combine(states: Vec<IndexStatus>) -> Option<IndexStatus> {
         }
         other => other,
     })
+}
+
+// A no-follow discovery walk covers ordinary descendants, but not a root
+// reached through a directory symlink. That root needs its own logical walk.
+fn watcher_covers(watched: &Path, root: &Path) -> bool {
+    if watched == root {
+        return true;
+    }
+    let Ok(relative) = root.strip_prefix(watched) else {
+        return false;
+    };
+    match (watched.canonicalize(), root.canonicalize()) {
+        (Ok(watched), Ok(root)) => watched.join(relative) == root,
+        _ => false,
+    }
 }
 
 // Compare filesystem identities for watcher ownership without discarding the
@@ -1145,6 +1160,8 @@ mod tests {
         assert_eq!(safe, docker.join("safe.txt"));
         // Explicit directory requests must preserve the root context too.
         assert_eq!(confine(&store, &server.roots).unwrap(), docker);
+        assert!(!watcher_covers(temp.path(), &docker));
+        assert!(watcher_covers(temp.path(), &store));
         let broad = SeykServer::new(vec![temp.path().into()], hub).unwrap();
         assert_eq!(confine(&docker, &broad.roots).unwrap(), docker);
         let elsewhere = tempfile::tempdir().unwrap();
