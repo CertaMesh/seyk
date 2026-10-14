@@ -722,33 +722,65 @@ impl SearchEngine {
     ) -> Result<SyncStats> {
         let stats = self.sync_resources(resources, progress)?;
         let skipped: HashSet<_> = stats.skipped.iter().map(|s| &s.resource).collect();
-        let mut outcomes = self
+        // A descriptor can depend on model identity (audio). If identity itself
+        // failed, there is no stable preparation version to remember: the normal
+        // eligibility check must be allowed to retry when weights are restored.
+        let outcomes: Vec<_> = resources
+            .iter()
+            .map(|r| {
+                let outcome = if skipped.contains(&r.id) {
+                    self.preparation_descriptor(r)
+                        .ok()
+                        .map(|descriptor| (r.version.clone(), descriptor))
+                } else {
+                    None
+                };
+                (r.id.clone(), outcome)
+            })
+            .collect();
+        let mut remembered = self
             .skipped_versions
             .lock()
             .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?;
-        for resource in resources {
-            if skipped.contains(&resource.id) {
-                outcomes.insert(
-                    resource.id.clone(),
-                    (resource.version.clone(), resource.fingerprint()),
-                );
+        for (id, outcome) in outcomes {
+            if let Some(outcome) = outcome {
+                remembered.insert(id, outcome);
             } else {
-                outcomes.remove(&resource.id);
+                remembered.remove(&id);
             }
         }
         Ok(stats)
     }
 
     fn skipped_at_current_version(&self, resource: &ProvidedResource) -> Result<bool> {
-        let outcomes = self
+        let outcome = self
             .skipped_versions
             .lock()
-            .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?;
-        Ok(outcomes
+            .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?
             .get(&resource.id)
-            .is_some_and(|(version, descriptor)| {
-                version.matches(&resource.version) && *descriptor == resource.fingerprint()
-            }))
+            .cloned();
+        Ok(outcome.is_some_and(|(version, descriptor)| {
+            version.matches(&resource.version)
+                && self
+                    .preparation_descriptor(resource)
+                    .is_ok_and(|current| current == descriptor)
+        }))
+    }
+
+    fn preparation_descriptor(&self, r: &ProvidedResource) -> Result<String> {
+        if r.kind == ResourceKind::Audio {
+            return self.audio_descriptor_hash(r);
+        }
+        #[cfg(feature = "pdf")]
+        if r.kind == ResourceKind::Pdf {
+            return Ok(input_hash(&[
+                &r.fingerprint(),
+                crate::pdf::TEXT_VERSION,
+                crate::pdf::PREPARATION_VERSION,
+                &self.pdf_capabilities(),
+            ]));
+        }
+        Ok(r.fingerprint())
     }
 
     fn sync_resources(
@@ -779,30 +811,12 @@ impl SearchEngine {
                 ));
                 continue;
             }
-            let descriptor_hash = if r.kind == ResourceKind::Pdf {
-                #[cfg(feature = "pdf")]
-                {
-                    input_hash(&[
-                        &r.fingerprint(),
-                        crate::pdf::TEXT_VERSION,
-                        crate::pdf::PREPARATION_VERSION,
-                        &self.pdf_capabilities(),
-                    ])
+            let descriptor_hash = match self.preparation_descriptor(r) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    stats.skipped.push(skip(&r.id, error.to_string()));
+                    continue;
                 }
-                #[cfg(not(feature = "pdf"))]
-                {
-                    r.fingerprint()
-                }
-            } else if r.kind == ResourceKind::Audio {
-                match self.audio_descriptor_hash(r) {
-                    Ok(hash) => hash,
-                    Err(error) => {
-                        stats.skipped.push(skip(&r.id, error.to_string()));
-                        continue;
-                    }
-                }
-            } else {
-                r.fingerprint()
             };
             let cached = known.get(&r.id);
             // Listing already supplies a freshness token; only stat again before a read.
