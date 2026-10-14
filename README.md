@@ -699,9 +699,10 @@ There is no override. `--include`, `--hidden`, disabling default directory
 exclusions, and library/MCP filters cannot admit these paths. The same policy
 applies to watching, cached-only search, previews, and extraction. Discovery
 skips blocked paths; explicitly naming one returns a `refusing secret file or
-directory` error. Both the supplied path and its resolved symlink target are
-checked. Logical root names survive symlink resolution, so a `.docker` directory
-symlink still blocks its `config.json`. Password-store directory components
+directory` error. Every supplied component, intermediate symlink target, and final canonical path
+is checked. Resolution stops with an error after 40 symlink hops. Logical
+directory names survive every hop, so an alias through a `.docker` directory
+symlink still blocks its `config.json`, including paths containing `..`. Password-store directory components
 (`*.opvault`, `*.agilekeychain`) block every descendant; other rules apply to
 files only. An ordinary source directory such as `src/credentials/schema.rs`
 remains searchable.
@@ -711,6 +712,8 @@ be extracted. This does not erase old cache data; use `seyk cache clear` to
 remove it. The policy is centralized in `seyk-core/src/discovery.rs`. It checks
 names, not contents: secrets renamed to ordinary filenames, hard links with
 ordinary names, or credentials embedded in other documents are not detected.
+Names are checked before files are opened; concurrent filesystem changes can
+race those checks (TOCTOU). This policy is not a filesystem sandbox.
 
 ### How text is segmented
 

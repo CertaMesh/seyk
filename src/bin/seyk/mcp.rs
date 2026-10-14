@@ -455,6 +455,7 @@ impl SeykServer {
 
     fn validate_roots(&self) -> Result<()> {
         for (logical, resolved) in self.roots.iter().zip(self.resolved_roots.iter()) {
+            seyk::discovery::ensure_allowed_path(logical)?;
             if logical.canonicalize()? != *resolved {
                 return Err(anyhow!("server root target changed: {}", logical.display()));
             }
@@ -1114,6 +1115,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn docker_symlink_session_rejects_logical_and_resolved_secret_paths() {
+        for chained in [false, true] {
+            docker_symlink_session_rejects_logical_and_resolved_secret_paths_case(chained);
+        }
+    }
+
+    #[cfg(unix)]
+    fn docker_symlink_session_rejects_logical_and_resolved_secret_paths_case(chained: bool) {
         let temp = tempfile::tempdir().unwrap();
         let store = temp.path().join("config-store");
         std::fs::create_dir(&store).unwrap();
@@ -1126,6 +1134,15 @@ mod tests {
         std::fs::write(store.join("safe.txt"), "quartz pebble").unwrap();
         let docker = temp.path().join(".docker");
         std::os::unix::fs::symlink(&store, &docker).unwrap();
+        let docker = if chained {
+            let middle = temp.path().join("middle");
+            let alias = temp.path().join("docker-alias");
+            std::os::unix::fs::symlink(".docker", &middle).unwrap();
+            std::os::unix::fs::symlink("middle", &alias).unwrap();
+            alias
+        } else {
+            docker
+        };
         let hub = Hub::new(Box::new(fake_engine), false);
         let old = hub
             .engine()
@@ -1168,6 +1185,47 @@ mod tests {
         std::fs::remove_file(&docker).unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), &docker).unwrap();
         assert!(server.validate_roots().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_chain_mcp_roots_requests_and_retargeting_are_refused() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let file = store.join("note.txt");
+        std::fs::write(&file, "quartz pebble").unwrap();
+        let alias = temp.path().join("alias-dir");
+        symlink("store", &alias).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let server = SeykServer::new(vec![alias.clone()], hub.clone()).unwrap();
+        let old = serde_json::to_value(search(&server, "quartz")).unwrap();
+        assert_eq!(old["hits"].as_array().unwrap().len(), 1);
+        symlink("store", temp.path().join("vault.opvault")).unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        symlink("vault.opvault", &alias).unwrap();
+        // The final canonical directory is unchanged, but its new chain is secret.
+        assert_eq!(alias.canonicalize().unwrap(), store.canonicalize().unwrap());
+        assert!(server.validate_roots().is_err());
+        assert!(
+            server
+                .run_extract(ExtractParams {
+                    hit: old["hits"][0].clone()
+                })
+                .is_err()
+        );
+        assert!(SeykServer::new(vec![alias.clone()], hub.clone()).is_err());
+        symlink("store/note.txt", temp.path().join("id_rsa")).unwrap();
+        symlink("id_rsa", temp.path().join("alias.txt")).unwrap();
+        let roots = vec![temp.path().to_path_buf()];
+        for path in [
+            alias,
+            temp.path().join("alias-dir/note.txt"),
+            temp.path().join("alias.txt"),
+        ] {
+            assert!(confine(&path, &roots).is_err());
+        }
     }
 
     #[cfg(unix)]

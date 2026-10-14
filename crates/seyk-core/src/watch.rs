@@ -215,11 +215,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolved_create_and_rename_events_keep_logical_root_context() {
+        for chained in [false, true] {
+            resolved_create_and_rename_events_keep_logical_root_context_case(chained);
+        }
+    }
+
+    #[cfg(unix)]
+    fn resolved_create_and_rename_events_keep_logical_root_context_case(chained: bool) {
         let temp = tempfile::tempdir().unwrap();
         let store = temp.path().join("config-store");
         std::fs::create_dir(&store).unwrap();
         let docker = temp.path().join(".docker");
         std::os::unix::fs::symlink(&store, &docker).unwrap();
+        let docker = if chained {
+            let middle = temp.path().join("middle");
+            let alias = temp.path().join("docker-alias");
+            std::os::unix::fs::symlink(".docker", &middle).unwrap();
+            std::os::unix::fs::symlink("middle", &alias).unwrap();
+            alias
+        } else {
+            docker
+        };
         let roots = [docker];
         let options = DiscoveryOptions {
             include_hidden: true,

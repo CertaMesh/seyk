@@ -108,24 +108,150 @@ fn secret_path(path: &Path, is_dir: bool) -> bool {
     false
 }
 
-/// Check both a caller's spelling and the resolved target before opening it.
-/// Missing paths are left to the ordinary I/O error handling at the call site.
+/// Check every supplied component and symlink target before opening a path.
+/// Missing paths are still checked (watcher removal events need this); ordinary
+/// I/O remains the caller's responsibility. Symlink loops fail after 40 hops.
+/// This name policy is not an atomic open or a filesystem sandbox.
 pub fn ensure_allowed_path(path: &Path) -> Result<()> {
-    let is_dir = path.is_dir();
-    if secret_path(path, is_dir)
-        || path
-            .canonicalize()
-            .is_ok_and(|real| secret_path(&real, is_dir))
-        || (path
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
-            && logical_absolute_path(path).is_ok_and(|logical| secret_path(&logical, is_dir)))
-    {
-        return Err(Error::SecretFile {
-            path: path.to_path_buf(),
-        });
+    let absolute = std::path::absolute(path).map_err(|e| Error::io(path, e))?;
+    let mut resolver = PolicyResolver {
+        original: path,
+        hops: 0,
+        aliases: std::collections::HashMap::new(),
+    };
+    let state = resolver.walk(ResolvedPath::default(), &absolute)?;
+    // No symlinks remain here. Also check the filesystem's stored spelling.
+    if let Ok(real) = state.path.canonicalize() {
+        resolver.check(&real, state.is_dir())?;
     }
     Ok(())
+}
+
+#[derive(Clone, Default)]
+struct ResolvedPath {
+    path: PathBuf,
+    directories: Vec<bool>,
+}
+
+impl ResolvedPath {
+    fn is_dir(&self) -> bool {
+        self.directories.last().copied().unwrap_or(true)
+    }
+}
+
+struct PolicyResolver<'a> {
+    original: &'a Path,
+    hops: usize,
+    // Retain every directory alias for this traversal, even after an absolute
+    // target or .. leaves and re-enters that directory. Canonical keys below
+    // only inspect prefixes whose symlink hops we have already checked.
+    aliases: std::collections::HashMap<PathBuf, Vec<std::ffi::OsString>>,
+}
+
+impl PolicyResolver<'_> {
+    fn check(&self, path: &Path, is_dir: bool) -> Result<()> {
+        if secret_path(path, is_dir) {
+            return Err(Error::SecretFile {
+                path: self.original.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_name(
+        &self,
+        parent: &ResolvedPath,
+        name: &std::ffi::OsStr,
+        is_dir: bool,
+    ) -> Result<()> {
+        self.check(&parent.path.join(name), is_dir)?;
+        if !self.aliases.is_empty() {
+            let key = parent
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| parent.path.clone());
+            if let Some(names) = self.aliases.get(&key) {
+                for alias in names {
+                    self.check(&Path::new(alias).join(name), is_dir)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn walk(&mut self, mut state: ResolvedPath, path: &Path) -> Result<ResolvedPath> {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        while let Some(component) = components.next() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    state.path.push(component);
+                    state.directories.clear();
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if !state.is_dir() {
+                        return Err(Error::io(
+                            self.original,
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotADirectory,
+                                "path component is not a directory",
+                            ),
+                        ));
+                    }
+                    if state.path.pop() {
+                        state.directories.pop();
+                    }
+                }
+                Component::Normal(name) => {
+                    // Intrinsically sensitive directories are refused even if
+                    // a later .. or absolute link target would erase the name.
+                    self.check_name(&state, name, true)?;
+                    let next = state.path.join(name);
+                    let metadata = match std::fs::symlink_metadata(&next) {
+                        Ok(metadata) => Some(metadata),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(e) => return Err(Error::io(self.original, e)),
+                    };
+                    if metadata
+                        .as_ref()
+                        .is_some_and(|m| m.file_type().is_symlink())
+                    {
+                        self.hops += 1;
+                        if self.hops > 40 {
+                            return Err(Error::io(
+                                self.original,
+                                std::io::Error::other("too many symbolic link hops (maximum 40)"),
+                            ));
+                        }
+                        let target =
+                            std::fs::read_link(&next).map_err(|e| Error::io(self.original, e))?;
+                        let resolved = self.walk(state.clone(), &target)?;
+                        self.check_name(&state, name, resolved.is_dir())?;
+                        if resolved.is_dir() {
+                            let key = resolved
+                                .path
+                                .canonicalize()
+                                .unwrap_or_else(|_| resolved.path.clone());
+                            self.aliases
+                                .entry(key)
+                                .or_default()
+                                .push(name.to_os_string());
+                        }
+                        state = resolved;
+                    } else {
+                        let is_dir = metadata
+                            .as_ref()
+                            .map_or(components.peek().is_some(), |m| m.is_dir());
+                        self.check_name(&state, name, is_dir)?;
+                        state.path = next;
+                        state.directories.push(is_dir);
+                    }
+                }
+            }
+        }
+        Ok(state)
+    }
 }
 
 /// Make a logical root absolute without erasing symlink names used by policy.
@@ -313,8 +439,7 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .into_iter()
             .filter_entry(|e| {
                 let logical = logical_root.join(e.path().strip_prefix(&root).unwrap_or(e.path()));
-                if secret_path(e.path(), e.file_type().is_dir())
-                    || secret_path(&logical, e.file_type().is_dir())
+                if ensure_allowed_path(e.path()).is_err() || ensure_allowed_path(&logical).is_err()
                 {
                     return false;
                 }

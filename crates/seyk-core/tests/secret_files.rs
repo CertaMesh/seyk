@@ -386,6 +386,13 @@ fn ordinary_credentials_directories_remain_searchable() {
 #[cfg(unix)]
 #[test]
 fn docker_symlink_root_preserves_context_and_filters_cached_results() {
+    for chained in [false, true] {
+        docker_symlink_root_preserves_context_and_filters_cached_results_case(chained);
+    }
+}
+
+#[cfg(unix)]
+fn docker_symlink_root_preserves_context_and_filters_cached_results_case(chained: bool) {
     use std::os::unix::fs::symlink;
     let temp = tempfile::tempdir().unwrap();
     let store = temp.path().join("config-store");
@@ -399,6 +406,36 @@ fn docker_symlink_root_preserves_context_and_filters_cached_results() {
     fs::write(store.join("safe.txt"), "synthetic quartz").unwrap();
     let docker = temp.path().join(".docker");
     symlink(&store, &docker).unwrap();
+    let docker = if chained {
+        let middle = temp.path().join("middle");
+        let alias = temp.path().join("docker-alias");
+        std::os::unix::fs::symlink(".docker", &middle).unwrap();
+        std::os::unix::fs::symlink("middle", &alias).unwrap();
+        alias
+    } else {
+        docker
+    };
+    fs::create_dir(store.join("sub")).unwrap();
+    assert!(matches!(
+        seyk_core::discovery::ensure_allowed_path(&docker.join("sub/../config.json")),
+        Err(Error::SecretFile { .. })
+    ));
+    // An absolute child link re-enters the same physical parent using a new
+    // spelling, then .. returns to it. The earlier .docker context still applies.
+    fs::create_dir(store.join("real")).unwrap();
+    symlink(store.join("real"), store.join("absolute-child")).unwrap();
+    symlink("../config-store/real", store.join("relative-child")).unwrap();
+    for child in ["absolute-child", "relative-child"] {
+        let through_parent = docker.join(child).join("../config.json");
+        assert!(
+            matches!(
+                seyk_core::discovery::ensure_allowed_path(&through_parent),
+                Err(Error::SecretFile { .. })
+            ),
+            "{}",
+            through_parent.display()
+        );
+    }
     let logical = docker.join("config.json");
     let id = ResourceId::from_path(&logical).unwrap();
     assert!(matches!(
@@ -520,4 +557,191 @@ fn logical_docker_context_survives_parent_components_before_uri_conversion() {
             .execute(),
         Err(Error::SecretFile { .. })
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn every_secret_symlink_hop_is_refused_across_entry_points() {
+    use seyk_core::discovery::ensure_allowed_path;
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("store/sub")).unwrap();
+    fs::create_dir(temp.path().join("links")).unwrap();
+    let safe = temp.path().join("store/note.txt");
+    fs::write(&safe, "synthetic quartz marker").unwrap();
+    symlink("store", temp.path().join("vault.opvault")).unwrap();
+    symlink("vault.opvault", temp.path().join("alias-dir")).unwrap();
+    symlink("alias-dir", temp.path().join("middle")).unwrap();
+    symlink("../middle", temp.path().join("links/outer")).unwrap();
+    symlink("../vault.opvault/sub/..", temp.path().join("links/parents")).unwrap();
+    symlink("store/note.txt", temp.path().join("id_rsa")).unwrap();
+    symlink("id_rsa", temp.path().join("alias.txt")).unwrap();
+    symlink("alias.txt", temp.path().join("outer.txt")).unwrap();
+    symlink("store", temp.path().join("vault.ｏｐｖａｕｌｔ")).unwrap();
+    symlink("vault.ｏｐｖａｕｌｔ", temp.path().join("unicode-alias")).unwrap();
+    for cache in [false, true] {
+        let builder = SearchEngine::builder()
+            .embedder(common::FakeEmbedder::new(Dimension::D128, "chain-deny"));
+        let engine = if cache {
+            builder
+                .cache(SqliteCache::open(temp.path().join("cache.sqlite")).unwrap())
+                .build()
+                .unwrap()
+        } else {
+            builder.cache(MemoryCache::new()).build().unwrap()
+        };
+        let old = engine
+            .search("quartz")
+            .paths([&safe])
+            .execute()
+            .unwrap()
+            .hits
+            .remove(0);
+        for spelling in [
+            "alias-dir/note.txt",
+            "alias.txt",
+            "outer.txt",
+            "links/outer/note.txt",
+            "links/outer/sub/../note.txt",
+            "links/parents/note.txt",
+            "unicode-alias/note.txt",
+        ] {
+            let path = temp.path().join(spelling);
+            assert_eq!(fs::read(&path).unwrap(), fs::read(&safe).unwrap());
+            let id = ResourceId::from_path(&path).unwrap();
+            assert!(
+                matches!(ensure_allowed_path(&path), Err(Error::SecretFile { .. })),
+                "{spelling}"
+            );
+            assert!(matches!(
+                discover(std::slice::from_ref(&path), &permissive()),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                FsProvider.read(&id),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                FsProvider.open(&id),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                FsProvider.version(&id),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                engine.index().paths([&path]).execute(),
+                Err(Error::SecretFile { .. })
+            ));
+            for mode in [
+                SearchMode::Semantic,
+                SearchMode::Lexical,
+                SearchMode::Hybrid,
+            ] {
+                for sync in [false, true] {
+                    for query in ["quartz", "note.txt"] {
+                        assert!(matches!(
+                            engine
+                                .search(query)
+                                .paths([&path])
+                                .mode(mode)
+                                .sync(sync)
+                                .execute(),
+                            Err(Error::SecretFile { .. })
+                        ));
+                        assert!(matches!(
+                            engine
+                                .search(query)
+                                .roots([id.clone()])
+                                .mode(mode)
+                                .sync(sync)
+                                .execute(),
+                            Err(Error::SecretFile { .. })
+                        ));
+                    }
+                }
+            }
+            let mut hit = old.clone();
+            hit.resource = id;
+            assert!(matches!(
+                engine.extract(&hit),
+                Err(Error::SecretFile { .. })
+            ));
+        }
+        for spelling in ["alias-dir", "links/outer", "links/parents"] {
+            let path = temp.path().join(spelling);
+            #[cfg(feature = "watch")]
+            assert!(matches!(
+                seyk_core::watch::watch(
+                    &engine,
+                    std::slice::from_ref(&path),
+                    &permissive(),
+                    &seyk_core::watch::WatchOptions::default(),
+                    None,
+                    |_| panic!("secret chain must fail before any indexing pass"),
+                ),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                discover(std::slice::from_ref(&path), &permissive()),
+                Err(Error::SecretFile { .. })
+            ));
+            assert!(matches!(
+                engine.search("quartz").paths([&path]).sync(false).execute(),
+                Err(Error::SecretFile { .. })
+            ));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn resolver_bounds_loops_and_preserves_safe_filesystem_parent_semantics() {
+    use seyk_core::discovery::{absolute_logical_path, ensure_allowed_path};
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    symlink("loop-b", temp.path().join("loop-a")).unwrap();
+    symlink("loop-a", temp.path().join("loop-b")).unwrap();
+    for path in [
+        temp.path().join("loop-a"),
+        temp.path().join("loop-a/note.txt"),
+    ] {
+        let err = ensure_allowed_path(&path).unwrap_err();
+        assert!(matches!(err, Error::Io { .. }));
+        assert!(err.to_string().contains("maximum 40"));
+        assert!(discover(&[path], &permissive()).is_err());
+    }
+    fs::create_dir_all(temp.path().join("real/deep")).unwrap();
+    fs::write(temp.path().join("real/note.txt"), "safe").unwrap();
+    symlink("real/deep", temp.path().join("alias")).unwrap();
+    let path = temp.path().join("alias/../note.txt");
+    ensure_allowed_path(&path).unwrap();
+    assert_eq!(
+        absolute_logical_path(&path).unwrap(),
+        path.canonicalize().unwrap()
+    );
+    // A contextual name must also survive a link that resolves to filesystem root.
+    symlink("/", temp.path().join(".docker")).unwrap();
+    assert!(matches!(
+        ensure_allowed_path(&temp.path().join(".docker/config.json")),
+        Err(Error::SecretFile { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_directory_aliases_remain_searchable() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("store")).unwrap();
+    std::fs::write(temp.path().join("store/schema.rs"), "struct LoginForm;").unwrap();
+    std::os::unix::fs::symlink("store", temp.path().join("credentials")).unwrap();
+    std::os::unix::fs::symlink("credentials", temp.path().join("alias")).unwrap();
+    let path = temp.path().join("alias/schema.rs");
+    seyk_core::discovery::ensure_allowed_path(&path).unwrap();
+    assert_eq!(
+        discover(&[temp.path().join("alias")], &permissive())
+            .unwrap()
+            .len(),
+        1
+    );
 }
