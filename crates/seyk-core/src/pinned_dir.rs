@@ -49,6 +49,7 @@ pub(crate) fn descriptor_stat(file: &File) -> io::Result<libc::stat> {
     if unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: successful fstat initialized the complete output.
     Ok(unsafe { stat.assume_init() })
 }
 #[allow(clippy::unnecessary_cast)] // stat integer types vary between Unix targets.
@@ -293,15 +294,22 @@ impl PinnedDir {
                     Some(_) => Err(error),
                 };
             }
-            // SAFETY: d_name is NUL-terminated within the entry.
-            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            // Records are variable-length (d_reclen can be shorter than
+            // size_of::<dirent>()), so never make a reference to the whole
+            // entry; read fields through raw pointers, as std does.
+            // SAFETY: entry is live until the next readdir call and d_name is
+            // NUL-terminated within the record.
+            let name = unsafe {
+                CStr::from_ptr(std::ptr::addr_of!((*entry).d_name).cast::<libc::c_char>())
+            }
+            .to_bytes();
             if name == b"." || name == b".." {
                 continue;
             }
             entries.push(Entry {
                 name: OsString::from_vec(name.to_vec()),
-                // SAFETY: entry is live until the next readdir call.
-                kind: d_type(unsafe { &*entry }),
+                // SAFETY: entry is the live record readdir just returned.
+                kind: unsafe { d_type(entry) },
             });
         };
         // SAFETY: dir is live and closed exactly once; this also closes fd.
@@ -334,6 +342,8 @@ fn parent_and_name(path: &Path) -> io::Result<Option<(PinnedDir, &OsStr)>> {
     Ok(Some((directory, last)))
 }
 
+/// # Safety
+/// `entry` must be a live record returned by readdir.
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -343,8 +353,9 @@ fn parent_and_name(path: &Path) -> io::Result<Option<(PinnedDir, &OsStr)>> {
     target_os = "openbsd",
     target_os = "dragonfly"
 ))]
-fn d_type(entry: &libc::dirent) -> Option<EntryType> {
-    match entry.d_type {
+unsafe fn d_type(entry: *const libc::dirent) -> Option<EntryType> {
+    // SAFETY: per the contract, d_type lies within the live record.
+    match unsafe { std::ptr::addr_of!((*entry).d_type).read() } {
         libc::DT_DIR => Some(EntryType::Dir),
         libc::DT_REG => Some(EntryType::File),
         libc::DT_LNK => Some(EntryType::Symlink),
@@ -361,9 +372,24 @@ fn d_type(entry: &libc::dirent) -> Option<EntryType> {
     target_os = "openbsd",
     target_os = "dragonfly"
 )))]
-fn d_type(_: &libc::dirent) -> Option<EntryType> {
+unsafe fn d_type(_: *const libc::dirent) -> Option<EntryType> {
     None
 }
+
+// clear_errno needs this thread's errno location. Without it a stale errno
+// would make every end of directory look like an error and skip every
+// directory, so an unknown Unix target must not compile.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "redox",
+    target_os = "android",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly"
+)))]
+compile_error!("pinned_dir: no errno location known for this Unix target");
 
 /// readdir signals errors only through errno, so clear it first.
 fn clear_errno() {
