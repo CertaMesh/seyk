@@ -7,8 +7,10 @@
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
 </p>
 
-Local semantic search over your own files, built on Google's
+Local hybrid search over your own files and code: semantic meaning, BM25
+keywords, and file names. Semantic retrieval runs on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
+Use the CLI, embed the Rust library, or connect an agent through MCP.
 
 Ask a question in your own words, or type an exact name, and get back the
 passages that match. Meaning, keywords and file names are searched together:
@@ -33,9 +35,10 @@ question; the tag in brackets says what found each hit.)
 It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
 
-What it is **not**: there is no chat, no answer generation, no summaries, no OCR and
-no transcription. It finds relevant resources and points at the exact place inside
-them. What happens next is up to the application.
+Seyk returns relevant resources and exact locations inside them. It does not
+generate answers or summaries. Audio retrieval and on-demand speech-to-text
+extraction are [opt-in](#speech-to-text-extraction-opt-in); scanned PDFs support
+image-based retrieval, with [OCR still a follow-up](#pdfs).
 
 ## Why EmbeddingGemma 2
 
@@ -164,6 +167,21 @@ seyk cache clear
 | `--text-only` | Skip loading the vision encoder; images are skipped |
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
+
+### Keyword search
+
+The default `hybrid` mode combines meaning, BM25 keyword relevance, and file-name
+matches. Use `lexical` to rank exact terms, identifiers, and names without
+embedding the query:
+
+```sh
+seyk search "INC-18372" ~/notes --mode lexical
+seyk search "Session::restore" ~/code --mode lexical
+```
+
+The CLI still loads a model to index new or changed files; lexical query ranking
+does not make this a model-free indexing mode. See [scores and tags](#scores-and-tags)
+for how the three match types are combined.
 
 ### Extract a search hit
 
