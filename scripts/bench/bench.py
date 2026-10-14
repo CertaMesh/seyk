@@ -288,7 +288,7 @@ def score(ds, paths):
         require(mode not in per_mode, "duplicate mode")
         rankings = {q:ranking(row, docmap, ds == "irpapers-pdf") for q,row in rows.items()}
         per_mode[mode] = metrics(qrels, rankings)
-        if ds == "scifact" and mode == "lexical":
+        if ds == "scifact" and mode == "lexical" and not env.get("competitor"):
             sanity_band(per_mode[mode]["nDCG@10"])
         if ds == "irpapers-pdf":
             # Resource recall and physical-page correctness are different views.
@@ -557,6 +557,7 @@ class Tests(unittest.TestCase):
 
 
 def main():
+    import compete
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     datasets = list(tomllib.loads(CONFIG.read_text()))
@@ -570,14 +571,20 @@ def main():
     p.add_argument("left", type=Path)
     p.add_argument("right", type=Path)
     sub.add_parser("test")
+    compete.parser(sub)
     args = parser.parse_args()
     if args.command == "fetch": fetch(args.dataset)
     elif args.command == "materialize": materialize(args.dataset)
     elif args.command == "score": score(args.dataset, args.runs)
     elif args.command == "report": report(args.results)
     elif args.command == "determinism": determinism(args.left,args.right)
+    elif args.command == "compete": compete.run(args)
+    elif args.command == "offline-check": print(compete.network_probe())
     else:
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(Tests))
+        import test_compete
+        suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(Tests),
+                                   unittest.defaultTestLoader.loadTestsFromModule(test_compete)])
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
         sys.exit(not result.wasSuccessful())
 
 

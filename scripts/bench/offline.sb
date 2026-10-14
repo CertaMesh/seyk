@@ -1,0 +1,7 @@
+;; Applied to indexers, query workers and descendants. LEANN uses local ZMQ IPC.
+(version 1)
+(allow default)
+(deny network*)
+(allow network-bind (local ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
+(allow network-outbound (remote ip "localhost:*"))

@@ -385,3 +385,89 @@ IRPAPERS text hybrid Recall@1/5/20 .46/.78/.91
 ([original dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md)).
 Report aggregate results with the dataset/model revisions, commit, machine and
 load context. Schedule full runs separately from the harness PR.
+
+### Local competitor runs
+
+`bench.py compete` adapts pinned QMD, DigUp and LEANN installs to the same
+materialized `.txt` corpus, query IDs, first-document-occurrence collapse and
+`ir_measures` scoring described above. It never provisions software or models.
+The aggregate/provenance file is `docs/benchmarks/head-to-head.toml`; only completed,
+scored runs belong there as **measured on Seyk's harness**. Published vendor or
+model scores are a separate comparison.
+
+The adapter currently requires macOS. Every indexer and query worker, including
+children, runs under `sandbox-exec` with `scripts/bench/offline.sb`. External
+network access is denied; localhost is allowed for LEANN's local ZMQ embedding
+process. `offline-check` proves that numeric external TCP fails with EPERM/EACCES
+and localhost succeeds. Cloud API keys, proxy settings and service endpoints are
+not inherited. HF offline flags are additional guards, not the isolation proof.
+
+Installs live in `~/.cache/seyk-bench/competitors`: QMD 2.8.3 in `qmd-install`
+(`npm install --prefix qmd-install @tobilu/qmd@2.8.3`); LEANN 0.3.8 in `leann-env`
+(`uv venv --python 3.12 leann-env`, then
+`uv pip install --python leann-env/bin/python leann==0.3.8`); and the DigUp source
+at commit `f509c329e0032fbee4d945e1edbdbca7d94af50f` in `digup`.
+DigUp uses its `scripts/build-llama.sh` (build parallelism limited to two) followed
+by `swift build -c release --product digup -j 2`. Its llama.cpp pin is
+`4d756bc72bf00a4aacf410ae15a2d315f3db400d` plus the upstream no-logits patch.
+All three tools' code is MIT; model terms are recorded separately.
+
+Provision the files listed in the aggregate file under `qmd-models`, `digup-models`
+and `leann-models`. The local `competitors/model-provenance.json` records each
+`tool`, `repository`, `revision`, `file`, `bytes`, `sha256`, and `license`.
+Keep QMD's npm lockfile and `uv pip freeze` output in
+`competitors/leann-requirements.txt`. Before each phase, the adapter checks the
+installed version and every model's size/hash, and fingerprints the install lock
+or DigUp binary. Results also record platform, CPU, load, hardware path, indexing
+duration and per-query wall time. Model provisioning is explicitly separate from
+running this adapter.
+
+```bash
+export UV_CACHE_DIR="$HOME/.cache/seyk-bench/competitors/harness-uv"
+uv run --locked --python 3.12 scripts/bench/bench.py offline-check
+uv run --locked --python 3.12 scripts/bench/bench.py fetch scifact
+uv run --locked --python 3.12 scripts/bench/bench.py materialize scifact
+# Hold seyk-local-gate for each bounded index/query phase.
+uv run --locked --python 3.12 scripts/bench/bench.py compete qmd scifact \
+  --mode vector --phase index --label comparison
+uv run --locked --python 3.12 scripts/bench/bench.py compete qmd scifact \
+  --mode vector --phase query --label comparison
+# Repeat the identical query command until it reports the completed .jsonl.
+# Then score the exact output filename:
+uv run --locked --python 3.12 scripts/bench/bench.py score scifact \
+  ~/.cache/seyk-bench/runs/scifact/qmd-vector-comparison.jsonl
+```
+
+Queries checkpoint after 50 by default (`--max-queries`), or at the phase time
+budget (at most 3,000 seconds plus one bounded query). Resumption requires the
+same commit, dirty state, models, install fingerprint and dataset manifest, and
+an exact prefix of the query list. A `.partial` file is never scored. Use a new
+label for a new configuration. Keep the code unchanged while a run is in progress.
+
+QMD's modes are `bm25` (SDK `searchLex`), `vector` (`searchVector`), `hybrid`
+(native query expansion and RRF with reranking disabled), and `full` (native
+query expansion, RRF and reranking). The latter two request 200 candidates/results;
+the pinned engine's internal 20-hit retrieval per signal remains unchanged.
+Short rankings are retained and reported, not padded or refilled. Vector indexing
+uses QMD's regex chunker and Metal. BM25 uses CPU and should get its own label if
+measuring lexical-only index time. Vector, hybrid and full can share the vector
+index, with separate run files. Full and hybrid use the scorer's `hybrid` slot;
+`competitor_mode` and the run ID distinguish them. Score these files separately.
+
+DigUp's `hybrid` mode uses its stock `index --include-datasets` and persistent
+`search-service`, with `limit=200`, meaning search enabled and prefix completion
+disabled. Its index must contain every corpus file, with no pending/unfinished
+files. A silent keyword fallback is an error. LEANN's `contriever` mode explicitly
+selects local Contriever with its stock HNSW CLI ingestion/chunking and persistent
+search API on CPU; Contriever is not the current macOS CLI default (MiniLM is).
+Its embedding process is started inside the sandbox, without reusing a daemon.
+
+Mapping uses the opaque corpus filename, never QMD's content-derived docid.
+Unexpected paths, unknown document keys, invalid scores or incomplete indexing
+fail the run. The scoring formula is unchanged. The Seyk-specific SciFact BM25
+sanity interval does not apply to another engine's lexical score.
+
+After scoring and recording only aggregates/provenance, delete the generated raw
+downloads, corpora, document maps, query rows, run rows, competitor indexes and
+harness uv cache. Keep the removable tool/model installs for explicitly requested
+reruns. Do not delete another worker's active artifacts.
