@@ -425,6 +425,7 @@ impl SeykServer {
         let roots = roots
             .into_iter()
             .map(|r| {
+                seyk::discovery::ensure_allowed_path(&r)?;
                 r.canonicalize()
                     .with_context(|| format!("root {}", r.display()))
             })
@@ -593,6 +594,7 @@ fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
     } else {
         roots[0].join(path)
     };
+    seyk::discovery::ensure_allowed_path(&joined)?;
     let real = joined
         .canonicalize()
         .with_context(|| format!("{} does not exist", joined.display()))?;
@@ -1628,6 +1630,35 @@ mod tests {
         let error = server.run_search(params(&[root])).unwrap_err();
         assert!(error.to_string().contains("index status lock poisoned"));
         assert_eq!(documents.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn search_includes_cannot_admit_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("safe.txt"), "quartz pebble").unwrap();
+        std::fs::write(root.join("id_rsa.txt"), "quartz secret").unwrap();
+        let (server, documents) = ownership_server(vec![root.clone()], vec![]);
+        let mut request = params(std::slice::from_ref(&root));
+        request.include = vec!["*.txt".into()];
+        let response = server.run_search(request).unwrap();
+        assert_eq!(documents.load(Ordering::SeqCst), 1);
+        assert!(!serde_json::to_string(&response).unwrap().contains("id_rsa"));
+        let error = server
+            .run_search(params(&[root.join("id_rsa.txt")]))
+            .unwrap_err();
+        assert!(error.to_string().contains("refusing secret file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confine_refuses_secret_alias_before_canonicalizing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("safe.txt"), "safe").unwrap();
+        std::os::unix::fs::symlink(root.join("safe.txt"), root.join("id_rsa")).unwrap();
+        let error = confine(Path::new("id_rsa"), &[root]).unwrap_err();
+        assert!(error.to_string().contains("refusing secret file"));
     }
 
     #[test]

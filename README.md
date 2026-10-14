@@ -674,8 +674,37 @@ these fields; extraction still accepts search documents from versions 2–6.
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
 A file passed explicitly on the command line is searched as plain text even with
-an unknown extension. Directories skip `.git`, `target`, `node_modules`, `.hg`,
+an unknown extension, except the secret paths listed below. Directories skip `.git`, `target`, `node_modules`, `.hg`,
 `.svn`, `__pycache__`, `.venv` and hidden entries by default.
+
+### Files Seyk never indexes
+
+Seyk blocks these names, case-insensitively, before reading file contents:
+
+- Keys and certificate containers: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
+- SSH private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `id_xmss`,
+  including copies with a `.`, `_`, or `-` suffix (for example `id_rsa.backup`
+  or `id_ed25519_sk`). Names ending in `.pub` are exempt from this SSH rule.
+- Password stores: `*.kdbx`, `*.kdb`, `*.1pif`, and all contents of
+  `*.agilekeychain` and `*.opvault` directories.
+- Environment files: `.env`, `.env.*`, `*.env`, including examples and templates.
+- Keychain exports: `*.keychain`, `*.keychain-db`.
+- Credentials: `.netrc`, `netrc`, `_netrc`, `.pgpass`, `pgpass`, `pgpass.conf`,
+  `credentials` (including `.aws/credentials`), `credentials.json`, and
+  `.docker/config.json`.
+
+There is no override. `--include`, `--hidden`, disabling default directory
+exclusions, and library/MCP filters cannot admit these paths. The same policy
+applies to watching, cached-only search, previews, and extraction. Discovery
+skips blocked paths; explicitly naming one returns a `refusing secret file or
+directory` error. Both the supplied path and its resolved symlink target are
+checked, and matching directory components block their descendants.
+
+Previously cached entries for blocked paths are excluded from search and cannot
+be extracted. This does not erase old cache data; use `seyk cache clear` to
+remove it. The policy is centralized in `seyk-core/src/discovery.rs`. It checks
+names, not contents: secrets renamed to ordinary filenames, hard links with
+ordinary names, or credentials embedded in other documents are not detected.
 
 ### How text is segmented
 

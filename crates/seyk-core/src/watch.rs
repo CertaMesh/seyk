@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 
-use crate::discovery::DEFAULT_EXCLUDED_DIRS;
+use crate::discovery::{DEFAULT_EXCLUDED_DIRS, ensure_allowed_path, is_secret_path};
 use crate::engine::{IndexReport, ProgressFn, SearchEngine, expand_tilde};
 use crate::{DiscoveryOptions, Error, Result};
 
@@ -54,9 +54,10 @@ pub fn watch(
         .iter()
         .map(|p| {
             let p = expand_tilde(p);
-            p.canonicalize().unwrap_or(p)
+            ensure_allowed_path(&p)?;
+            Ok(p.canonicalize().unwrap_or(p))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx).map_err(|e| watch_error(&e))?;
     for p in &paths {
@@ -156,6 +157,9 @@ fn relevant(
         return false;
     }
     event.paths.iter().any(|p| {
+        if is_secret_path(p) {
+            return false;
+        }
         // Judge only the part below a root, so a root inside `~/.notes` is fine.
         // Roots can nest (`/repo` and `/repo/.notes`); any root admitting the
         // path is enough, whatever order the roots came in.
@@ -184,6 +188,25 @@ fn ignored(path: &Path, discovery: &DiscoveryOptions) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secrets_do_not_trigger_watcher_even_under_an_explicit_root() {
+        let options = DiscoveryOptions {
+            include_hidden: true,
+            default_excludes: false,
+            include: vec!["*".into()],
+            ..Default::default()
+        };
+        for path in [
+            "/notes/id_rsa.txt",
+            "/notes/vault.opvault/note.md",
+            "/notes/.env.local.toml",
+        ] {
+            let event = Ok(notify::Event::new(EventKind::Any).add_path(path.into()));
+            assert!(!relevant(&event, &[PathBuf::from(path)], &options));
+            assert!(!relevant(&event, &["/notes".into()], &options));
+        }
+    }
 
     #[test]
     fn build_and_vcs_churn_is_ignored() {

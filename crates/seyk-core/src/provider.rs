@@ -1,6 +1,8 @@
 //! Resource access. Filesystem is the only supported production provider.
 
-use crate::discovery::{DiscoveryOptions, ResourceKind, discover, modified_ns};
+use crate::discovery::{
+    DiscoveryOptions, ResourceKind, discover, ensure_allowed_path, modified_ns,
+};
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -64,7 +66,13 @@ impl ResourceScope {
         mut roots: Vec<ResourceId>,
         discovery: DiscoveryOptions,
     ) -> Result<Self> {
+        for root in &roots {
+            if let Some(path) = root.to_file_path() {
+                ensure_allowed_path(&path)?;
+            }
+        }
         for p in paths {
+            ensure_allowed_path(p)?;
             let absolute = p.canonicalize().map_err(|e| Error::io(p, e))?;
             roots.push(ResourceId::from_path(absolute)?);
         }
@@ -146,6 +154,7 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         Ok(Box::new(
             std::fs::File::open(&path).map_err(|e| Error::io(path, e))?,
         ))
@@ -172,10 +181,12 @@ impl ResourceProvider for FsProvider {
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         std::fs::read(&path).map_err(|e| Error::io(path, e))
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         let meta = std::fs::metadata(&path).map_err(|e| Error::io(path, e))?;
         Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
     }

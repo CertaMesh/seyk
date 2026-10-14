@@ -342,8 +342,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, no_cache)?;
             let paths = default_paths(paths)?;
+            let engine = engine(&model, no_cache)?;
             let progress = Progress::new(!json);
             let report = |e: ProgressEvent| progress.event(e);
             let mut req = also
@@ -472,8 +472,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, false)?;
             let paths = default_paths(paths)?;
+            let engine = engine(&model, false)?;
             #[cfg(feature = "watch")]
             if watch {
                 return watch_and_index(&engine, &paths, &filter.discovery(), json);
@@ -884,7 +884,11 @@ fn open_cache(path: Option<&Path>) -> Result<SqliteCache> {
 }
 
 fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    Ok(if paths.is_empty() { vec![cwd()] } else { paths })
+    let paths = if paths.is_empty() { vec![cwd()] } else { paths };
+    for path in &paths {
+        seyk::discovery::ensure_allowed_path(&seyk::expand_tilde(path))?;
+    }
+    Ok(paths)
 }
 
 fn cwd() -> PathBuf {

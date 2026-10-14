@@ -21,6 +21,75 @@ pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".venv",
 ];
 
+/// Secret names are blocked independently of all discovery options. Match every
+/// component so password-store directories and explicitly named descendants are
+/// covered too. This is a filename policy, not content inspection or PII redaction.
+/// Keep the list here; all filesystem entry points use this matcher.
+pub fn is_secret_path(path: &Path) -> bool {
+    const SUFFIXES: &[&str] = &[
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+        ".jks",
+        ".keystore",
+        ".kdbx",
+        ".kdb",
+        ".1pif",
+        ".agilekeychain",
+        ".opvault",
+        ".env",
+        ".keychain",
+        ".keychain-db",
+    ];
+    const NAMES: &[&str] = &[
+        ".netrc",
+        "netrc",
+        "_netrc",
+        ".pgpass",
+        "pgpass",
+        "pgpass.conf",
+        "credentials",
+        "credentials.json",
+    ];
+    const SSH_KEYS: &[&str] = &["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_xmss"];
+    let mut previous = String::new();
+    for component in path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        let name = name.to_string_lossy().to_ascii_lowercase();
+        if SUFFIXES.iter().any(|suffix| name.ends_with(*suffix))
+            || NAMES.contains(&name.as_str())
+            || name == ".env"
+            || name.starts_with(".env.")
+            || (previous == ".docker" && name == "config.json")
+            || (!name.ends_with(".pub")
+                && SSH_KEYS.iter().any(|key| {
+                    name == *key
+                        || name.strip_prefix(*key).is_some_and(|rest| {
+                            rest.starts_with('.') || rest.starts_with('_') || rest.starts_with('-')
+                        })
+                }))
+        {
+            return true;
+        }
+        previous = name;
+    }
+    false
+}
+
+/// Check both a caller's spelling and the resolved target before opening it.
+/// Missing paths are left to the ordinary I/O error handling at the call site.
+pub fn ensure_allowed_path(path: &Path) -> Result<()> {
+    if is_secret_path(path) || path.canonicalize().is_ok_and(|real| is_secret_path(&real)) {
+        return Err(Error::SecretFile {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 const MARKDOWN_EXT: &[&str] = &["md", "markdown", "mdown", "mkd"];
 const PLAIN_EXT: &[&str] = &["txt", "text", "rst", "org", "adoc", "tex"];
 const CODE_EXT: &[&str] = &[
@@ -72,7 +141,7 @@ impl ResourceKind {
     }
 }
 
-/// Which files to consider.
+/// Which files to consider. Secret paths are always denied, regardless of these options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryOptions {
     /// If non-empty, only files matching one of these globs are searched.
@@ -80,7 +149,7 @@ pub struct DiscoveryOptions {
     pub include: Vec<String>,
     /// Files or directories matching any of these globs are skipped.
     pub exclude: Vec<String>,
-    /// Skip [`DEFAULT_EXCLUDED_DIRS`].
+    /// Skip [`DEFAULT_EXCLUDED_DIRS`]. Disabling this does not admit secret paths.
     pub default_excludes: bool,
     /// Visit files and directories whose name starts with `.`.
     pub include_hidden: bool,
@@ -144,14 +213,16 @@ impl Matcher {
 
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
 ///
-/// Files passed explicitly are always considered, even when hidden. Files with
-/// an unknown extension are treated as plain text only when passed explicitly.
+/// Files passed explicitly are considered even when hidden, except secret paths,
+/// which return [`Error::SecretFile`]. No discovery option overrides this policy.
+/// Files with an unknown extension are treated as plain text only when passed explicitly.
 pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<DiscoveredResource>> {
     let include = Matcher::new(&opts.include)?;
     let exclude = Matcher::new(&opts.exclude)?;
     let mut out = Vec::new();
 
     for root in roots {
+        ensure_allowed_path(root)?;
         let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
@@ -167,6 +238,9 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
+                if is_secret_path(e.path()) {
+                    return false;
+                }
                 if e.depth() == 0 {
                     return true;
                 }
