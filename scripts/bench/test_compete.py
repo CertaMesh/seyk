@@ -1,5 +1,6 @@
 """Boundary tests: a plausible score with wrong document mapping is worse than failure."""
 import json
+import io
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -58,6 +59,24 @@ class Tests(unittest.TestCase):
                 compete.resume_rows(path, header, list(reversed(queries)))
             with self.assertRaisesRegex(ValueError, "git_sha"):
                 compete.resume_rows(path, {**header, "git_sha": "changed"}, queries)
+
+    def test_digup_encoder_events_do_not_replace_or_extend_search_reply(self):
+        worker = compete.Worker.__new__(compete.Worker)
+        worker.process = SimpleNamespace(stdin=io.BytesIO())
+        worker.counter, worker.expect_ready, worker.encoder_events = 0, True, True
+        reply = {"id": 1, "hits": [], "meaning": True}
+        worker.read = mock.Mock(side_effect=[{"event": "ready"},
+            {"event": "encoder", "state": "ready"}, reply])
+        self.assertEqual(worker.request({"op": "search"}, timeout=10), reply)
+        timeouts = [call.args[0] for call in worker.read.call_args_list]
+        self.assertTrue(all(0 < t <= 10 for t in timeouts))
+        self.assertEqual(timeouts, sorted(timeouts, reverse=True))
+        worker.read = mock.Mock(return_value={"event": "encoder", "state": "unavailable", "error": "fixture"})
+        with self.assertRaisesRegex(ValueError, "encoder unavailable"):
+            worker.request({"op": "search"})
+        worker.read = mock.Mock(return_value={"event": "unexpected"})
+        with self.assertRaisesRegex(ValueError, "invalid competitor response"):
+            worker.request({"op": "search"})
 
     def test_checkpoint_then_complete_is_scored_without_losing_empty_queries(self):
         bench.ROOT.mkdir(parents=True, exist_ok=True)

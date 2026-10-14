@@ -122,21 +122,30 @@ class Worker:
         self.buffer = b""
         self.counter = 0
         self.expect_ready = ready
+        self.encoder_events = ready
 
     def request(self, request, timeout=300):
+        deadline = time.monotonic() + timeout
         if self.expect_ready:
-            row = self.read(timeout)
+            row = self.read(deadline - time.monotonic())
             bench.require(row.get("event") == "ready", "missing DigUp startup event")
             self.expect_ready = False
         self.counter += 1
         request = {**request, "id": self.counter}
         self.process.stdin.write((json.dumps(request) + "\n").encode())
         self.process.stdin.flush()
-        row = self.read(timeout)
+        while True:
+            row = self.read(deadline - time.monotonic())
+            if self.encoder_events and row.get("event") == "encoder":
+                bench.require(row.get("state") in ("ready", "stopped") and not row.get("error"),
+                              "DigUp encoder unavailable; see private log")
+                continue
+            break
         bench.require(row.get("id") == self.counter and not row.get("error"), "invalid competitor response; see private log")
         return row
 
     def read(self, timeout):
+        bench.require(timeout > 0, "competitor timed out; see private log")
         deadline = time.monotonic() + timeout
         while b"\n" not in self.buffer:
             remaining = deadline - time.monotonic()
