@@ -199,6 +199,18 @@ fn page_batches_are_bounded_and_malformed_vectors_never_commit_a_resource() {
     assert!(report.sync.skipped.is_empty());
     assert_eq!(report.sync.segments_embedded, 9);
     assert_eq!(*model.calls.lock().unwrap(), vec![4, 4, 1]);
+    let resource = seyk_core::ResourceId::from_path(path.canonicalize().unwrap()).unwrap();
+    let assert_old_binding_retained = || {
+        let cached = engine
+            .with_cache(|c| c.resource(engine.profile_id(), &resource))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.segments.len(), 9);
+        assert_eq!(
+            cached.metadata.content_hash,
+            blake3::hash(&bytes).to_hex().as_str()
+        );
+    };
     for malformed in [1, 2] {
         model.malformed.store(malformed, Ordering::Relaxed);
         std::fs::write(
@@ -221,12 +233,10 @@ fn page_batches_are_bounded_and_malformed_vectors_never_commit_a_resource() {
             .limit(20)
             .execute()
             .unwrap();
-        assert_eq!(old.hits.len(), 9);
-        assert!(
-            old.hits
-                .iter()
-                .all(|h| h.metadata.content_hash == blake3::hash(&bytes).to_hex().as_str())
-        );
+        // Failed current versions retain their last committed binding for
+        // recovery, but must not expose it as current search evidence.
+        assert!(old.hits.is_empty());
+        assert_old_binding_retained();
     }
     // A later failed batch must not commit the already embedded prefix.
     let changed: Vec<_> = (0..9)
@@ -247,12 +257,8 @@ fn page_batches_are_bounded_and_malformed_vectors_never_commit_a_resource() {
         .limit(20)
         .execute()
         .unwrap();
-    assert_eq!(old.hits.len(), 9);
-    assert!(
-        old.hits
-            .iter()
-            .all(|h| h.metadata.content_hash == blake3::hash(&bytes).to_hex().as_str())
-    );
+    assert!(old.hits.is_empty());
+    assert_old_binding_retained();
 }
 
 #[cfg(feature = "pdf-render")]
