@@ -310,11 +310,14 @@ async fn reply(
 /// Relay this process's stdio to a daemon session for `roots`, starting the
 /// daemon if needed. Returns when either side closes.
 pub fn relay(endpoint: &Endpoint, roots: Vec<PathBuf>) -> Result<()> {
-    // Canonical here, so the daemon sees the same folders whatever its cwd.
+    // Absolute, but retain logical directory names for the secret-file policy.
     let roots = roots
         .iter()
         .map(|r| {
+            seyk::discovery::ensure_allowed_path(r)?;
             r.canonicalize()
+                .with_context(|| format!("root {}", r.display()))?;
+            seyk::discovery::absolute_logical_path(r)
                 .with_context(|| format!("root {}", r.display()))
         })
         .collect::<Result<Vec<_>>>()?;

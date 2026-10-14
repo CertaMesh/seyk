@@ -395,6 +395,24 @@ fn local_content_refuses_missing_scope_and_symlink_root_before_model_load() {
         .stderr(predicate::str::contains("unsupported type"));
 }
 
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn local_content_refuses_secret_root_before_model_load() {
+    let temp = tempfile::Builder::new()
+        .prefix("local-secret-cli-")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap().join("vault.OPVAULT");
+    std::fs::create_dir(&root).unwrap();
+    binary()
+        .args(["mcp", "--local-content", "--no-watch"])
+        .arg(&root)
+        .env("SEYK_MODEL", temp.path().join("no-model"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing secret file"));
+}
+
 /// `seyk mcp` starts the shared daemon on first use and relays through it; the
 /// daemon reports its folders and stops on request. No model weights needed.
 #[cfg(all(feature = "mcp", unix))]
@@ -588,4 +606,77 @@ fn synced_cache_warns_on_stderr_and_still_returns_json() {
     assert_eq!(stats["in_synced_folder"], true);
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.matches("inside a known synced folder").count(), 1);
+}
+
+#[test]
+fn explicit_secret_paths_are_refused_even_without_a_model() {
+    let temp = TempDir::new().unwrap();
+    let secret = temp.path().join("private.pem");
+    std::fs::write(&secret, "synthetic secret sentinel").unwrap();
+    for command in ["index", "search"] {
+        let mut cmd = binary();
+        cmd.arg(command);
+        if command == "search" {
+            cmd.arg("sentinel");
+        }
+        cmd.arg(&secret)
+            .args(["--include", "*", "--hidden"])
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("refusing secret file"))
+            .stdout(predicate::str::contains("synthetic secret sentinel").not());
+    }
+}
+
+#[test]
+#[ignore = "requires local Gemma weights; no downloads"]
+fn secret_include_globs_cannot_bypass_cli_policy() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    for name in ["id_rsa.txt", ".env.local.toml", "vault.opvault/notes.md"] {
+        let path = notes.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "synthetic secret sentinel").unwrap();
+    }
+    for command in ["index", "search"] {
+        let mut cmd = binary();
+        cmd.arg(command);
+        if command == "search" {
+            cmd.arg("sentinel");
+        }
+        let output = cmd
+            .arg(&notes)
+            .args([
+                "--include",
+                "*",
+                "--include",
+                "**/*",
+                "--hidden",
+                "--text-only",
+                "--threads",
+                "1",
+                "--json",
+                "--cache-path",
+            ])
+            .arg(temp.path().join("cache.db"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let sync = if command == "index" {
+            &json["sync"]
+        } else {
+            &json["stats"]["sync"]
+        };
+        assert_eq!(sync["resources_discovered"], 0);
+        if command == "search" {
+            assert_eq!(json["hits"], serde_json::json!([]));
+        }
+    }
 }

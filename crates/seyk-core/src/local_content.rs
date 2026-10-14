@@ -6,7 +6,8 @@
 //! and a file can become dataless between the precheck and content open.
 
 use crate::discovery::{
-    ResourceKind, ScopeFilters, audio_byte_limit, discover_with_policy, matches_scope_filters,
+    ResourceKind, ScopeFilters, audio_byte_limit, discover_with_policy, ensure_allowed_path,
+    matches_scope_filters,
 };
 use crate::provider::ReadSeek;
 use crate::{
@@ -245,6 +246,7 @@ impl LocalContentProvider {
         }
         let mut roots = Vec::new();
         for path in paths {
+            ensure_allowed_path(path)?;
             if !policy_allows(path) {
                 return Err(denied(path));
             }
@@ -319,6 +321,7 @@ impl LocalContentProvider {
         Err(denied(path))
     }
     fn stat(&self, path: &Path) -> Result<libc::stat> {
+        ensure_allowed_path(path)?;
         let root = self.root_for(path)?;
         if path == root.path {
             self.validate_root(root)?;
@@ -333,10 +336,12 @@ impl LocalContentProvider {
         Ok(stat)
     }
     fn content(&self, path: &Path) -> Result<File> {
+        ensure_allowed_path(path)?;
         let (directory, name) = self.parent(path)?;
         open_at(&directory, &name, false).map_err(|e| Error::io(path, e))
     }
     fn directory(&self, path: &Path) -> Result<File> {
+        ensure_allowed_path(path)?;
         let root = self.root_for(path)?;
         if path == root.path {
             self.validate_root(root)?;
@@ -385,7 +390,7 @@ impl ResourceProvider for LocalContentProvider {
             let Some(path) = id.to_file_path() else {
                 continue;
             };
-            if !policy_allows(&path) {
+            if !policy_allows(&path) || ensure_allowed_path(&path).is_err() {
                 continue;
             }
             let explicit = roots.iter().any(|(root, file)| *file && path == *root);

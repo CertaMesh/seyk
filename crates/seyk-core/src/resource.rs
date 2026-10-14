@@ -13,8 +13,8 @@ pub struct ResourceId(String);
 
 impl ResourceId {
     /// Convert an absolute local path without accessing the filesystem.
-    /// URI dot segments are normalized. Request `.paths(...)` resolves actual
-    /// filesystem paths (including symlinks) before converting them to IDs.
+    /// URI dot segments are normalized. Request `.paths(...)` retains logical
+    /// root names for policy checks; discovery emits resolved resource IDs.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let url = url::Url::from_file_path(path.as_ref())
             .map_err(|_| Error::Config("resource path must be absolute".into()))?;
