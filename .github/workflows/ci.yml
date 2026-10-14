@@ -56,6 +56,8 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
+      - name: Check deterministic benchmark chart (synthetic inputs only)
+        run: uv run --no-project --python 3.12 python -m unittest discover -s scripts/bench -p test_chart.py
       - name: Check retrieval metrics and data adapters (synthetic inputs only)
         run: UV_CACHE_DIR="$HOME/.cache/seyk-bench/uv" uv run --locked --python 3.12 scripts/bench/bench.py test
 

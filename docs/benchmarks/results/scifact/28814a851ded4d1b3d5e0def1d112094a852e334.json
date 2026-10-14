@@ -1,0 +1,479 @@
+{
+  "completion": {
+    "hybrid": {
+      "load_after": [
+        35.33935546875,
+        36.8017578125,
+        36.64599609375
+      ],
+      "queries": 300,
+      "type": "complete",
+      "wall_seconds": 183.695929958
+    },
+    "lexical": {
+      "load_after": [
+        25.43017578125,
+        33.0166015625,
+        35.27099609375
+      ],
+      "queries": 300,
+      "type": "complete",
+      "wall_seconds": 409.563178666
+    },
+    "semantic": {
+      "load_after": [
+        26.00341796875,
+        34.37060546875,
+        35.845703125
+      ],
+      "queries": 300,
+      "type": "complete",
+      "wall_seconds": 370.745093666
+    }
+  },
+  "dataset": "scifact",
+  "diagnostics": {
+    "hybrid": {
+      "queries_under_100_resources": 0,
+      "queries_with_result": 300,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.35333333333333333
+    },
+    "lexical": {
+      "queries_under_100_resources": 2,
+      "queries_with_result": 300,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.48
+    },
+    "semantic": {
+      "queries_under_100_resources": 0,
+      "queries_with_result": 300,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.25
+    }
+  },
+  "empty_transcriptions": {
+    "qrels_targeting_skipped_pages": 0,
+    "skipped_pages": 0
+  },
+  "environment": {
+    "hybrid": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 45071840
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 40951808
+      },
+      "dataset": "scifact",
+      "dataset_manifest": {
+        "dataset": "scifact",
+        "metadata_blake3": {
+          "docmap.tsv": "dd04057979bc2b93440d22443e84fccefc069eb4058067193458cc85e13c85ca",
+          "qrels.tsv": "7c350f38222f1c88493ea02616fc6fe3604ef36c066f86a3614df22314ceace0",
+          "queries.jsonl": "4394aa82b275fe4a509f23ad69aad9c3207a3bf7036d4e3c4f4750e38ad3aee4"
+        },
+        "source": {
+          "documents": 5183,
+          "files": [
+            {
+              "name": "scifact.zip",
+              "sha256": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "Upstream claims CC-BY-4.0; abstracts ODC-By-1.0; HF cards differ",
+          "queries": 300,
+          "revision": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 5183,
+          "resources_unchanged": 5183,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1311
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "load_before": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "lexical": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 45071840
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 40951808
+      },
+      "dataset": "scifact",
+      "dataset_manifest": {
+        "dataset": "scifact",
+        "metadata_blake3": {
+          "docmap.tsv": "dd04057979bc2b93440d22443e84fccefc069eb4058067193458cc85e13c85ca",
+          "qrels.tsv": "7c350f38222f1c88493ea02616fc6fe3604ef36c066f86a3614df22314ceace0",
+          "queries.jsonl": "4394aa82b275fe4a509f23ad69aad9c3207a3bf7036d4e3c4f4750e38ad3aee4"
+        },
+        "source": {
+          "documents": 5183,
+          "files": [
+            {
+              "name": "scifact.zip",
+              "sha256": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "Upstream claims CC-BY-4.0; abstracts ODC-By-1.0; HF cards differ",
+          "queries": 300,
+          "revision": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 5183,
+          "resources_unchanged": 5183,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1311
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "load_before": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "semantic": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 45071840
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 11145,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 5183,
+            "segments": 11145
+          }
+        ],
+        "size_bytes": 40951808
+      },
+      "dataset": "scifact",
+      "dataset_manifest": {
+        "dataset": "scifact",
+        "metadata_blake3": {
+          "docmap.tsv": "dd04057979bc2b93440d22443e84fccefc069eb4058067193458cc85e13c85ca",
+          "qrels.tsv": "7c350f38222f1c88493ea02616fc6fe3604ef36c066f86a3614df22314ceace0",
+          "queries.jsonl": "4394aa82b275fe4a509f23ad69aad9c3207a3bf7036d4e3c4f4750e38ad3aee4"
+        },
+        "source": {
+          "documents": 5183,
+          "files": [
+            {
+              "name": "scifact.zip",
+              "sha256": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "Upstream claims CC-BY-4.0; abstracts ODC-By-1.0; HF cards differ",
+          "queries": 300,
+          "revision": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 5183,
+          "resources_unchanged": 5183,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1311
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "load_before": [
+        35.50927734375,
+        40.11376953125,
+        37.6650390625
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    }
+  },
+  "metrics": {
+    "hybrid": {
+      "R@1": 0.6198333333333333,
+      "R@10": 0.8918888888888888,
+      "R@100": 0.9726666666666667,
+      "R@20": 0.9285555555555557,
+      "R@5": 0.8412777777777778,
+      "RR@10": 0.7320753968253968,
+      "nDCG@10": 0.7676375366418308
+    },
+    "lexical": {
+      "R@1": 0.5041666666666667,
+      "R@10": 0.7786666666666666,
+      "R@100": 0.8725555555555555,
+      "R@20": 0.8313888888888888,
+      "R@5": 0.6986111111111112,
+      "RR@10": 0.6122671957671958,
+      "nDCG@10": 0.6476421686915967
+    },
+    "semantic": {
+      "R@1": 0.7099444444444444,
+      "R@10": 0.9012222222222223,
+      "R@100": 0.9660000000000001,
+      "R@20": 0.9196666666666666,
+      "R@5": 0.8723333333333333,
+      "RR@10": 0.8029047619047618,
+      "nDCG@10": 0.8219192471842454
+    }
+  },
+  "scoring": "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1",
+  "smoke": false
+}

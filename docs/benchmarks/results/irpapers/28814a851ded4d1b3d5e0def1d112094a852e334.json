@@ -1,0 +1,514 @@
+{
+  "completion": {
+    "hybrid": {
+      "load_after": [
+        19.65966796875,
+        21.8408203125,
+        28.4091796875
+      ],
+      "queries": 180,
+      "type": "complete",
+      "wall_seconds": 108.929217625
+    },
+    "lexical": {
+      "load_after": [
+        21.52197265625,
+        22.171875,
+        27.54248046875
+      ],
+      "queries": 180,
+      "type": "complete",
+      "wall_seconds": 247.631521875
+    },
+    "semantic": {
+      "load_after": [
+        23.9091796875,
+        22.6298828125,
+        27.7958984375
+      ],
+      "queries": 180,
+      "type": "complete",
+      "wall_seconds": 232.988108708
+    }
+  },
+  "dataset": "irpapers",
+  "diagnostics": {
+    "hybrid": {
+      "queries_under_100_resources": 4,
+      "queries_with_result": 180,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.5833333333333334
+    },
+    "lexical": {
+      "queries_under_100_resources": 6,
+      "queries_with_result": 180,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.5722222222222222
+    },
+    "semantic": {
+      "queries_under_100_resources": 0,
+      "queries_with_result": 180,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.6277777777777778
+    }
+  },
+  "empty_transcriptions": {
+    "materialized_pages": 3226,
+    "qrels_targeting_skipped_pages": 1,
+    "raw_rows": 3230,
+    "skipped_pages": 4
+  },
+  "environment": {
+    "hybrid": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 96738808
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 92614656
+      },
+      "dataset": "irpapers",
+      "dataset_manifest": {
+        "dataset": "irpapers",
+        "empty_transcriptions": {
+          "materialized_pages": 3226,
+          "qrels_targeting_skipped_pages": 1,
+          "raw_rows": 3230,
+          "skipped_pages": 4
+        },
+        "metadata_blake3": {
+          "docmap.tsv": "de56f4cecc245cc04e5725a8d69a7f034e0609d81546662642ed430bbad665c7",
+          "qrels.tsv": "44a4735a84237077134775dd5b5ba37b32d10da02b499a4836e137eeadab308e",
+          "queries.jsonl": "5dad9a4e9f4e006e5c1c4d3314ff97bd0912bd63d594464560d6dd79ca13d2b5"
+        },
+        "source": {
+          "documents": 3230,
+          "files": [
+            {
+              "name": "docs.csv",
+              "sha256": "8fe316290b55c71bd1641603b5feb02117672028f7d1af45bcad1c111c53611b",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-docs.csv"
+            },
+            {
+              "name": "queries.csv",
+              "sha256": "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+            }
+          ],
+          "kind": "irpapers",
+          "license": "MIT dataset; source paper rights retained",
+          "queries": 180,
+          "revision": "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 3226,
+          "resources_unchanged": 3226,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1065
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        17.2314453125,
+        22.923828125,
+        29.63818359375
+      ],
+      "load_before": [
+        17.60009765625,
+        23.091796875,
+        29.736328125
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "lexical": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 96738808
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 92614656
+      },
+      "dataset": "irpapers",
+      "dataset_manifest": {
+        "dataset": "irpapers",
+        "empty_transcriptions": {
+          "materialized_pages": 3226,
+          "qrels_targeting_skipped_pages": 1,
+          "raw_rows": 3230,
+          "skipped_pages": 4
+        },
+        "metadata_blake3": {
+          "docmap.tsv": "de56f4cecc245cc04e5725a8d69a7f034e0609d81546662642ed430bbad665c7",
+          "qrels.tsv": "44a4735a84237077134775dd5b5ba37b32d10da02b499a4836e137eeadab308e",
+          "queries.jsonl": "5dad9a4e9f4e006e5c1c4d3314ff97bd0912bd63d594464560d6dd79ca13d2b5"
+        },
+        "source": {
+          "documents": 3230,
+          "files": [
+            {
+              "name": "docs.csv",
+              "sha256": "8fe316290b55c71bd1641603b5feb02117672028f7d1af45bcad1c111c53611b",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-docs.csv"
+            },
+            {
+              "name": "queries.csv",
+              "sha256": "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+            }
+          ],
+          "kind": "irpapers",
+          "license": "MIT dataset; source paper rights retained",
+          "queries": 180,
+          "revision": "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 3226,
+          "resources_unchanged": 3226,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1065
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        17.2314453125,
+        22.923828125,
+        29.63818359375
+      ],
+      "load_before": [
+        17.60009765625,
+        23.091796875,
+        29.736328125
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "semantic": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 96738808
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 32176,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "d0239b350def21bbeed79132",
+            "resources": 3226,
+            "segments": 32321
+          }
+        ],
+        "size_bytes": 92614656
+      },
+      "dataset": "irpapers",
+      "dataset_manifest": {
+        "dataset": "irpapers",
+        "empty_transcriptions": {
+          "materialized_pages": 3226,
+          "qrels_targeting_skipped_pages": 1,
+          "raw_rows": 3230,
+          "skipped_pages": 4
+        },
+        "metadata_blake3": {
+          "docmap.tsv": "de56f4cecc245cc04e5725a8d69a7f034e0609d81546662642ed430bbad665c7",
+          "qrels.tsv": "44a4735a84237077134775dd5b5ba37b32d10da02b499a4836e137eeadab308e",
+          "queries.jsonl": "5dad9a4e9f4e006e5c1c4d3314ff97bd0912bd63d594464560d6dd79ca13d2b5"
+        },
+        "source": {
+          "documents": 3230,
+          "files": [
+            {
+              "name": "docs.csv",
+              "sha256": "8fe316290b55c71bd1641603b5feb02117672028f7d1af45bcad1c111c53611b",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-docs.csv"
+            },
+            {
+              "name": "queries.csv",
+              "sha256": "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3",
+              "url": "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+            }
+          ],
+          "kind": "irpapers",
+          "license": "MIT dataset; source paper rights retained",
+          "queries": 180,
+          "revision": "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "28814a851ded4d1b3d5e0def1d112094a852e334",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 0,
+          "resources_discovered": 3226,
+          "resources_unchanged": 3226,
+          "resources_updated": 0,
+          "segments_embedded": 0,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1065
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        17.2314453125,
+        22.923828125,
+        29.63818359375
+      ],
+      "load_before": [
+        17.60009765625,
+        23.091796875,
+        29.736328125
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "d0239b350def21bbeed79132",
+      "run_id": "28814a851ded4d1b3d5e0def1d112094a852e334-d0239b350def21bbeed79132-wdefault-readme4563",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    }
+  },
+  "metrics": {
+    "hybrid": {
+      "R@1": 0.4166666666666667,
+      "R@10": 0.8555555555555555,
+      "R@100": 0.9888888888888889,
+      "R@20": 0.9222222222222223,
+      "R@5": 0.7888888888888889,
+      "RR@10": 0.5602358906525572,
+      "nDCG@10": 0.6320420694386677
+    },
+    "lexical": {
+      "R@1": 0.42777777777777776,
+      "R@10": 0.8333333333333334,
+      "R@100": 0.9777777777777777,
+      "R@20": 0.8944444444444445,
+      "R@5": 0.75,
+      "RR@10": 0.56413139329806,
+      "nDCG@10": 0.6294088188904575
+    },
+    "semantic": {
+      "R@1": 0.37222222222222223,
+      "R@10": 0.8111111111111111,
+      "R@100": 0.95,
+      "R@20": 0.8777777777777778,
+      "R@5": 0.7333333333333333,
+      "RR@10": 0.5183377425044092,
+      "nDCG@10": 0.589410518503951
+    }
+  },
+  "scoring": "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1",
+  "smoke": false
+}
