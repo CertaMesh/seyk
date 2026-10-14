@@ -519,3 +519,47 @@ fn parent_deletion_scope_cannot_bypass_replaced_overlapping_configured_root() {
         "the matched configured child root must still be verified"
     );
 }
+
+#[test]
+fn secret_policy_covers_roots_cached_ids_and_every_content_access() {
+    let tmp = fixture();
+    let root = tmp.path().canonicalize().unwrap();
+    let provider = LocalContentProvider::new(std::slice::from_ref(&root)).unwrap();
+    for rel in [
+        "id_rsa.txt",
+        "id_rſa.txt",
+        "credentials",
+        "vault.OPVAULT/note.txt",
+    ] {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "synthetic secret").unwrap();
+        let id = ResourceId::from_path(&path).unwrap();
+        assert!(matches!(
+            provider.read(&id),
+            Err(seyk_core::Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            provider.open(&id),
+            Err(seyk_core::Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            provider.version(&id),
+            Err(seyk_core::Error::SecretFile { .. })
+        ));
+        assert!(provider.validate_path(&path).is_err());
+        assert!(provider.list(&scope(&path)).is_err());
+        assert!(
+            provider
+                .list_cached(&scope(&root), &[id])
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(provider.list(&scope(&root)).unwrap().is_empty());
+    assert!(LocalContentProvider::new(&[root.join("vault.OPVAULT")]).is_err());
+    // File-only key names do not exclude ordinary directories.
+    fs::create_dir(root.join("id_ed25519")).unwrap();
+    fs::write(root.join("id_ed25519/notes.txt"), "ordinary notes").unwrap();
+    assert_eq!(provider.list(&scope(&root)).unwrap().len(), 1);
+}

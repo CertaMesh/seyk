@@ -1,6 +1,9 @@
 //! Resource access. Filesystem is the only supported production provider.
 
-use crate::discovery::{DiscoveryOptions, ResourceKind, discover, modified_ns};
+use crate::discovery::{
+    DiscoveryOptions, ResourceKind, absolute_logical_path, discover, ensure_allowed_path,
+    modified_ns,
+};
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, Metadata};
@@ -66,8 +69,17 @@ impl ResourceScope {
         mut roots: Vec<ResourceId>,
         discovery: DiscoveryOptions,
     ) -> Result<Self> {
+        for root in &roots {
+            if let Some(path) = root.to_file_path() {
+                ensure_allowed_path(&path)?;
+            }
+        }
         for p in paths {
-            let absolute = p.canonicalize().map_err(|e| Error::io(p, e))?;
+            ensure_allowed_path(p)?;
+            // Retain the caller's directory names (e.g. a .docker symlink).
+            // Discovery checks logical children before emitting canonical IDs.
+            p.canonicalize().map_err(|e| Error::io(p, e))?;
+            let absolute = absolute_logical_path(p)?;
             roots.push(ResourceId::from_path(absolute)?);
         }
         Ok(Self { roots, discovery })
@@ -161,7 +173,9 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
-        Ok(Box::new(open_local_content(&file_path(id)?)?))
+        let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
+        Ok(Box::new(open_local_content(&path)?))
     }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
         let paths = scope
@@ -185,6 +199,7 @@ impl ResourceProvider for FsProvider {
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         let mut file = open_local_content(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
@@ -193,6 +208,7 @@ impl ResourceProvider for FsProvider {
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         let meta = std::fs::metadata(&path).map_err(|e| Error::io(path, e))?;
         Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
     }

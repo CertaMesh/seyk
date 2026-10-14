@@ -350,8 +350,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, no_cache)?;
             let paths = default_paths(paths)?;
+            let engine = engine(&model, no_cache)?;
             let progress = Progress::new(!json);
             let report = |e: ProgressEvent| progress.event(e);
             let mut req = also
@@ -481,8 +481,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
-            let engine = engine(&model, false)?;
             let paths = default_paths(paths)?;
+            let engine = engine(&model, false)?;
             #[cfg(feature = "watch")]
             if watch {
                 return watch_and_index(&engine, &paths, &filter.discovery(), json);
@@ -951,7 +951,11 @@ fn open_cache(path: Option<&Path>) -> Result<SqliteCache> {
 }
 
 fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
-    Ok(if paths.is_empty() { vec![cwd()] } else { paths })
+    let paths = if paths.is_empty() { vec![cwd()] } else { paths };
+    for path in &paths {
+        seyk::discovery::ensure_allowed_path(&seyk::expand_tilde(path))?;
+    }
+    Ok(paths)
 }
 
 fn cwd() -> PathBuf {
@@ -1299,6 +1303,10 @@ mod tests {
             heading: None,
             preview: preview.map(str::to_string),
             query_index: 0,
+            r#match: seyk::MatchReason {
+                semantic_rank: Some(1),
+                ..Default::default()
+            },
             signals: MatchSignals {
                 semantic: Some(score),
                 ..Default::default()
@@ -1466,6 +1474,8 @@ mod tests {
                 .unwrap()
                 .as_str()
         );
+        assert_eq!(first["match"]["semantic_rank"], 1);
+        assert_eq!(first["match"]["matched_terms"], serde_json::json!([]));
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");

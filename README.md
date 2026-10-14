@@ -510,6 +510,13 @@ now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
 CLI JSON objects and MCP search responses include `schema_version: 7`.
+Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
+`semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
+containing only normalized query tokens confirmed by the keyword index. Ranks
+precede fusion and the final limit; `null` means the leg did not contribute.
+Match provenance leaves existing scores/signals and ranking unchanged; older
+JSON defaults to empty provenance. See
+[match provenance](docs/mcp.md#per-hit-match-provenance) for token and compatibility details.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.
@@ -719,8 +726,48 @@ these fields; extraction still accepts search documents from versions 2–6.
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
 A file passed explicitly on the command line is searched as plain text even with
-an unknown extension. Directories skip `.git`, `target`, `node_modules`, `.hg`,
+an unknown extension, except the secret paths listed below. Directories skip `.git`, `target`, `node_modules`, `.hg`,
 `.svn`, `__pycache__`, `.venv` and hidden entries by default.
+
+### Files Seyk never indexes
+
+Seyk blocks these names before reading file contents. Matching uses Unicode
+compatibility normalization and full case folding on every platform (including
+long `ſ`, Kelvin `K`, and compatibility spellings):
+
+- Keys and certificate containers: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
+- SSH private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `id_xmss`,
+  including copies with a `.`, `_`, or `-` suffix (for example `id_rsa.backup`
+  or `id_ed25519_sk`). Names ending in `.pub` are exempt from this SSH rule.
+- Password stores: `*.kdbx`, `*.kdb`, `*.1pif`, and all contents of
+  `*.agilekeychain` and `*.opvault` directories.
+- Environment files: `.env`, `.env.*`, `*.env`, including examples and templates.
+- Keychain exports: `*.keychain`, `*.keychain-db`.
+- Credentials: `.netrc`, `netrc`, `_netrc`, `.pgpass`, `pgpass`, `pgpass.conf`,
+  `credentials` (including `.aws/credentials`), `credentials.json`, and
+  `.docker/config.json`.
+
+There is no override. `--include`, `--hidden`, disabling default directory
+exclusions, and library/MCP filters cannot admit these paths. The same policy
+applies to watching, cached-only search, previews, and extraction. Discovery
+skips blocked paths; explicitly naming one returns a `refusing secret file or
+directory` error. Every supplied component, intermediate symlink target, and final canonical path
+is checked. Resolution stops with an error after 40 symlink hops. Logical
+directory names survive every hop, so an alias through a `.docker` directory
+symlink still blocks its `config.json`, including paths containing `..`. Password-store directory components
+(`*.opvault`, `*.agilekeychain`) block every descendant; other rules apply to
+files only. An ordinary source directory such as `src/credentials/schema.rs`
+remains searchable.
+
+Previously cached entries for blocked paths are excluded from search and cannot
+be extracted. This does not erase old cache data; use `seyk cache clear` to
+remove it. The policy is centralized in `seyk-core/src/discovery.rs`. It checks
+names, not contents: secrets renamed to ordinary filenames, hard links with
+ordinary names, or credentials embedded in other documents are not detected.
+Names are checked before files are opened; concurrent filesystem changes can
+race those checks (TOCTOU). This policy is not a filesystem sandbox. A dotfiles target such as
+`~/dotfiles/docker/config.json` is blocked by the Docker rule only when the
+requested traversal passes through a `.docker` name.
 
 ### How text is segmented
 

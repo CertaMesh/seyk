@@ -1,7 +1,7 @@
 mod common;
 use seyk_core::{Dimension, SearchEngine, SearchMode};
 
-// Captured from origin/main 71f9a184, before adding count/progress code.
+// Captured from origin/main 28814a85, before adding count/progress code.
 // Only temporary paths and mtimes are normalized; score bits and complete
 // locators, signals, ordering, headings and previews remain part of the golden.
 #[test]
