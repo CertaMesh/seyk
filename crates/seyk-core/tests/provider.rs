@@ -646,7 +646,8 @@ fn filesystem_placeholder_markers_refuse_both_content_read_seams() {
 fn ordinary_local_content_remains_readable_through_both_seams() {
     use std::io::Read;
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("ordinary.md");
+    // Content ids are canonical; macOS temp directories sit behind /var.
+    let path = temp.path().canonicalize().unwrap().join("ordinary.md");
     let bytes = b"Public synthetic ordinary local content";
     std::fs::write(&path, bytes).unwrap();
     let id = ResourceId::from_path(&path).unwrap();
@@ -659,20 +660,35 @@ fn ordinary_local_content_remains_readable_through_both_seams() {
 
 #[cfg(unix)]
 #[test]
-fn ordinary_explicit_symlink_remains_supported_but_placeholder_alias_is_denied() {
+fn symlinked_ids_fail_closed_but_explicit_symlink_roots_resolve_to_canonical_ids() {
     let temp = tempfile::tempdir().unwrap();
-    let local = temp.path().join("local.md");
+    let base = temp.path().canonicalize().unwrap();
+    let local = base.join("local.md");
     std::fs::write(&local, b"Synthetic local alias content").unwrap();
-    let alias = temp.path().join("alias.md");
+    let alias = base.join("alias.md");
     std::os::unix::fs::symlink(&local, &alias).unwrap();
+    // Reads never follow a link, even a final one; the error says why.
     let id = ResourceId::from_path(&alias).unwrap();
+    let error = FsProvider.read(&id).unwrap_err().to_string();
+    assert!(error.contains("symbolic link"), "{error}");
+    assert!(FsProvider.open(&id).is_err());
+    assert!(FsProvider.version(&id).is_err());
+    // An explicit symlink root still works: discovery stores the canonical id.
+    let scope = ResourceScope {
+        roots: vec![ResourceId::from_path(&alias).unwrap()],
+        discovery: DiscoveryOptions::default(),
+    };
+    let listed = FsProvider.list(&scope).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, ResourceId::from_path(&local).unwrap());
     assert_eq!(
-        FsProvider.read(&id).unwrap(),
+        FsProvider.read(&listed[0].id).unwrap(),
         b"Synthetic local alias content"
     );
-    assert!(FsProvider.open(&id).is_ok());
+    assert!(FsProvider.open(&listed[0].id).is_ok());
+    // A placeholder behind an alias is denied either way.
     std::fs::remove_file(&alias).unwrap();
-    let placeholder = temp.path().join("source.md.icloud");
+    let placeholder = base.join("source.md.icloud");
     std::fs::write(&placeholder, b"Synthetic placeholder sentinel").unwrap();
     std::os::unix::fs::symlink(&placeholder, &alias).unwrap();
     assert!(FsProvider.read(&id).is_err());

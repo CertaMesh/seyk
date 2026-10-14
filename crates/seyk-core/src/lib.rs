@@ -31,6 +31,8 @@ pub mod index;
 pub mod lexical;
 #[cfg(unix)]
 pub mod local_content;
+#[cfg(unix)]
+mod pinned_dir;
 mod progress;
 pub mod provider;
 mod resource;
