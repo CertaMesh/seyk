@@ -40,6 +40,8 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
+mod text_tokenization;
+
 pub use seyk_embed::{
     Dimension, Embedder, Embedding, EmbeddingRequest, EmbeddingTask, Error, Modality,
     ModelIdentity, ResourceInput, Result, cosine_similarity, dot_product, normalize,
@@ -260,7 +262,9 @@ impl ResolvedModel {
         Ok(ModelIdentity {
             model_id: MODEL_ID.into(),
             revision,
-            variant: format!("onnx-{}", config.precision.name()),
+            // A literal control token could previously embed successfully. Those
+            // cached vectors must not be reused under the new text policy.
+            variant: format!("onnx-{};text-literals-v1", config.precision.name()),
             dimension: config.dimension,
             normalization: "mean-pool;truncate;l2".into(),
             query_prompt: QUERY_PROMPT.into(),
@@ -307,6 +311,7 @@ fn elapsed(start: Option<Instant>) -> Duration {
 /// EmbeddingGemma 2 embedder.
 pub struct EmbeddingGemma2 {
     tokenizer: Tokenizer,
+    text_tokenizer: Tokenizer,
     text: Vec<Mutex<Session>>,
     text_workers: Option<rayon::ThreadPool>,
     vision: Option<Mutex<Session>>,
@@ -430,6 +435,7 @@ impl EmbeddingGemma2 {
             }))
             .map_err(ort_err)?;
         tokenizer.with_padding(None);
+        let text_tokenizer = text_tokenization::plain_text_tokenizer(&tokenizer);
         let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
 
         let text = (0..config.sessions)
@@ -462,6 +468,7 @@ impl EmbeddingGemma2 {
             #[cfg(feature = "audio")]
             audio: config.audio.then(|| audio::AudioEncoder::new(dir)),
             tokenizer,
+            text_tokenizer,
             text,
             text_workers,
             vision,
@@ -527,7 +534,11 @@ impl EmbeddingGemma2 {
         Ok(format!("{prefix}{text}"))
     }
 
-    /// Token ids exactly as the model sees them (for verification against the reference).
+    /// Raw processor token ids, including literal special-token recognition.
+    ///
+    /// For verifying trusted image/audio templates against the reference only.
+    /// Text embedding uses a separate plain-text tokenizer, so user-controlled
+    /// text and titles cannot insert special tokens. Ordinary text ids agree.
     pub fn token_ids(&self, input: &str) -> Result<Vec<u32>> {
         Ok(self
             .tokenizer
@@ -574,7 +585,7 @@ impl EmbeddingGemma2 {
         // Tokenize before entering our inference pool: tokenizers may use its own
         // Rayon work, which must never recursively schedule while a session is locked.
         let encodings = self
-            .tokenizer
+            .text_tokenizer
             .encode_batch(inputs.iter().map(String::as_str).collect::<Vec<_>>(), true)
             .map_err(ort_err)?;
         let ids: Vec<Vec<i64>> = encodings
@@ -1304,7 +1315,7 @@ mod resolution_tests {
                 revision:
                     "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0"
                         .into(),
-                variant: "onnx-q8".into(),
+                variant: "onnx-q8;text-literals-v1".into(),
                 dimension: config.dimension,
                 normalization: "mean-pool;truncate;l2".into(),
                 query_prompt: "task: search result | query: ".into(),
