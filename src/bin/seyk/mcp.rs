@@ -46,7 +46,15 @@ pub struct Hub {
     background: bool,
     watched: Mutex<Vec<(PathBuf, Arc<Mutex<IndexStatus>>)>>,
     diagnostics: Mutex<std::collections::HashMap<PathBuf, WatcherDiagnostics>>,
-    progress: Mutex<std::collections::BTreeMap<PathBuf, seyk::IndexProgress>>,
+    progress: Mutex<std::collections::BTreeMap<PathBuf, MeasuredProgress>>,
+}
+
+/// A watcher's progress and the canonical root its pass walked. Exposure is
+/// tied to that identity, never to whatever the logical root names later.
+#[derive(Clone)]
+struct MeasuredProgress {
+    identity: PathBuf,
+    progress: seyk::IndexProgress,
 }
 
 /// One agent session: the folders it may search, and the watchers covering them.
@@ -278,7 +286,8 @@ pub struct RootProgress {
 }
 
 impl Hub {
-    pub fn root_progress(&self, allowed: Option<&[PathBuf]>) -> Vec<RootProgress> {
+    /// `allowed` pairs a session's logical roots with their pinned canonical roots.
+    pub fn root_progress(&self, allowed: Option<(&[PathBuf], &[PathBuf])>) -> Vec<RootProgress> {
         let Ok(watched) = self.watched.lock() else {
             return Vec::new();
         };
@@ -287,9 +296,22 @@ impl Hub {
         };
         let mut result = std::collections::BTreeMap::new();
         for (root, _) in watched.iter() {
-            if allowed.is_none_or(|roots| roots.iter().any(|r| progress_visible(r, root))) {
-                result.insert(root.clone(), progress.get(root).cloned());
-            } else if let Some(allowed) = allowed {
+            let snapshot = progress.get(root);
+            let shown = match (allowed, snapshot) {
+                (None, snapshot) => Some(snapshot.map(|s| s.progress.clone())),
+                (Some((logical, resolved)), Some(snapshot)) => logical
+                    .iter()
+                    .zip(resolved)
+                    .any(|(l, r)| snapshot_visible(l, r, root, &snapshot.identity))
+                    .then(|| Some(snapshot.progress.clone())),
+                (Some((logical, _)), None) => logical
+                    .iter()
+                    .any(|r| progress_visible(r, root))
+                    .then_some(None),
+            };
+            if let Some(shown) = shown {
+                result.insert(root.clone(), shown);
+            } else if let Some((allowed, _)) = allowed {
                 for child in allowed.iter().filter(|r| r.starts_with(root)) {
                     result.entry(child.clone()).or_insert(None);
                 }
@@ -419,17 +441,11 @@ impl Hub {
             })
         };
         indexing(0, 0);
+        let identity = Mutex::new(None);
         let progress = |e: ProgressEvent| {
+            self.record_progress(root, &identity, &e);
             if matches!(e, ProgressEvent::Discovered { .. }) {
                 indexing(0, 0);
-                if let Ok(mut roots) = self.progress.lock() {
-                    roots.remove(root);
-                }
-            }
-            if let ProgressEvent::IndexProgress { ref progress } = e
-                && let Ok(mut roots) = self.progress.lock()
-            {
-                roots.insert(root.to_path_buf(), progress.clone());
             }
             if let ProgressEvent::Embedding { done, total } = e {
                 indexing(done, total);
@@ -472,6 +488,32 @@ impl Hub {
                 Err(e) => e.to_string(),
             },
         });
+    }
+
+    /// Keep a pass's snapshot under the canonical root that pass walks. Each pass
+    /// emits Discovered before its first count; a root that does not
+    /// canonicalize then records no snapshot at all.
+    fn record_progress(&self, root: &Path, identity: &Mutex<Option<PathBuf>>, e: &ProgressEvent) {
+        if matches!(e, ProgressEvent::Discovered { .. }) {
+            if let Ok(mut identity) = identity.lock() {
+                *identity = root.canonicalize().ok();
+            }
+            if let Ok(mut roots) = self.progress.lock() {
+                roots.remove(root);
+            }
+        }
+        if let ProgressEvent::IndexProgress { progress } = e
+            && let Some(identity) = identity.lock().ok().and_then(|id| id.clone())
+            && let Ok(mut roots) = self.progress.lock()
+        {
+            roots.insert(
+                root.to_path_buf(),
+                MeasuredProgress {
+                    identity,
+                    progress: progress.clone(),
+                },
+            );
+        }
     }
 
     /// Every watched folder and its status, for `seyk daemon status`.
@@ -568,12 +610,18 @@ impl SeykServer {
         Ok(combine(states))
     }
 
+    /// Callers validate roots first, so the pinned canonical roots are current.
+    fn root_progress(&self) -> Vec<RootProgress> {
+        self.hub
+            .root_progress(Some((&self.roots, &self.resolved_roots)))
+    }
+
     fn index_status_json(&self) -> Result<serde_json::Value> {
         self.validate_roots()?;
         Ok(serde_json::json!({
             "schema_version": crate::JSON_SCHEMA_VERSION,
             "index": self.status()?,
-            "index_progress": self.hub.root_progress(Some(&self.roots)),
+            "index_progress": self.root_progress(),
         }))
     }
 
@@ -651,7 +699,7 @@ impl SeykServer {
         }
         let mut resp = to_response(req.execute()?);
         resp.index = status;
-        resp.index_progress = self.hub.root_progress(Some(&self.roots));
+        resp.index_progress = self.root_progress();
         resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
     }
@@ -717,9 +765,25 @@ fn watcher_covers(watched: &Path, root: &Path) -> bool {
     }
 }
 
-// The watcher_covers rule for exposing another watcher's inventory: `watched`
-// must sit below `session` without crossing a directory symlink, and pass the
-// deny policy. A tail that does not exist yet cannot redirect anywhere.
+// A populated snapshot is shown only while its watcher root still resolves to
+// the identity it was measured under, and that identity is the session's
+// pinned root joined with the same relative path (the watcher_covers rule).
+// A root that is missing, dangling or retargeted hides its snapshot.
+fn snapshot_visible(session: &Path, resolved: &Path, watched: &Path, measured: &Path) -> bool {
+    let Ok(relative) = watched.strip_prefix(session) else {
+        return false;
+    };
+    seyk::discovery::ensure_allowed_path(watched).is_ok()
+        && watched
+            .canonicalize()
+            .is_ok_and(|current| current == measured)
+        && resolved.join(relative) == measured
+}
+
+// Whether a watcher with no snapshot may be listed (null progress, no
+// inventory): `watched` must sit below `session` without crossing a directory
+// symlink, and pass the deny policy. A tail that does not exist yet cannot
+// redirect anywhere.
 fn progress_visible(session: &Path, watched: &Path) -> bool {
     let Ok(relative) = watched.strip_prefix(session) else {
         return false;
@@ -1838,23 +1902,15 @@ mod tests {
             .into(),
             eta_seconds: Some(3),
         };
-        server
-            .hub
-            .progress
-            .lock()
-            .unwrap()
-            .insert(a.clone(), progress.clone());
-        server
-            .hub
-            .progress
-            .lock()
-            .unwrap()
-            .insert(b.clone(), progress.clone());
-        let confined = server.hub.root_progress(Some(&server.roots));
+        seed_progress(&server.hub, &a, &progress);
+        seed_progress(&server.hub, &b, &progress);
+        let confined = server.root_progress();
         assert_eq!(confined.len(), 1);
         assert_eq!(confined[0].root.to_file_path().as_ref(), Some(&child));
         assert!(confined[0].progress.is_none());
-        let own = server.hub.root_progress(Some(&[a]));
+        let own = server
+            .hub
+            .root_progress(Some((std::slice::from_ref(&a), std::slice::from_ref(&a))));
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].progress.as_ref(), Some(&progress));
         assert_eq!(server.hub.root_progress(None).len(), 2);
@@ -1870,7 +1926,7 @@ mod tests {
         // arbitrary Unix path bytes without consulting the filesystem.
         let root = parent.join(std::ffi::OsString::from_vec(b"folder-\xff".to_vec()));
         let (server, _) = ownership_server(vec![parent], vec![(root.clone(), IndexStatus::Ready)]);
-        let progress = server.hub.root_progress(Some(&server.roots));
+        let progress = server.root_progress();
         let encoded = serde_json::to_string(&progress).unwrap();
         assert!(encoded.contains("%FF"));
         let decoded: Vec<RootProgress> = serde_json::from_str(&encoded).unwrap();
@@ -1910,10 +1966,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((root.clone(), Arc::new(Mutex::new(IndexStatus::Ready))));
-            hub.progress
-                .lock()
-                .unwrap()
-                .insert(root.clone(), progress.clone());
+            seed_progress(&hub, root, &progress);
         }
         let roots = |progress: Vec<RootProgress>| -> Vec<_> {
             progress
@@ -1922,17 +1975,130 @@ mod tests {
                 .collect()
         };
         assert!(!progress_visible(&allowed, &linked));
-        assert_eq!(
-            roots(confined.hub.root_progress(Some(&confined.roots))),
-            [(plain.clone(), true)]
-        );
+        assert_eq!(roots(confined.root_progress()), [(plain.clone(), true)]);
         let status = confined.index_status_json().unwrap();
         let shown: Vec<RootProgress> =
             serde_json::from_value(status["index_progress"].clone()).unwrap();
         assert_eq!(roots(shown), [(plain, true)]);
+        assert_eq!(roots(other.root_progress()), [(linked, true)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_outside_progress_stays_hidden_after_its_symlink_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let (allowed, outside) = (base.join("allowed"), base.join("outside"));
+        let plain = allowed.join("plain");
+        for dir in [&plain, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let linked = allowed.join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let confined = SeykServer::new(vec![allowed.clone()], hub.clone()).unwrap();
+        let progress = seyk::IndexProgress {
+            by_kind: [(
+                "text".into(),
+                seyk::KindProgress {
+                    indexed: 7,
+                    waiting: 1,
+                    skipped: 0,
+                },
+            )]
+            .into(),
+            eta_seconds: Some(2),
+        };
+        // Snapshots as the watchers measured them; no callback runs afterwards.
+        for root in [&linked, &plain] {
+            hub.watched
+                .lock()
+                .unwrap()
+                .push((root.clone(), Arc::new(Mutex::new(IndexStatus::Ready))));
+            seed_progress(&hub, root, &progress);
+        }
+        let shown = || -> Vec<(PathBuf, bool)> {
+            let status = confined.index_status_json().unwrap();
+            let status: Vec<RootProgress> =
+                serde_json::from_value(status["index_progress"].clone()).unwrap();
+            let mut request = params(&[]);
+            request.queries = vec!["anything".into()];
+            let search = confined.run_search(request).unwrap().index_progress;
+            let roots = |progress: Vec<RootProgress>| -> Vec<_> {
+                progress
+                    .into_iter()
+                    .map(|p| (p.root.to_file_path().unwrap(), p.progress.is_some()))
+                    .collect()
+            };
+            let (status, search) = (roots(status), roots(search));
+            assert_eq!(status, search);
+            status
+        };
+        let in_scope_only = [(plain.clone(), true)];
+        assert_eq!(shown(), in_scope_only, "outside symlink present");
+        std::fs::remove_file(&linked).unwrap();
+        assert_eq!(shown(), in_scope_only, "outside symlink unlinked");
+        std::fs::create_dir(&linked).unwrap();
         assert_eq!(
-            roots(other.hub.root_progress(Some(&other.roots))),
-            [(linked, true)]
+            shown(),
+            in_scope_only,
+            "symlink replaced by an in-scope dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watcher_snapshots_carry_the_canonical_root_their_pass_walked() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let outside = base.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let linked = base.join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let identity = Mutex::new(None);
+        let counts = || ProgressEvent::IndexProgress {
+            progress: seyk::IndexProgress::default(),
+        };
+        let recorded = || {
+            hub.progress
+                .lock()
+                .unwrap()
+                .get(&linked)
+                .map(|s| s.identity.clone())
+        };
+        hub.record_progress(&linked, &identity, &counts());
+        assert_eq!(recorded(), None, "no identity before discovery");
+        hub.record_progress(
+            &linked,
+            &identity,
+            &ProgressEvent::Discovered { resources: 1 },
+        );
+        hub.record_progress(&linked, &identity, &counts());
+        assert_eq!(recorded(), Some(outside));
+        std::fs::remove_file(&linked).unwrap();
+        hub.record_progress(
+            &linked,
+            &identity,
+            &ProgressEvent::Discovered { resources: 0 },
+        );
+        hub.record_progress(&linked, &identity, &counts());
+        assert_eq!(
+            recorded(),
+            None,
+            "a root that does not resolve records nothing"
+        );
+    }
+
+    /// Record a snapshot the way a watcher pass does: under the root's
+    /// canonical identity at measurement time.
+    fn seed_progress(hub: &Hub, root: &Path, progress: &seyk::IndexProgress) {
+        hub.progress.lock().unwrap().insert(
+            root.to_path_buf(),
+            MeasuredProgress {
+                identity: root.canonicalize().unwrap(),
+                progress: progress.clone(),
+            },
         );
     }
 
