@@ -30,6 +30,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 mod materialize;
+#[cfg(test)]
+mod session_tests;
 
 use rayon::prelude::*;
 
@@ -824,6 +826,17 @@ fn session(path: &Path, threads: Option<usize>) -> Result<Session> {
     if let Some(t) = threads {
         b = b.with_intra_threads(t).map_err(ort_err)?;
     }
+    // ORT 1.28's GetDirNameFromFilePath uses dirname(), whose result is shared
+    // static storage on Apple platforms. Concurrent loads from different model
+    // directories can tear external-weight paths. Keep file-backed initialization
+    // serialized across text/vision/audio sessions until upstream fixes that use.
+    // The guard ends before returning the session; inference remains concurrent.
+    #[cfg(target_vendor = "apple")]
+    let _init = {
+        static SESSION_INIT: Mutex<()> = Mutex::new(());
+        // The lock guards no data, so a panic in another load must not poison it.
+        SESSION_INIT.lock().unwrap_or_else(|e| e.into_inner())
+    };
     b.commit_from_file(path)
         .map_err(|e| Error::Embedding(format!("loading {}: {e}", path.display())))
 }
