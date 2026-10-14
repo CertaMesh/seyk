@@ -244,6 +244,105 @@ fn assert_legacy_cache_is_not_served(cache: impl seyk_core::EmbeddingCache + 'st
         Err(Error::SecretFile { .. })
     ));
 }
+// Seed a legacy record through the cache API, without weakening discovery for a test.
+#[cfg(unix)]
+fn assert_local_legacy_cache_is_not_served(cache: impl seyk_core::EmbeddingCache + 'static) {
+    let temp = tempfile::Builder::new()
+        .prefix("local-secret-")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let safe = root.join("safe.txt");
+    let secret = root.join("id_rsa.txt");
+    let body = "synthetic quartz marker";
+    fs::write(&safe, body).unwrap();
+    fs::write(&secret, body).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "legacy-deny"))
+        .provider(
+            seyk_core::local_content::LocalContentProvider::new(std::slice::from_ref(&root))
+                .unwrap(),
+        )
+        .cache(cache)
+        .build()
+        .unwrap();
+    let mut hit = engine
+        .search("quartz")
+        .paths([&safe])
+        .execute()
+        .unwrap()
+        .hits
+        .remove(0);
+    let secret_id = ResourceId::from_path(secret.canonicalize().unwrap()).unwrap();
+    engine
+        .with_cache(|cache| {
+            let old = cache.resource(engine.profile_id(), &hit.resource)?.unwrap();
+            cache.put_resource(
+                engine.profile_id(),
+                &secret_id,
+                &ResourceWrite {
+                    metadata: &old.metadata,
+                    version: &old.version,
+                    descriptor_hash: old.descriptor_hash.as_deref(),
+                    segments: old
+                        .segments
+                        .iter()
+                        .map(|segment| SegmentWrite {
+                            segment,
+                            lexical_body: body,
+                        })
+                        .collect(),
+                },
+            )?;
+            assert!(cache.resource(engine.profile_id(), &secret_id)?.is_some());
+            Ok(())
+        })
+        .unwrap();
+    for sync in [false, true] {
+        for mode in [
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+            SearchMode::Hybrid,
+        ] {
+            let results = engine
+                .search("quartz")
+                .paths([&root])
+                .discovery(permissive())
+                .mode(mode)
+                .sync(sync)
+                .previews(Some(100))
+                .execute()
+                .unwrap();
+            assert!(!results.hits.is_empty());
+            assert_eq!(results.hits.len(), 1);
+            assert!(results.hits.iter().all(|hit| hit.resource != secret_id));
+            assert!(
+                engine
+                    .search("quartz")
+                    .paths([&secret])
+                    .sync(sync)
+                    .mode(mode)
+                    .execute()
+                    .is_err()
+            );
+        }
+    }
+    hit.resource = secret_id;
+    assert!(matches!(
+        engine.extract(&hit),
+        Err(Error::SecretFile { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_content_legacy_memory_and_sqlite_entries_are_not_served() {
+    assert_local_legacy_cache_is_not_served(MemoryCache::new());
+    let temp = tempfile::tempdir().unwrap();
+    assert_local_legacy_cache_is_not_served(
+        SqliteCache::open(temp.path().join("cache.db")).unwrap(),
+    );
+}
 
 #[test]
 fn legacy_memory_and_sqlite_entries_are_not_served() {

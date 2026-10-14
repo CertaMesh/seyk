@@ -113,6 +113,15 @@ fn secret_path(path: &Path, is_dir: bool) -> bool {
 /// I/O remains the caller's responsibility. Symlink loops fail after 40 hops.
 /// This name policy is not an atomic open or a filesystem sandbox.
 pub fn ensure_allowed_path(path: &Path) -> Result<()> {
+    resolve_allowed_path(path).map(|_| ())
+}
+
+struct CheckedPath {
+    path: PathBuf,
+    aliases: Vec<std::ffi::OsString>,
+}
+
+fn resolve_allowed_path(path: &Path) -> Result<CheckedPath> {
     let absolute = unresolved_absolute_path(path)?;
     let mut resolver = PolicyResolver {
         original: path,
@@ -121,10 +130,13 @@ pub fn ensure_allowed_path(path: &Path) -> Result<()> {
     };
     let state = resolver.walk(ResolvedPath::default(), &absolute)?;
     // No symlinks remain here. Also check the filesystem's stored spelling.
-    if let Ok(real) = state.path.canonicalize() {
-        resolver.check(&real, state.is_dir())?;
-    }
-    Ok(())
+    let real = state.path.canonicalize().unwrap_or(state.path.clone());
+    resolver.check(&real, state.is_dir())?;
+    let aliases = resolver.aliases.remove(&real).unwrap_or_default();
+    Ok(CheckedPath {
+        path: real,
+        aliases,
+    })
 }
 
 #[derive(Clone, Default)]
@@ -436,19 +448,76 @@ impl Matcher {
     }
 }
 
+/// Match request globs without requiring a missing resource to exist. Excluding
+/// a directory also excludes its descendants, just as discovery prunes the walk.
+pub(crate) fn matches_scope_filters(
+    path: &Path,
+    root: &Path,
+    opts: &DiscoveryOptions,
+) -> Result<bool> {
+    Ok(ScopeFilters::new(opts)?.matches(path, root))
+}
+
+/// Compile once for a cached-identity query; excludes prune ancestors too.
+pub(crate) struct ScopeFilters {
+    include: Matcher,
+    exclude: Matcher,
+}
+
+impl ScopeFilters {
+    pub(crate) fn new(opts: &DiscoveryOptions) -> Result<Self> {
+        Ok(Self {
+            include: Matcher::new(&opts.include)?,
+            exclude: Matcher::new(&opts.exclude)?,
+        })
+    }
+
+    pub(crate) fn matches(&self, path: &Path, root: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        if relative
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .any(|p| self.exclude.is_match(p))
+        {
+            return false;
+        }
+        self.include.empty || self.include.is_match(relative)
+    }
+}
+
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
 ///
 /// Files passed explicitly are considered even when hidden, except secret paths,
 /// which return [`Error::SecretFile`]. No discovery option overrides this policy.
 /// Files with an unknown extension are treated as plain text only when passed explicitly.
 pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<DiscoveredResource>> {
+    discover_with_policy(roots, opts, |_| true)
+}
+
+/// An additional fixed policy may only narrow discovery, including explicit roots.
+pub(crate) fn discover_with_policy(
+    roots: &[PathBuf],
+    opts: &DiscoveryOptions,
+    allowed: impl Fn(&Path) -> bool,
+) -> Result<Vec<DiscoveredResource>> {
     let include = Matcher::new(&opts.include)?;
     let exclude = Matcher::new(&opts.exclude)?;
     let mut out = Vec::new();
 
     for root in roots {
-        let logical_root = absolute_logical_path(root)?;
-        let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
+        // Resolve all root hops once, retaining intermediate directory names
+        // (notably a .docker alias) that canonicalization would erase.
+        let checked = resolve_allowed_path(root)?;
+        let logical_root = logical_absolute_path(root)?;
+        if !allowed(root) {
+            continue;
+        }
+        let root = checked.path;
+        if !allowed(&root) {
+            continue;
+        }
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
             let kind =
@@ -463,8 +532,21 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                let logical = logical_root.join(e.path().strip_prefix(&root).unwrap_or(e.path()));
-                if ensure_allowed_path(e.path()).is_err() || ensure_allowed_path(&logical).is_err()
+                // WalkDir never follows descendant links, so stored entry names
+                // need only the name policy. Do not resolve every ancestor again.
+                if e.file_type().is_symlink() {
+                    return false;
+                }
+                let rel = e.path().strip_prefix(&root).unwrap_or(e.path());
+                let is_dir = e.file_type().is_dir();
+                if secret_path(e.path(), is_dir)
+                    || secret_path(&logical_root.join(rel), is_dir)
+                    || (e.depth() == 1
+                        && checked
+                            .aliases
+                            .iter()
+                            .any(|alias| secret_path(&Path::new(alias).join(rel), is_dir)))
+                    || !allowed(e.path())
                 {
                     return false;
                 }

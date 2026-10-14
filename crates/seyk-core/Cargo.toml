@@ -35,6 +35,9 @@ notify = { version = "8", optional = true }
 dirs = "6"
 url = "2.5.8"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 seyk-core = { path = ".", features = ["test-support"] }
 tempfile = "3"

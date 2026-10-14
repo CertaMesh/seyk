@@ -7,8 +7,10 @@
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
 </p>
 
-Local semantic search over your own files, built on Google's
+Local hybrid search over your own files and code: semantic meaning, BM25
+keywords, and file names. Semantic retrieval runs on Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
+Use the CLI, embed the Rust library, or connect an agent through MCP.
 
 Ask a question in your own words, or type an exact name, and get back the
 passages that match. Meaning, keywords and file names are searched together:
@@ -33,9 +35,10 @@ question; the tag in brackets says what found each hit.)
 It is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
 
-What it is **not**: there is no chat, no answer generation, no summaries, no OCR and
-no transcription. It finds relevant resources and points at the exact place inside
-them. What happens next is up to the application.
+Seyk returns relevant resources and exact locations inside them. It does not
+generate answers or summaries. Audio retrieval and on-demand speech-to-text
+extraction are [opt-in](#speech-to-text-extraction-opt-in); scanned PDFs support
+image-based retrieval, with [OCR still a follow-up](#pdfs).
 
 ## Why EmbeddingGemma 2
 
@@ -164,6 +167,21 @@ seyk cache clear
 | `--text-only` | Skip loading the vision encoder; images are skipped |
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
+
+### Keyword search
+
+The default `hybrid` mode combines meaning, BM25 keyword relevance, and file-name
+matches. Use `lexical` to rank exact terms, identifiers, and names without
+embedding the query:
+
+```sh
+seyk search "INC-18372" ~/notes --mode lexical
+seyk search "Session::restore" ~/code --mode lexical
+```
+
+The CLI still loads a model to index new or changed files; lexical query ranking
+does not make this a model-free indexing mode. See [scores and tags](#scores-and-tags)
+for how the three match types are combined.
 
 ### Extract a search hit
 
@@ -385,6 +403,33 @@ Sessions only share a daemon when they use the same model options
 same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
 Windows `seyk mcp` always runs standalone.
+
+For automatic local-content collections on Unix, opt into a fixed narrower
+policy with `seyk mcp --local-content /absolute/real/folder`. It requires explicit
+directory roots and always runs in-process, bypassing the daemon. MCP initialize
+advertises `serverInfo.name: seyk-local-content-v1`; clients relying on this
+policy must require that name and JSON schema 6, and refuse an older helper
+instead of dropping the flag. Use `--no-watch` to disable background indexing.
+
+The same policy filters discovery and every content read/open: hidden paths,
+`.icloud` markers, Library/cache/caches/build/dist/target/node_modules/__pycache__
+directory names (ASCII case-insensitive), and structural Rust outputs under
+target(s)/[up to two namespace components]/debug or release followed by
+incremental/.fingerprint/build/deps/examples are excluded. Ordinary `targets/data`
+remains eligible. Include/exclude options cannot widen this fixed policy. Roots
+and file/directory links are refused, including in-root aliases; supply real
+POSIX paths, since `/tmp` can itself be a symlink on macOS. Roots are pinned by
+directory descriptors and current device/inode checks. Other Seyk modes retain
+their existing discovery and explicit-link behavior.
+
+Observed macOS dataless files are refused before content open, with descriptor
+type/identity/flags checked again afterward. Neither this mode nor the ordinary
+filesystem guard guarantees atomic prevention of hydration: cloud state can
+change between the metadata check and open, and directories can move while
+traversed. Discovery is metadata-only and path-based, with the fixed policy and
+confined metadata checks before descending. A returned seekable audio handle
+is not rechecked at each later read. Model/cache/materializer reads and custom
+resource providers are separate from this content boundary.
 
 See [MCP indexing and inline search latency](docs/mcp.md) for how inline sync
 can wait behind a watcher indexing another root.
@@ -713,7 +758,9 @@ remove it. The policy is centralized in `seyk-core/src/discovery.rs`. It checks
 names, not contents: secrets renamed to ordinary filenames, hard links with
 ordinary names, or credentials embedded in other documents are not detected.
 Names are checked before files are opened; concurrent filesystem changes can
-race those checks (TOCTOU). This policy is not a filesystem sandbox.
+race those checks (TOCTOU). This policy is not a filesystem sandbox. A dotfiles target such as
+`~/dotfiles/docker/config.json` is blocked by the Docker rule only when the
+requested traversal passes through a `.docker` name.
 
 ### How text is segmented
 

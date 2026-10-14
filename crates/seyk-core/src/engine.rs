@@ -1789,7 +1789,20 @@ impl<'e> SearchRequest<'e> {
         let mut discovery = self.discovery;
         discovery.max_audio_duration_secs = engine.max_audio_duration_secs;
         let scope = ResourceScope::from_paths(&self.paths, self.roots, discovery)?;
-        let resources = engine.provider.list(&scope)?;
+        let pid = engine.profile_id.as_str();
+        // Only opted-in providers authorize the indexed subset without walking
+        // uncached descendants. Default providers retain their original list path.
+        let cached_metadata = if !self.sync && engine.provider.supports_cached_listing() {
+            Some(engine.with_cache(|c| c.resource_index(pid))?)
+        } else {
+            None
+        };
+        let resources = if let Some(metadata) = &cached_metadata {
+            let ids: Vec<_> = metadata.keys().cloned().collect();
+            engine.provider.list_cached(&scope, &ids)?
+        } else {
+            engine.provider.list(&scope)?
+        };
         if let Some(p) = self.progress {
             p(ProgressEvent::Discovered {
                 resources: resources.len(),
@@ -1805,13 +1818,15 @@ impl<'e> SearchRequest<'e> {
             }
         };
 
-        let pid = engine.profile_id.as_str();
         let mut wanted: HashSet<ResourceId> = resources
             .iter()
             .filter(|r| engine.supports_kind(r.kind))
             .map(|r| r.id.clone())
             .collect();
-        let metadata = engine.with_cache(|c| c.resource_index(pid))?;
+        let metadata = match cached_metadata {
+            Some(metadata) => metadata,
+            None => engine.with_cache(|c| c.resource_index(pid))?,
+        };
         for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
             let failed = sync.skipped.iter().any(|s| s.resource == r.id);
             if failed {

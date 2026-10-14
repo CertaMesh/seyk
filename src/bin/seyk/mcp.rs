@@ -51,6 +51,8 @@ pub struct Hub {
 /// One agent session: the folders it may search, and the watchers covering them.
 #[derive(Clone)]
 pub struct SeykServer {
+    #[cfg(unix)]
+    local_content: Option<Arc<seyk::local_content::LocalContentProvider>>,
     roots: Arc<Vec<PathBuf>>,
     // Pin authorization even if a logical root symlink is later retargeted.
     resolved_roots: Arc<Vec<PathBuf>>,
@@ -445,6 +447,8 @@ impl SeykServer {
             .collect::<std::io::Result<Vec<_>>>()?;
         let watchers = hub.watch_roots(&roots)?;
         Ok(Self {
+            #[cfg(unix)]
+            local_content: None,
             roots: Arc::new(roots),
             resolved_roots: Arc::new(resolved_roots),
             hub,
@@ -473,7 +477,7 @@ impl SeykServer {
             .to_file_path()
             .ok_or_else(|| anyhow!("only local resources may be extracted"))?;
         // Authorization is independent of the caller's claimed content hash.
-        let path = confine(&path, &self.roots)?;
+        let path = self.confine(&path)?;
         let hit = seyk::SearchHit {
             resource: ResourceId::from_path(path.canonicalize()?)?,
             locator: hit.locator,
@@ -543,7 +547,7 @@ impl SeykServer {
         } else {
             p.paths
                 .iter()
-                .map(|s| confine(Path::new(s), &self.roots))
+                .map(|s| self.confine(Path::new(s)))
                 .collect::<Result<Vec<_>>>()?
         };
 
@@ -576,6 +580,21 @@ impl SeykServer {
         resp.index = status;
         resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
+    }
+
+    fn confine(&self, path: &Path) -> Result<PathBuf> {
+        #[cfg(unix)]
+        if let Some(provider) = &self.local_content {
+            let path = seyk::expand_tilde(path);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                self.roots[0].join(path)
+            };
+            provider.validate_path(&path)?;
+            return Ok(path);
+        }
+        confine(path, &self.roots)
     }
 }
 
@@ -793,8 +812,18 @@ impl SeykServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SeykServer {
     fn get_info(&self) -> ServerConfig {
+        let name = "seyk".to_owned();
+        #[cfg(unix)]
+        let name = if self.local_content.is_some() {
+            format!(
+                "seyk-local-content-v{}",
+                seyk::local_content::LOCAL_CONTENT_POLICY_VERSION
+            )
+        } else {
+            name
+        };
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("seyk", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(name, env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
 }
@@ -806,6 +835,41 @@ pub fn serve_standalone(
     background: bool,
 ) -> Result<()> {
     let server = SeykServer::new(roots, Hub::new(factory, background))?;
+    serve(server)
+}
+
+/// Dedicated in-process mode; its provider and capabilities cannot leak into a
+/// shared daemon session. Roots were validated without canonicalizing links.
+#[cfg(unix)]
+pub fn serve_local_content(
+    provider: Arc<seyk::local_content::LocalContentProvider>,
+    factory: EngineFactory,
+    background: bool,
+) -> Result<()> {
+    serve(local_content_server(
+        provider,
+        Hub::new(factory, background),
+    )?)
+}
+
+#[cfg(unix)]
+fn local_content_server(
+    provider: Arc<seyk::local_content::LocalContentProvider>,
+    hub: Arc<Hub>,
+) -> Result<SeykServer> {
+    let roots = provider.roots();
+    let watchers = hub.watch_roots(&roots)?;
+    Ok(SeykServer {
+        local_content: Some(provider),
+        resolved_roots: Arc::new(roots.clone()),
+        roots: Arc::new(roots),
+        hub,
+        watchers: Arc::new(watchers),
+        tool_router: SeykServer::tool_router(),
+    })
+}
+
+fn serve(server: SeykServer) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -905,7 +969,15 @@ mod tests {
         documents: Arc<AtomicUsize>,
         cache: impl seyk::EmbeddingCache + 'static,
     ) -> Result<SearchEngine> {
-        Ok(SearchEngine::builder()
+        engine_with_provider(documents, cache, None)
+    }
+
+    fn engine_with_provider(
+        documents: Arc<AtomicUsize>,
+        cache: impl seyk::EmbeddingCache + 'static,
+        provider: Option<Arc<dyn seyk::ResourceProvider>>,
+    ) -> Result<SearchEngine> {
+        let builder = SearchEngine::builder()
             .embedder(WordHash(
                 ModelIdentity {
                     model_id: "test/word-hash".into(),
@@ -919,8 +991,106 @@ mod tests {
                 },
                 documents,
             ))
-            .cache(cache)
-            .build()?)
+            .cache(cache);
+        let builder = match provider {
+            Some(provider) => builder.shared_provider(provider),
+            None => builder,
+        };
+        Ok(builder.build()?)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_content_tools_refuse_original_link_paths_and_generated_aliases() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::Builder::new()
+            .prefix("local-content-mcp-")
+            .tempdir()
+            .unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("local.rs"), "ordinary quartz notes").unwrap();
+        let generated = root.join("Targets/gaze/Debug/Deps/out.rs");
+        std::fs::create_dir_all(generated.parent().unwrap()).unwrap();
+        std::fs::write(&generated, "generated quartz notes").unwrap();
+        symlink(root.join("local.rs"), root.join("alias.rs")).unwrap();
+        symlink(root.join("Targets"), root.join("linked-dir")).unwrap();
+        symlink(&generated, root.join("generated-alias.rs")).unwrap();
+        for rel in ["id_rsa.txt", "vault.opvault/notes.txt"] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "synthetic secret quartz").unwrap();
+        }
+        assert!(
+            seyk::local_content::LocalContentProvider::new(&[root.join("vault.opvault")]).is_err()
+        );
+        let provider = Arc::new(
+            seyk::local_content::LocalContentProvider::new(std::slice::from_ref(&root)).unwrap(),
+        );
+        let engine_provider = provider.clone();
+        let hub = Hub::new(
+            Box::new(move || {
+                engine_with_provider(
+                    Arc::new(AtomicUsize::new(0)),
+                    MemoryCache::new(),
+                    Some(engine_provider.clone()),
+                )
+            }),
+            false,
+        );
+        let server = local_content_server(provider, hub).unwrap();
+        assert_eq!(server.get_info().server_info.name, "seyk-local-content-v1");
+        let valid = search(&server, "quartz");
+        assert_eq!(valid.schema_version, 6);
+        assert_eq!(valid.hits.len(), 1);
+        let hit = serde_json::to_value(&valid.hits[0]).unwrap();
+        assert!(
+            !server
+                .extract(Parameters(ExtractParams { hit: hit.clone() }))
+                .await
+                .unwrap()
+                .is_error
+                .unwrap_or(false)
+        );
+        for rel in [
+            "alias.rs",
+            "linked-dir",
+            "generated-alias.rs",
+            "id_rsa.txt",
+            "vault.opvault",
+        ] {
+            let params: SearchParams = serde_json::from_value(serde_json::json!({
+                "queries": ["quartz"], "paths": [root.join(rel)]
+            }))
+            .unwrap();
+            assert!(
+                server
+                    .search(Parameters(params))
+                    .await
+                    .unwrap()
+                    .is_error
+                    .unwrap_or(false),
+                "search {rel}"
+            );
+            let mut alias_hit = hit.clone();
+            alias_hit["resource"] =
+                serde_json::to_value(ResourceId::from_path(root.join(rel)).unwrap()).unwrap();
+            assert!(
+                server
+                    .extract(Parameters(ExtractParams { hit: alias_hit }))
+                    .await
+                    .unwrap()
+                    .is_error
+                    .unwrap_or(false),
+                "extract {rel}"
+            );
+        }
+        // Existing default mode still supports an explicitly requested local link.
+        let ordinary =
+            SeykServer::new(vec![root.clone()], Hub::new(Box::new(fake_engine), false)).unwrap();
+        assert_eq!(
+            ordinary.confine(&root.join("alias.rs")).unwrap(),
+            root.join("alias.rs")
+        );
     }
 
     fn wait_for(server: &SeykServer, done: impl Fn(&IndexStatus) -> bool) -> IndexStatus {

@@ -28,6 +28,8 @@ pub mod pdf;
 pub use pdf::PdfTextExtractor;
 pub mod index;
 pub mod lexical;
+#[cfg(unix)]
+pub mod local_content;
 pub mod provider;
 mod resource;
 pub mod segment;
