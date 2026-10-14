@@ -113,7 +113,7 @@ fn secret_path(path: &Path, is_dir: bool) -> bool {
 /// I/O remains the caller's responsibility. Symlink loops fail after 40 hops.
 /// This name policy is not an atomic open or a filesystem sandbox.
 pub fn ensure_allowed_path(path: &Path) -> Result<()> {
-    let absolute = std::path::absolute(path).map_err(|e| Error::io(path, e))?;
+    let absolute = unresolved_absolute_path(path)?;
     let mut resolver = PolicyResolver {
         original: path,
         hops: 0,
@@ -254,6 +254,31 @@ impl PolicyResolver<'_> {
     }
 }
 
+// Unlike std::path::absolute on Windows, do not collapse caller-supplied ..
+// before the resolver can inspect the components and apply symlink semantics.
+fn unresolved_absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return Err(Error::io(
+            path,
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty path"),
+        ));
+    }
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
+        // Resolve only the drive's working directory for a drive-relative path
+        // such as C:notes/../file; keep all supplied normal/parent components.
+        let base =
+            std::path::absolute(Path::new(prefix.as_os_str())).map_err(|e| Error::io(path, e))?;
+        return Ok(base.join(path.components().skip(1).collect::<PathBuf>()));
+    }
+    std::env::current_dir()
+        .map(|base| base.join(path))
+        .map_err(|e| Error::io(path, e))
+}
+
 /// Make a logical root absolute without erasing symlink names used by policy.
 /// Resolve `..` with filesystem semantics before a file-URI codec can collapse
 /// it lexically. Keep the logical parent when it denotes that same directory.
@@ -263,7 +288,7 @@ pub fn absolute_logical_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn logical_absolute_path(path: &Path) -> Result<PathBuf> {
-    let absolute = std::path::absolute(path).map_err(|e| Error::io(path, e))?;
+    let absolute = unresolved_absolute_path(path)?;
     let mut logical = PathBuf::new();
     for component in absolute.components() {
         match component {
@@ -533,6 +558,28 @@ pub fn audio_byte_limit(seconds: u64) -> crate::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_policy_path_keeps_parent_components() {
+        let relative = Path::new("vault.opvault/../safe.txt");
+        assert!(
+            unresolved_absolute_path(relative)
+                .unwrap()
+                .ends_with(relative)
+        );
+        assert!(unresolved_absolute_path(Path::new("")).is_err());
+        #[cfg(windows)]
+        for input in [
+            r"C:\vault.opvault\..\safe.txt",
+            r"\\?\C:\vault.opvault\..\safe.txt",
+        ] {
+            assert_eq!(
+                unresolved_absolute_path(Path::new(input)).unwrap(),
+                Path::new(input)
+            );
+        }
+    }
+
     use std::fs;
 
     #[test]
