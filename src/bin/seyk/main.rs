@@ -821,7 +821,7 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
         if let Some(progress) = s
             .index_progress
             .iter()
-            .find(|p| &p.root == folder)
+            .find(|p| p.root.to_file_path().as_ref() == Some(folder))
             .and_then(|p| p.progress.as_ref())
         {
             for (kind, counts) in &progress.by_kind {

@@ -265,7 +265,7 @@ struct Response {
 /// Per watched root. A session restricted to a child gets no parent inventory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootProgress {
-    pub root: PathBuf,
+    pub root: ResourceId,
     pub progress: Option<seyk::IndexProgress>,
 }
 
@@ -289,7 +289,12 @@ impl Hub {
         }
         result
             .into_iter()
-            .map(|(root, progress)| RootProgress { root, progress })
+            .filter_map(|(root, progress)| {
+                Some(RootProgress {
+                    root: ResourceId::from_path(root).ok()?,
+                    progress,
+                })
+            })
             .collect()
     }
     pub fn new(factory: EngineFactory, background: bool) -> Arc<Self> {
@@ -1037,7 +1042,7 @@ mod tests {
         let server = local_content_server(provider, hub).unwrap();
         assert_eq!(server.get_info().server_info.name, "seyk-local-content-v1");
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 6);
+        assert_eq!(valid.schema_version, 7);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1575,12 +1580,29 @@ mod tests {
             .insert(b.clone(), progress.clone());
         let confined = server.hub.root_progress(Some(&server.roots));
         assert_eq!(confined.len(), 1);
-        assert_eq!(confined[0].root, child);
+        assert_eq!(confined[0].root.to_file_path().as_ref(), Some(&child));
         assert!(confined[0].progress.is_none());
         let own = server.hub.root_progress(Some(&[a]));
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].progress.as_ref(), Some(&progress));
         assert_eq!(server.hub.root_progress(None).len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_progress_preserves_non_utf8_folder_identity() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        // APFS rejects creating these names; serialization must still preserve
+        // arbitrary Unix path bytes without consulting the filesystem.
+        let root = parent.join(std::ffi::OsString::from_vec(b"folder-\xff".to_vec()));
+        let (server, _) = ownership_server(vec![parent], vec![(root.clone(), IndexStatus::Ready)]);
+        let progress = server.hub.root_progress(Some(&server.roots));
+        let encoded = serde_json::to_string(&progress).unwrap();
+        assert!(encoded.contains("%FF"));
+        let decoded: Vec<RootProgress> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded[0].root.to_file_path().as_ref(), Some(&root));
     }
 
     #[test]

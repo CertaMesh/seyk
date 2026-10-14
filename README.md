@@ -913,7 +913,8 @@ an empty result has `{}`. These are not unique-file counts or corpus totals.
 No candidate-total query is added, and ranking and candidate depth are unchanged.
 
 Daemon status (including `--json`), MCP `index_status`, and MCP search expose
-`index_progress`: one entry per watched root, with `root` and nullable `progress`.
+`index_progress`: one entry per watched root, with `root` (a lossless file URI)
+and nullable `progress`.
 Existing `folders` and `index.state` fields remain unchanged. Library callers get
 `ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
 `SyncStats::progress`. A library request spanning several roots gets one combined
