@@ -8,8 +8,10 @@ fallback with `reason: "not_yet_embedded"`. Missing weights use `reason: "no_mod
 The keyword index covers text and PDF text, respects request filters and root
 confinement, and creates no vectors. Preparing it still takes discovery and text
 parsing time; no hard latency bound is promised. Ready-state ranking is unchanged.
+Local-content cached queries retain their indexed-only scope; the background
+indexer discovers new files. Fallback retains the local-content provider policy.
 
-CLI JSON, MCP and library results share this optional marker (protocol 7). With no active
+CLI JSON, MCP and library results share this optional marker (protocol 8). With no active
 overlapping watcher, a search may sync inline, but it still shares the
 engine-wide indexing lease with watchers on disjoint roots. It can wait for an
 entire remaining pass, including resource commits and deletion/pruning. The
