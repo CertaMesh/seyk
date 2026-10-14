@@ -28,6 +28,9 @@ blake3 = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 walkdir = "2"
 globset = "0.4"
+# Reuse the existing normalization dependency; caseless supplies full Unicode folds.
+unicode-normalization = "0.1.25"
+caseless = "0.2.2"
 notify = { version = "8", optional = true }
 dirs = "6"
 url = "2.5.8"

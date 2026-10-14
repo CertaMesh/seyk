@@ -280,3 +280,244 @@ fn symlink_alias_and_target_are_both_checked() {
         ));
     }
 }
+
+#[test]
+fn unicode_secret_spellings_are_normalized_on_every_platform() {
+    for name in [
+        "id_rſa.txt",
+        "credentialſ",
+        "private.Key",
+        ".pgpaß",
+        ".ｄｏｃｋｅｒ/CONFIG.JSON",
+        "vault.ｏｐｖａｕｌｔ/note.txt",
+        "id_rſa.PEM",
+        "private.ＫＥＹ",
+    ] {
+        assert!(is_secret_path(Path::new(name)), "{name}");
+    }
+    for name in ["id_rſa.pub", "src/credentialſ/schema.rs", "monkey.txt"] {
+        assert!(!is_secret_path(Path::new(name)), "{name}");
+    }
+}
+
+#[test]
+fn unicode_stored_names_are_refused_at_filesystem_entry_points() {
+    use seyk_core::discovery::ensure_allowed_path;
+    let temp = tempfile::tempdir().unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "unicode-deny"))
+        .build()
+        .unwrap();
+    for (stored, alias) in [
+        ("id_rſa.txt", "id_rsa.txt"),
+        ("credentialſ", "credentials"),
+        ("private.Key", "private.key"),
+    ] {
+        // Create the Unicode spelling FIRST: canonicalization must not hide the bug.
+        let path = temp.path().join(stored);
+        fs::write(&path, "synthetic quartz marker").unwrap();
+        #[cfg(target_os = "macos")]
+        if temp.path().join(alias).exists() {
+            assert_eq!(
+                fs::read(temp.path().join(alias)).unwrap(),
+                fs::read(&path).unwrap()
+            );
+        }
+        let _ = alias;
+        assert!(matches!(
+            ensure_allowed_path(&path),
+            Err(Error::SecretFile { .. })
+        ));
+        let id = ResourceId::from_path(&path).unwrap();
+        assert!(matches!(
+            FsProvider.read(&id),
+            Err(Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            FsProvider.open(&id),
+            Err(Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            FsProvider.version(&id),
+            Err(Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            engine.index().paths([&path]).execute(),
+            Err(Error::SecretFile { .. })
+        ));
+        assert!(matches!(
+            engine.search("quartz").roots([id]).sync(false).execute(),
+            Err(Error::SecretFile { .. })
+        ));
+    }
+    assert!(
+        discover(&[temp.path().into()], &permissive())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        engine
+            .search("quartz")
+            .paths([temp.path()])
+            .discovery(permissive())
+            .execute()
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+}
+
+#[test]
+fn ordinary_credentials_directories_remain_searchable() {
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("src/credentials");
+    fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("schema.rs");
+    fs::write(&path, "pub struct LoginForm;").unwrap();
+    seyk_core::discovery::ensure_allowed_path(&path).unwrap();
+    seyk_core::discovery::ensure_allowed_path(&folder).unwrap();
+    for root in [temp.path(), &folder, &path] {
+        let found = discover(&[root.into()], &permissive()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, path.canonicalize().unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn docker_symlink_root_preserves_context_and_filters_cached_results() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let store = temp.path().join("config-store");
+    fs::create_dir(&store).unwrap();
+    let config = store.join("config.json");
+    fs::write(
+        &config,
+        r#"{"auths":{"example.invalid":{"auth":"synthetic quartz"}}}"#,
+    )
+    .unwrap();
+    fs::write(store.join("safe.txt"), "synthetic quartz").unwrap();
+    let docker = temp.path().join(".docker");
+    symlink(&store, &docker).unwrap();
+    let logical = docker.join("config.json");
+    let id = ResourceId::from_path(&logical).unwrap();
+    assert!(matches!(
+        FsProvider.read(&id),
+        Err(Error::SecretFile { .. })
+    ));
+    assert!(matches!(
+        FsProvider.open(&id),
+        Err(Error::SecretFile { .. })
+    ));
+    assert!(matches!(
+        FsProvider.version(&id),
+        Err(Error::SecretFile { .. })
+    ));
+    assert!(matches!(
+        discover(&[logical.clone()], &permissive()),
+        Err(Error::SecretFile { .. })
+    ));
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "docker-deny"))
+        .build()
+        .unwrap();
+    // Simulate an old cache entry with the resolved identity, admitted through
+    // the ordinary-name target. Both synced and cached-only alias searches filter it.
+    let old = engine.search("quartz").paths([&config]).execute().unwrap();
+    assert!(!old.hits.is_empty());
+    engine
+        .index()
+        .paths([&docker])
+        .discovery(permissive())
+        .execute()
+        .unwrap();
+    for sync in [false, true] {
+        for mode in [
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+            SearchMode::Hybrid,
+        ] {
+            for query in ["quartz", "config.json"] {
+                let results = engine
+                    .search(query)
+                    .paths([&docker])
+                    .discovery(permissive())
+                    .mode(mode)
+                    .sync(sync)
+                    .execute()
+                    .unwrap();
+                assert!(
+                    results.hits.iter().all(|hit| hit
+                        .resource
+                        .to_file_path()
+                        .unwrap()
+                        .ends_with("safe.txt"))
+                );
+                let results = engine
+                    .search(query)
+                    .roots([ResourceId::from_path(&docker).unwrap()])
+                    .discovery(permissive())
+                    .mode(mode)
+                    .sync(sync)
+                    .execute()
+                    .unwrap();
+                assert!(
+                    results.hits.iter().all(|hit| hit
+                        .resource
+                        .to_file_path()
+                        .unwrap()
+                        .ends_with("safe.txt"))
+                );
+            }
+        }
+    }
+    assert!(matches!(
+        engine.search("quartz").paths([&logical]).execute(),
+        Err(Error::SecretFile { .. })
+    ));
+    let mut old_hit = old.hits[0].clone();
+    old_hit.resource = id;
+    assert!(matches!(
+        engine.extract(&old_hit),
+        Err(Error::SecretFile { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn logical_docker_context_survives_parent_components_before_uri_conversion() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = temp.path().join("config-store");
+    fs::create_dir_all(store.join("sub")).unwrap();
+    fs::write(store.join("config.json"), "synthetic secret").unwrap();
+    let docker = temp.path().join(".docker");
+    std::os::unix::fs::symlink(&store, &docker).unwrap();
+    let with_parent = docker.join("sub/../config.json");
+    let id = ResourceId::from_path(
+        seyk_core::discovery::absolute_logical_path(&docker)
+            .unwrap()
+            .join("config.json"),
+    )
+    .unwrap();
+    assert!(matches!(
+        seyk_core::discovery::ensure_allowed_path(&with_parent),
+        Err(Error::SecretFile { .. })
+    ));
+    assert!(matches!(
+        FsProvider.read(&id),
+        Err(Error::SecretFile { .. })
+    ));
+    let logical = seyk_core::discovery::absolute_logical_path(&docker.join("sub/..")).unwrap();
+    assert_eq!(logical, docker);
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "parents-deny"))
+        .build()
+        .unwrap();
+    assert!(matches!(
+        engine
+            .index()
+            .paths([docker.join("sub/../config.json")])
+            .execute(),
+        Err(Error::SecretFile { .. })
+    ));
+}

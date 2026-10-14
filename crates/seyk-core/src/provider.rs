@@ -1,7 +1,8 @@
 //! Resource access. Filesystem is the only supported production provider.
 
 use crate::discovery::{
-    DiscoveryOptions, ResourceKind, discover, ensure_allowed_path, modified_ns,
+    DiscoveryOptions, ResourceKind, absolute_logical_path, discover, ensure_allowed_path,
+    modified_ns,
 };
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,10 @@ impl ResourceScope {
         }
         for p in paths {
             ensure_allowed_path(p)?;
-            let absolute = p.canonicalize().map_err(|e| Error::io(p, e))?;
+            // Retain the caller's directory names (e.g. a .docker symlink).
+            // Discovery checks logical children before emitting canonical IDs.
+            p.canonicalize().map_err(|e| Error::io(p, e))?;
+            let absolute = absolute_logical_path(p)?;
             roots.push(ResourceId::from_path(absolute)?);
         }
         Ok(Self { roots, discovery })

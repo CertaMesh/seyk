@@ -52,6 +52,8 @@ pub struct Hub {
 #[derive(Clone)]
 pub struct SeykServer {
     roots: Arc<Vec<PathBuf>>,
+    // Pin authorization even if a logical root symlink is later retargeted.
+    resolved_roots: Arc<Vec<PathBuf>>,
     hub: Arc<Hub>,
     /// Status of each watcher covering `roots`; empty when background indexing is off.
     watchers: Arc<Vec<Arc<Mutex<IndexStatus>>>>,
@@ -118,9 +120,14 @@ impl WatcherDiagnostics {
 
     fn confined(&self, roots: &[PathBuf]) -> IndexDiagnostics {
         let allowed = |resource: &ResourceId| {
-            resource
-                .to_file_path()
-                .is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
+            resource.to_file_path().is_some_and(|path| {
+                roots.iter().any(|root| {
+                    let real = root.canonicalize().unwrap_or_else(|_| root.clone());
+                    path.strip_prefix(&real).is_ok_and(|relative| {
+                        seyk::discovery::ensure_allowed_path(&root.join(relative)).is_ok()
+                    })
+                })
+            })
         };
         let mut counts = std::collections::BTreeMap::new();
         for entry in self.skipped.iter().filter(|entry| allowed(&entry.resource)) {
@@ -301,7 +308,7 @@ impl Hub {
             .map_err(|_| anyhow!("watcher list lock poisoned"))?;
         let mut cells = Vec::new();
         for root in roots {
-            if let Some((_, cell)) = watched.iter().find(|(w, _)| root.starts_with(w)) {
+            if let Some((_, cell)) = watched.iter().find(|(w, _)| root == *w) {
                 cells.push(cell.clone());
                 continue;
             }
@@ -323,10 +330,7 @@ impl Hub {
             .lock()
             .map_err(|_| anyhow!("watcher list lock poisoned"))?;
         for (root, cell) in watched.iter() {
-            if paths
-                .iter()
-                .any(|path| path.starts_with(root) || root.starts_with(path))
-            {
+            if paths.iter().any(|path| paths_overlap(path, root)) {
                 let status = cell
                     .lock()
                     .map_err(|_| anyhow!("index status lock poisoned"))?;
@@ -427,22 +431,39 @@ impl SeykServer {
             .map(|r| {
                 seyk::discovery::ensure_allowed_path(&r)?;
                 r.canonicalize()
+                    .with_context(|| format!("root {}", r.display()))?;
+                seyk::discovery::absolute_logical_path(&r)
                     .with_context(|| format!("root {}", r.display()))
             })
             .collect::<Result<Vec<_>>>()?;
         if roots.is_empty() {
             return Err(anyhow!("no folders to serve"));
         }
+        let resolved_roots = roots
+            .iter()
+            .map(|r| r.canonicalize())
+            .collect::<std::io::Result<Vec<_>>>()?;
         let watchers = hub.watch_roots(&roots)?;
         Ok(Self {
             roots: Arc::new(roots),
+            resolved_roots: Arc::new(resolved_roots),
             hub,
             watchers: Arc::new(watchers),
             tool_router: Self::tool_router(),
         })
     }
 
+    fn validate_roots(&self) -> Result<()> {
+        for (logical, resolved) in self.roots.iter().zip(self.resolved_roots.iter()) {
+            if logical.canonicalize()? != *resolved {
+                return Err(anyhow!("server root target changed: {}", logical.display()));
+            }
+        }
+        Ok(())
+    }
+
     fn run_extract(&self, params: ExtractParams) -> Result<seyk::ExtractedContent> {
+        self.validate_roots()?;
         let hit: SelectedHit = serde_json::from_value(params.hit).map_err(|_| {
             anyhow!("invalid selected hit: resource, locator and metadata are required")
         })?;
@@ -453,7 +474,7 @@ impl SeykServer {
         // Authorization is independent of the caller's claimed content hash.
         let path = confine(&path, &self.roots)?;
         let hit = seyk::SearchHit {
-            resource: ResourceId::from_path(path)?,
+            resource: ResourceId::from_path(path.canonicalize()?)?,
             locator: hit.locator,
             metadata: hit.metadata,
             score: 0.0,
@@ -480,6 +501,7 @@ impl SeykServer {
     }
 
     fn diagnostics(&self) -> Result<IndexDiagnostics> {
+        self.validate_roots()?;
         let records = self
             .hub
             .diagnostics
@@ -490,7 +512,7 @@ impl SeykServer {
             .filter(|(root, _)| {
                 self.roots
                     .iter()
-                    .any(|session| session.starts_with(root) || root.starts_with(session))
+                    .any(|session| paths_overlap(session, root))
             })
             .collect();
         matching.sort_by_key(|(root, _)| *root);
@@ -502,6 +524,7 @@ impl SeykServer {
     }
 
     fn run_search(&self, p: SearchParams) -> Result<Response> {
+        self.validate_roots()?;
         let queries: Vec<String> = p
             .queries
             .into_iter()
@@ -585,6 +608,14 @@ fn combine(states: Vec<IndexStatus>) -> Option<IndexStatus> {
     })
 }
 
+// Compare filesystem identities for watcher ownership without discarding the
+// logical roots used by discovery and policy checks.
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    let a = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
+    let b = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
+    a.starts_with(&b) || b.starts_with(&a)
+}
+
 /// Resolve `path` against the first root and refuse anything outside the roots,
 /// so an agent cannot read previews of arbitrary files through this server.
 fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
@@ -598,8 +629,28 @@ fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
     let real = joined
         .canonicalize()
         .with_context(|| format!("{} does not exist", joined.display()))?;
-    if roots.iter().any(|r| real.starts_with(r)) {
-        Ok(real)
+    let mut logical = None;
+    for root in roots {
+        let resolved = root
+            .canonicalize()
+            .with_context(|| format!("root {}", root.display()))?;
+        if let Ok(relative) = real.strip_prefix(&resolved) {
+            let candidate = root.join(relative);
+            // Check every applicable logical root, including for absolute cached IDs.
+            seyk::discovery::ensure_allowed_path(&candidate)?;
+            let supplied = if joined.starts_with(root) {
+                joined.clone()
+            } else if let Ok(relative) = joined.strip_prefix(&resolved) {
+                root.join(relative)
+            } else {
+                candidate
+            };
+            // Keep directory symlinks supplied below a broader server root too.
+            logical.get_or_insert(supplied);
+        }
+    }
+    if let Some(logical) = logical {
+        Ok(logical)
     } else {
         Err(anyhow!(
             "{} is outside the server roots ({})",
@@ -1043,6 +1094,63 @@ mod tests {
                 .unwrap()
                 .starts_with(outer.path().canonicalize().unwrap())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn docker_symlink_session_rejects_logical_and_resolved_secret_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("config-store");
+        std::fs::create_dir(&store).unwrap();
+        let config = store.join("config.json");
+        std::fs::write(
+            &config,
+            r#"{"auths":{"example.invalid":{"auth":"synthetic quartz"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(store.join("safe.txt"), "quartz pebble").unwrap();
+        let docker = temp.path().join(".docker");
+        std::os::unix::fs::symlink(&store, &docker).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let old = hub
+            .engine()
+            .unwrap()
+            .search("quartz")
+            .paths([&config])
+            .execute()
+            .unwrap();
+        let server = SeykServer::new(vec![docker.clone()], hub.clone()).unwrap();
+        // A watcher owns this root, so this session must use cached-only search.
+        hub.watched
+            .lock()
+            .unwrap()
+            .push((docker.clone(), Arc::new(Mutex::new(IndexStatus::Ready))));
+        for path in [
+            PathBuf::from("config.json"),
+            docker.join("config.json"),
+            config.canonicalize().unwrap(),
+        ] {
+            assert!(confine(&path, &server.roots).is_err(), "{}", path.display());
+        }
+        assert!(search(&server, "quartz").hits.is_empty());
+        let old = serde_json::to_value(to_response(old)).unwrap();
+        assert!(
+            server
+                .run_extract(ExtractParams {
+                    hit: old["hits"][0].clone()
+                })
+                .is_err()
+        );
+        let safe = confine(&store.join("safe.txt"), &server.roots).unwrap();
+        assert_eq!(safe, docker.join("safe.txt"));
+        // Explicit directory requests must preserve the root context too.
+        assert_eq!(confine(&store, &server.roots).unwrap(), docker);
+        let broad = SeykServer::new(vec![temp.path().into()], hub).unwrap();
+        assert_eq!(confine(&docker, &broad.roots).unwrap(), docker);
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::remove_file(&docker).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), &docker).unwrap();
+        assert!(server.validate_roots().is_err());
     }
 
     #[cfg(unix)]

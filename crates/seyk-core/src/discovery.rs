@@ -3,6 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use caseless::Caseless;
+use unicode_normalization::UnicodeNormalization;
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -21,11 +24,16 @@ pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".venv",
 ];
 
-/// Secret names are blocked independently of all discovery options. Match every
-/// component so password-store directories and explicitly named descendants are
-/// covered too. This is a filename policy, not content inspection or PII redaction.
+/// Secret names are blocked independently of all discovery options. File rules
+/// apply to the final component (assumed to be a file); password-store directory
+/// rules apply throughout. Use `ensure_allowed_path` for filesystem paths where
+/// the final component may be a directory. This is not content inspection.
 /// Keep the list here; all filesystem entry points use this matcher.
 pub fn is_secret_path(path: &Path) -> bool {
+    secret_path(path, false)
+}
+
+fn secret_path(path: &Path, is_dir: bool) -> bool {
     const SUFFIXES: &[&str] = &[
         ".pem",
         ".key",
@@ -54,23 +62,44 @@ pub fn is_secret_path(path: &Path) -> bool {
     ];
     const SSH_KEYS: &[&str] = &["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_xmss"];
     let mut previous = String::new();
-    for component in path.components() {
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
         let std::path::Component::Normal(name) = component else {
             continue;
         };
-        let name = name.to_string_lossy().to_ascii_lowercase();
-        if SUFFIXES.iter().any(|suffix| name.ends_with(*suffix))
-            || NAMES.contains(&name.as_str())
-            || name == ".env"
-            || name.starts_with(".env.")
-            || (previous == ".docker" && name == "config.json")
-            || (!name.ends_with(".pub")
-                && SSH_KEYS.iter().any(|key| {
-                    name == *key
-                        || name.strip_prefix(*key).is_some_and(|rest| {
-                            rest.starts_with('.') || rest.starts_with('_') || rest.starts_with('-')
-                        })
-                }))
+        // Unicode compatibility caseless normalization, including full folds
+        // (e.g. long s, Kelvin sign and sharp s). A conservative superset of
+        // case-insensitive filesystem equivalence, identical on all platforms.
+        let name = name.to_string_lossy();
+        let name: String = if name.is_ascii() {
+            name.to_ascii_lowercase()
+        } else {
+            name.nfd()
+                .default_case_fold()
+                .nfkd()
+                .default_case_fold()
+                .nfkd()
+                .collect()
+        };
+        if name.ends_with(".opvault") || name.ends_with(".agilekeychain") {
+            return true;
+        }
+        let file = components.peek().is_none() && !is_dir;
+        if file
+            && (SUFFIXES.iter().any(|suffix| name.ends_with(*suffix))
+                || NAMES.contains(&name.as_str())
+                || name == ".env"
+                || name.starts_with(".env.")
+                || (previous == ".docker" && name == "config.json")
+                || (!name.ends_with(".pub")
+                    && SSH_KEYS.iter().any(|key| {
+                        name == *key
+                            || name.strip_prefix(*key).is_some_and(|rest| {
+                                rest.starts_with('.')
+                                    || rest.starts_with('_')
+                                    || rest.starts_with('-')
+                            })
+                    })))
         {
             return true;
         }
@@ -82,12 +111,57 @@ pub fn is_secret_path(path: &Path) -> bool {
 /// Check both a caller's spelling and the resolved target before opening it.
 /// Missing paths are left to the ordinary I/O error handling at the call site.
 pub fn ensure_allowed_path(path: &Path) -> Result<()> {
-    if is_secret_path(path) || path.canonicalize().is_ok_and(|real| is_secret_path(&real)) {
+    let is_dir = path.is_dir();
+    if secret_path(path, is_dir)
+        || path
+            .canonicalize()
+            .is_ok_and(|real| secret_path(&real, is_dir))
+        || (path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+            && logical_absolute_path(path).is_ok_and(|logical| secret_path(&logical, is_dir)))
+    {
         return Err(Error::SecretFile {
             path: path.to_path_buf(),
         });
     }
     Ok(())
+}
+
+/// Make a logical root absolute without erasing symlink names used by policy.
+/// Resolve `..` with filesystem semantics before a file-URI codec can collapse
+/// it lexically. Keep the logical parent when it denotes that same directory.
+pub fn absolute_logical_path(path: &Path) -> Result<PathBuf> {
+    ensure_allowed_path(path)?;
+    logical_absolute_path(path)
+}
+
+fn logical_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path).map_err(|e| Error::io(path, e))?;
+    let mut logical = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                let real_parent = logical
+                    .join("..")
+                    .canonicalize()
+                    .map_err(|e| Error::io(path, e))?;
+                if logical
+                    .parent()
+                    .and_then(|p| p.canonicalize().ok())
+                    .as_ref()
+                    == Some(&real_parent)
+                {
+                    logical.pop();
+                } else {
+                    logical = real_parent;
+                }
+            }
+            std::path::Component::CurDir => {}
+            component => logical.push(component),
+        }
+    }
+    Ok(logical)
 }
 
 const MARKDOWN_EXT: &[&str] = &["md", "markdown", "mdown", "mkd"];
@@ -222,7 +296,7 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
     let mut out = Vec::new();
 
     for root in roots {
-        ensure_allowed_path(root)?;
+        let logical_root = absolute_logical_path(root)?;
         let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
@@ -238,7 +312,10 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                if is_secret_path(e.path()) {
+                let logical = logical_root.join(e.path().strip_prefix(&root).unwrap_or(e.path()));
+                if secret_path(e.path(), e.file_type().is_dir())
+                    || secret_path(&logical, e.file_type().is_dir())
+                {
                     return false;
                 }
                 if e.depth() == 0 {

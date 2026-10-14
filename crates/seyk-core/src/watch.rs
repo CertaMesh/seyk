@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 
-use crate::discovery::{DEFAULT_EXCLUDED_DIRS, ensure_allowed_path, is_secret_path};
+use crate::discovery::{DEFAULT_EXCLUDED_DIRS, absolute_logical_path, ensure_allowed_path};
 use crate::engine::{IndexReport, ProgressFn, SearchEngine, expand_tilde};
 use crate::{DiscoveryOptions, Error, Result};
 
@@ -49,13 +49,13 @@ pub fn watch(
     mut on_pass: impl FnMut(Result<IndexReport>),
 ) -> Result<()> {
     engine.start_cache_scrubber();
-    // Canonical, because the OS reports events with resolved paths (/private/var on macOS).
+    // Preserve logical names for every indexing pass; OS event paths may be resolved.
     let paths: Vec<PathBuf> = paths
         .iter()
         .map(|p| {
             let p = expand_tilde(p);
             ensure_allowed_path(&p)?;
-            Ok(p.canonicalize().unwrap_or(p))
+            absolute_logical_path(&p)
         })
         .collect::<Result<_>>()?;
     let (tx, rx) = mpsc::channel();
@@ -157,7 +157,7 @@ fn relevant(
         return false;
     }
     event.paths.iter().any(|p| {
-        if is_secret_path(p) {
+        if ensure_allowed_path(p).is_err() {
             return false;
         }
         // Judge only the part below a root, so a root inside `~/.notes` is fine.
@@ -165,12 +165,16 @@ fn relevant(
         // path is enough, whatever order the roots came in.
         let mut below = roots
             .iter()
-            .filter_map(|r| p.strip_prefix(r).ok())
+            .filter_map(|r| {
+                let real = r.canonicalize().unwrap_or_else(|_| r.clone());
+                let below = p.strip_prefix(&real).or_else(|_| p.strip_prefix(r)).ok()?;
+                Some((r.join(below), below))
+            })
             .peekable();
         if below.peek().is_none() {
             return !ignored(p, discovery);
         }
-        below.any(|b| !ignored(b, discovery))
+        below.any(|(logical, b)| ensure_allowed_path(&logical).is_ok() && !ignored(b, discovery))
     })
 }
 
@@ -205,6 +209,34 @@ mod tests {
             let event = Ok(notify::Event::new(EventKind::Any).add_path(path.into()));
             assert!(!relevant(&event, &[PathBuf::from(path)], &options));
             assert!(!relevant(&event, &["/notes".into()], &options));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_create_and_rename_events_keep_logical_root_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("config-store");
+        std::fs::create_dir(&store).unwrap();
+        let docker = temp.path().join(".docker");
+        std::os::unix::fs::symlink(&store, &docker).unwrap();
+        let roots = [docker];
+        let options = DiscoveryOptions {
+            include_hidden: true,
+            ..Default::default()
+        };
+        for kind in [
+            EventKind::Create(notify::event::CreateKind::File),
+            EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::To,
+            )),
+        ] {
+            // Deleted/renamed paths need not still exist when the event arrives.
+            let real = store.canonicalize().unwrap();
+            let secret = Ok(notify::Event::new(kind).add_path(real.join("config.json")));
+            assert!(!relevant(&secret, &roots, &options));
+            let safe = Ok(notify::Event::new(kind).add_path(real.join("safe.txt")));
+            assert!(relevant(&safe, &roots, &options));
         }
     }
 

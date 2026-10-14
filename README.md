@@ -679,7 +679,9 @@ an unknown extension, except the secret paths listed below. Directories skip `.g
 
 ### Files Seyk never indexes
 
-Seyk blocks these names, case-insensitively, before reading file contents:
+Seyk blocks these names before reading file contents. Matching uses Unicode
+compatibility normalization and full case folding on every platform (including
+long `ſ`, Kelvin `K`, and compatibility spellings):
 
 - Keys and certificate containers: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`.
 - SSH private keys: `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `id_xmss`,
@@ -698,7 +700,11 @@ exclusions, and library/MCP filters cannot admit these paths. The same policy
 applies to watching, cached-only search, previews, and extraction. Discovery
 skips blocked paths; explicitly naming one returns a `refusing secret file or
 directory` error. Both the supplied path and its resolved symlink target are
-checked, and matching directory components block their descendants.
+checked. Logical root names survive symlink resolution, so a `.docker` directory
+symlink still blocks its `config.json`. Password-store directory components
+(`*.opvault`, `*.agilekeychain`) block every descendant; other rules apply to
+files only. An ordinary source directory such as `src/credentials/schema.rs`
+remains searchable.
 
 Previously cached entries for blocked paths are excluded from search and cannot
 be extracted. This does not erase old cache data; use `seyk cache clear` to
