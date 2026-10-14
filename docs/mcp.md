@@ -1,6 +1,17 @@
 # MCP indexing and inline search latency
 
-A search covered by a running watcher uses the existing index. With no active
+A search covered by a running watcher uses the existing index once all discovered
+supported resources are current. While the model loads, it uses an independent
+in-memory keyword index and returns `degraded: {"mode": "lexical_only", "reason":
+"model_loading"}`. New or changed resources awaiting embedding trigger the same
+fallback with `reason: "not_yet_embedded"`. Missing weights use `reason: "no_model"`.
+The keyword index covers text and PDF text, respects request filters and root
+confinement, and creates no vectors. Preparing it still takes discovery and text
+parsing time; no hard latency bound is promised. Ready-state ranking is unchanged.
+Local-content cached queries retain their indexed-only scope; the background
+indexer discovers new files. Fallback retains the local-content provider policy.
+
+CLI JSON, MCP and library results share this optional marker (protocol 8). With no active
 overlapping watcher, a search may sync inline, but it still shares the
 engine-wide indexing lease with watchers on disjoint roots. It can wait for an
 entire remaining pass, including resource commits and deletion/pruning. The
@@ -53,8 +64,9 @@ and no new text is persisted in the cache. Without a contributing keyword leg,
 the list is empty.
 
 Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
-meaning. Current JSON `schema_version` is **7**, including optional result-kind
-counts and indexing progress. Match provenance does not change existing fields
+meaning. Current JSON `schema_version` is **8**. Version 7 added optional result-kind
+counts, per-root indexing progress and `index_status`; version 8 adds optional
+lexical-only `degraded` metadata and its reason. Extraction accepts versions 2–8. Match provenance does not change existing fields
 or extraction requirements. Older search
 JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:

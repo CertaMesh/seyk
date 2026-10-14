@@ -39,3 +39,35 @@ FontAwesome glyph (`unexpected entry in unicode map`), and a three-byte
 bfrange destination (`bad length of hexstring`). No IRPAPERS PDF bytes are used
 or committed. Tests assert both original panic messages locally, typed failure
 counts, continued indexing, and physical page locators for surviving pages.
+
+## Ready-search golden (lexical fallback)
+
+`ready-main-71f9a18.json` was captured by running the four-document fixture in
+`../ready_main_golden.rs` against main
+`71f9a18443483933f9bb5cf7f5fc18868fae4790`, with Rust 1.99.0 and `FakeEmbedder`.
+It covers hybrid, lexical and semantic search. The capture uses main's engine,
+not a second request through the changed implementation. Temporary root paths,
+source mtimes and elapsed milliseconds are normalized; scores, order, signals,
+locators, hashes, previews and deterministic stats remain intact. The later
+additive `match` field is excluded from this historical fixture;
+`counts_ranking_golden.rs` checks complete hits including that field.
+
+To reproduce, create an isolated checkout of that main commit with `anvil`, copy
+`ready_main_golden.rs` into its core tests, remove `.lexical_fallback(true)`
+(the API did not exist on main), and replace the final `assert_eq!` with:
+
+```rust
+std::fs::write(std::env::var("SEYK_GOLDEN_OUTPUT").unwrap(), actual).unwrap();
+```
+
+Run in that checkout, with an absolute output path outside the source tree:
+
+```sh
+SEYK_GOLDEN_OUTPUT=/tmp/ready-main-71f9a18.json \
+  rustup run 1.99.0 cargo test -p seyk-core --locked --test ready_main_golden
+```
+
+Compare that output with this frozen fixture. Do not regenerate it with the
+branch engine. The separate `ready_results_match_with_lexical_fallback_opt_in`
+test checks opt-in equivalence within one revision; it is not the cross-revision
+identity proof.

@@ -1193,6 +1193,285 @@ mod hydration {
     }
 }
 
+#[test]
+fn lexical_fallback_finds_unembedded_files_without_touching_semantic_cache() {
+    let root = corpus();
+    let (engine, counter) = engine(MemoryCache::new());
+    let before = engine.with_cache(|c| c.stats()).unwrap();
+    let results = engine
+        .search("INC-18372")
+        .query("father.md")
+        .paths([root.path()])
+        .sync(false)
+        .lexical_fallback(true)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        results.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NotYetEmbedded
+    );
+    assert!(results.hits.iter().any(|h| h.signals.lexical.is_some()));
+    assert!(results.hits.iter().any(|h| h.signals.filename));
+    assert!(results.hits.iter().all(|h| h.signals.semantic.is_none()));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+    assert_eq!(counter.queries.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(engine.with_cache(|c| c.stats()).unwrap()).unwrap()
+    );
+    for hit in &results.hits {
+        engine.extract(hit).unwrap();
+    }
+}
+
+#[test]
+fn ready_results_match_with_lexical_fallback_opt_in() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    engine.index().paths([root.path()]).execute().unwrap();
+    for mode in [
+        SearchMode::Hybrid,
+        SearchMode::Lexical,
+        SearchMode::Semantic,
+    ] {
+        let request = |fallback| {
+            engine
+                .search("father")
+                .query("INC-18372")
+                .paths([root.path()])
+                .mode(mode)
+                .sync(false)
+                .lexical_fallback(fallback)
+                .execute()
+                .unwrap()
+        };
+        let mut baseline = request(false);
+        let mut candidate = request(true);
+        // Elapsed wall time is deliberately nondeterministic; every other byte,
+        // including hits, scores, signals, locators, previews and stats, must match.
+        baseline.stats.total_ms = 0;
+        candidate.stats.total_ms = 0;
+        assert!(candidate.degraded.is_none());
+        assert_eq!(
+            serde_json::to_vec(&baseline).unwrap(),
+            serde_json::to_vec(&candidate).unwrap()
+        );
+    }
+}
+
+#[test]
+fn model_free_lexical_search_refreshes_changes_and_honors_filters() {
+    let root = corpus();
+    let engine = SearchEngine::lexical().unwrap();
+    let request = || {
+        engine
+            .search("INC-18372")
+            .paths([root.path()])
+            .sync(false)
+            .execute()
+            .unwrap()
+    };
+    let first = request();
+    assert_eq!(
+        first.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NoModel
+    );
+    assert_eq!(first.hits.len(), 1);
+    fs::write(root.path().join("new.md"), "INC-18372 new evidence").unwrap();
+    assert_eq!(request().hits.len(), 2);
+    let filtered = engine
+        .search("INC-18372")
+        .paths([root.path()])
+        .exclude("new.md")
+        .execute()
+        .unwrap();
+    assert_eq!(filtered.hits.len(), 1);
+    assert_eq!(
+        engine.with_cache(|c| c.stats()).unwrap().profiles[0].embeddings,
+        0
+    );
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn model_free_pdf_words_and_names_have_extractable_page_locators() {
+    #[path = "support/pdf_fixture.rs"]
+    mod fixture;
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("quartz.pdf"),
+        fixture::pdf(&["quartz lighthouse keeper"], fixture::Kind::Plain),
+    )
+    .unwrap();
+    let engine = SearchEngine::lexical().unwrap();
+    let results = engine
+        .search("quartz")
+        .paths([root.path()])
+        .execute()
+        .unwrap();
+    assert_eq!(results.hits.len(), 1);
+    let hit = &results.hits[0];
+    assert!(hit.signals.lexical.is_some() && hit.signals.filename);
+    assert!(matches!(
+        hit.locator,
+        seyk_core::ResourceLocator::PageText { page: 1, .. }
+    ));
+    assert!(engine.extract(hit).unwrap().text.contains("quartz"));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+}
+
+#[test]
+fn fallback_search_in_embedding_callback_does_not_wait_for_indexing_lease() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    let checked = AtomicUsize::new(0);
+    let progress = |event| {
+        if matches!(event, seyk_core::ProgressEvent::Embedding { done: 0, total } if total > 0) {
+            let results = engine
+                .search("INC-18372")
+                .query("father.md")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap();
+            assert_eq!(
+                results.degraded.unwrap().reason,
+                seyk_core::DegradedReason::NotYetEmbedded
+            );
+            assert!(results.hits.iter().any(|hit| hit.signals.filename));
+            assert!(results.hits.iter().any(|hit| hit.signals.lexical.is_some()));
+            checked.fetch_add(1, Ordering::SeqCst);
+        }
+    };
+    engine
+        .index()
+        .paths([root.path()])
+        .progress(&progress)
+        .execute()
+        .unwrap();
+    assert_eq!(checked.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn skipped_current_versions_do_not_disable_ready_semantic_results() {
+    for invalid in [vec![0xff, 0xfe], b"quartz\0invalid".to_vec()] {
+        let root = corpus();
+        let bad = root.path().join("invalid.txt");
+        fs::write(&bad, invalid).unwrap();
+        let bad = bad.canonicalize().unwrap();
+        let (engine, _) = engine(MemoryCache::new());
+        let report = engine.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let ready = || {
+            engine
+                .search("father")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap()
+        };
+        let results = ready();
+        assert!(results.degraded.is_none());
+        assert!(results.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            results
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != bad)
+        );
+        // A changed version is pending again, and a later successful attempt
+        // clears the skip without keeping the collection in lexical mode.
+        fs::write(&bad, "father quartz repaired document").unwrap();
+        assert_eq!(
+            ready().degraded.unwrap().reason,
+            seyk_core::DegradedReason::NotYetEmbedded
+        );
+        engine.index().paths([root.path()]).execute().unwrap();
+        assert!(ready().degraded.is_none());
+        assert!(
+            ready()
+                .hits
+                .iter()
+                .any(|h| h.resource.to_file_path().unwrap() == bad)
+        );
+    }
+}
+
+#[test]
+fn failed_refresh_excludes_old_evidence_with_or_without_previews() {
+    for lexical_only in [false, true] {
+        for previews in [None, Some(160)] {
+            for invalid in [vec![0xff, 0xfe], b"invalid\0bytes".to_vec()] {
+                let root = TempDir::new().unwrap();
+                let path = root.path().join("quartz.txt");
+                fs::write(&path, "quartz lighthouse keeper").unwrap();
+                let engine = if lexical_only {
+                    SearchEngine::lexical().unwrap()
+                } else {
+                    engine(MemoryCache::new()).0
+                };
+                let search = |sync, fallback| {
+                    engine
+                        .search("quartz")
+                        .paths([root.path()])
+                        .sync(sync)
+                        .lexical_fallback(fallback)
+                        .previews(previews)
+                        .execute()
+                        .unwrap()
+                };
+                assert!(!search(true, false).hits.is_empty());
+                fs::write(&path, invalid).unwrap();
+                // Background-indexed callers must not serve the old version
+                // even before the new version has been attempted.
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(true, false).hits.is_empty());
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(false, false).hits.is_empty());
+                fs::write(&path, "quartz restored evidence").unwrap();
+                assert!(!search(true, false).hits.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
+    let root = corpus();
+    let db = TempDir::new().unwrap();
+    let cache_file = db.path().join("cache.sqlite3");
+    let path = root.path().join("father.md").canonicalize().unwrap();
+    let open = || engine(SqliteCache::open(&cache_file).unwrap()).0;
+    let first = open();
+    first.index().paths([root.path()]).execute().unwrap();
+    drop(first);
+    fs::write(&path, [0xff, 0xfe]).unwrap();
+    for _ in 0..2 {
+        let reopened = open();
+        // Daemon/MCP lifetimes run an initial index before reporting ready.
+        let report = reopened.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let result = reopened
+            .search("father")
+            .paths([root.path()])
+            .sync(false)
+            .lexical_fallback(true)
+            .previews(None)
+            .execute()
+            .unwrap();
+        assert!(result.degraded.is_none());
+        assert!(result.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            result
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != path)
+        );
+    }
+}
+
 // Captured on main 71f9a184 before match provenance was implemented. Compare
 // f32 bits (not rounded scores), order, locators and existing signal fields.
 #[test]
@@ -1394,4 +1673,27 @@ fn filename_ranks_preserve_discovery_positions_after_fusion() {
             }
         }
     }
+}
+
+#[test]
+fn model_free_search_reports_kind_counts_and_completed_progress() {
+    let root = corpus();
+    fs::write(root.path().join("invalid.txt"), [0xff, 0xfe]).unwrap();
+    let engine = SearchEngine::lexical().unwrap();
+    let results = engine
+        .search("father")
+        .paths([root.path()])
+        .kind_counts(true)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        results.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NoModel
+    );
+    assert_eq!(results.kind_counts.unwrap()["text"], results.hits.len());
+    let progress = results.stats.sync.progress.unwrap();
+    assert_eq!(progress.by_kind["text"].indexed, 4);
+    assert_eq!(progress.by_kind["text"].skipped, 1);
+    assert_eq!(progress.by_kind["text"].waiting, 0);
+    assert_eq!(progress.eta_seconds, None);
 }

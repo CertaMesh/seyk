@@ -10,6 +10,7 @@ fn input(dir: &Path, end_ms: u64, bytes: &[u8]) -> std::path::PathBuf {
     let wav = dir.join("public.wav");
     std::fs::write(&wav, bytes).unwrap();
     let result = SearchResults {
+        degraded: None,
         kind_counts: None,
         queries: vec!["public fixture".into()],
         mode: SearchMode::Semantic,
@@ -125,7 +126,7 @@ fn human_label_and_json_provenance_with_real_model() {
     let out = extract(&file, &model, true);
     assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["provenance"]["method"], "speech_to_text");
     let p = &value["provenance"]["speech"];
     assert_eq!(p["fidelity"], "machine_transcription");

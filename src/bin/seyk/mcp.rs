@@ -5,13 +5,13 @@
 //! answer, so no generation happens here.
 //!
 //! A hub indexes each session's folders in the background and re-indexes on
-//! change, and searches read only what is indexed. A search therefore never waits
-//! for a large first index; it reports progress instead. `seyk mcp` normally runs
-//! the hub inside the shared daemon (see `daemon.rs`), so every session shares
+//! change. Searches use keyword fallback while the model or indexed resources
+//! are not ready; they report both the fallback reason and indexing progress.
+//! `seyk mcp` normally runs the hub inside the shared daemon (see `daemon.rs`), so every session shares
 //! one model; `--standalone` runs it in-process.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -33,7 +33,9 @@ keywords and file names at once. Describe what the passage would say rather than
 the question, or name a file or identifier directly (\"pricing.md\", \"INC-18372\"). Pass 2-4 \
 different phrasings in one call. Each hit says what matched: \"meaning\", \"words\" or \"name\". \
 Hits are pointers: read the file at the given lines before answering, and cite path:lines. \
-The server indexes its folders in the background; while `index.state` is \"indexing\", results cover only what is indexed so far.";
+The server indexes its folders in the background. A `degraded` marker means keywords and \
+file names only: semantic retrieval is unavailable while the model loads, files await \
+embedding, or weights are absent.";
 
 pub type EngineFactory = Box<dyn Fn() -> Result<SearchEngine> + Send + Sync>;
 
@@ -41,6 +43,7 @@ pub type EngineFactory = Box<dyn Fn() -> Result<SearchEngine> + Send + Sync>;
 /// folder. Sessions whose folders are already watched reuse that watcher.
 pub struct Hub {
     engine: Mutex<Option<Arc<SearchEngine>>>,
+    ready_engine: OnceLock<Arc<SearchEngine>>,
     factory: EngineFactory,
     /// `false` turns background indexing off; searches then embed inline.
     background: bool,
@@ -270,6 +273,8 @@ struct Hit {
 #[derive(Debug, Serialize)]
 struct Response {
     schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    degraded: Option<seyk::SearchDegradation>,
     hits: Vec<Hit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind_counts: Option<std::collections::BTreeMap<String, usize>>,
@@ -338,6 +343,7 @@ impl Hub {
     pub fn new(factory: EngineFactory, background: bool) -> Arc<Self> {
         Arc::new(Self {
             engine: Mutex::new(None),
+            ready_engine: OnceLock::new(),
             factory,
             background,
             watched: Mutex::new(Vec::new()),
@@ -368,6 +374,7 @@ impl Hub {
         let e = Arc::new((self.factory)()?);
         e.start_cache_scrubber();
         *slot = Some(e.clone());
+        let _ = self.ready_engine.set(e.clone());
         Ok(e)
     }
 
@@ -696,7 +703,37 @@ impl SeykServer {
         // paths and every overlapping hub watcher, including other sessions.
         // PassFailed still owns its root because it retries on the next change.
         let inline = self.hub.may_sync_inline(&paths)?;
-        let engine = self.hub.engine()?;
+        // Loading holds the model mutex. Never wait on it in a search: the
+        // background worker will publish the semantic engine when it is ready.
+        let available = if let Some(engine) = self.hub.ready_engine.get() {
+            // Ordinary ready-state mutex contention must never degrade ranking.
+            Some(Some(engine.clone()))
+        } else {
+            match self.hub.engine.try_lock() {
+                Ok(slot) => Some(slot.clone()),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(anyhow!("engine lock poisoned"));
+                }
+            }
+        };
+        let (engine, loading) = match available {
+            Some(Some(engine)) => (engine, false),
+            // No active indexer: preserve inline loading/retry and its errors.
+            Some(None) if inline => (self.hub.engine()?, false),
+            // The model mutex, not the folded watcher status, is authoritative:
+            // a failed/stopped sibling may mask another root's LoadingModel.
+            _ => {
+                #[cfg(unix)]
+                let lexical = match &self.local_content {
+                    Some(provider) => SearchEngine::lexical_with_provider(provider.clone())?,
+                    None => SearchEngine::lexical()?,
+                };
+                #[cfg(not(unix))]
+                let lexical = SearchEngine::lexical()?;
+                (Arc::new(lexical), true)
+            }
+        };
         let mut queries = queries.into_iter();
         let first = queries.next().expect("checked non-empty");
         let mut req = queries
@@ -704,7 +741,8 @@ impl SeykServer {
             .paths(&paths)
             .kind_counts(p.kind_counts)
             .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT))
-            .sync(inline);
+            .sync(inline || loading)
+            .lexical_fallback(true);
         if let Some(m) = p.mode.as_deref() {
             req = req.mode(m.parse()?);
         }
@@ -718,6 +756,11 @@ impl SeykServer {
             req = req.exclude(g);
         }
         let mut resp = to_response(req.execute()?);
+        if loading {
+            resp.degraded = Some(seyk::SearchDegradation::lexical(
+                seyk::DegradedReason::ModelLoading,
+            ));
+        }
         resp.index = status;
         resp.index_progress = self.root_progress();
         resp.index_diagnostics = self.diagnostics()?;
@@ -940,6 +983,7 @@ fn to_response(r: SearchResults) -> Response {
         .collect();
     Response {
         schema_version: crate::JSON_SCHEMA_VERSION,
+        degraded: r.degraded,
         hits,
         kind_counts: r.kind_counts,
         index_progress: Vec::new(),
@@ -1270,7 +1314,7 @@ mod tests {
         let server = local_content_server(provider, hub).unwrap();
         assert_eq!(server.get_info().server_info.name, "seyk-local-content-v1");
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 7);
+        assert_eq!(valid.schema_version, 8);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1442,7 +1486,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 7);
+        assert_eq!(response["schema_version"], 8);
         assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
         assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
         assert_eq!(
@@ -1571,7 +1615,18 @@ mod tests {
         ] {
             assert!(confine(&path, &server.roots).is_err(), "{}", path.display());
         }
-        assert!(search(&server, "quartz").hits.is_empty());
+        // The permitted but unembedded sibling now triggers lexical fallback.
+        // The logical Docker config must still never enter the candidate set.
+        let response = search(&server, "quartz");
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            response.hits[0].resource.to_file_path().unwrap(),
+            store.join("safe.txt").canonicalize().unwrap()
+        );
+        assert_eq!(
+            response.degraded.unwrap().reason,
+            seyk::DegradedReason::NotYetEmbedded
+        );
         let old = serde_json::to_value(to_response(old)).unwrap();
         assert!(
             server
@@ -1736,6 +1791,149 @@ mod tests {
             "pdf_parser_panicked"
         );
         assert!(response["page_diagnostics"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loading_model_search_returns_words_and_names_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("quartz.md"), "quartz lighthouse keeper").unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let hub = Hub::new(
+            Box::new(move || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                fake_engine()
+            }),
+            true,
+        );
+        let server = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let started = Instant::now();
+        let response = search(&server, "quartz");
+        release_tx.send(()).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(response.hits.len(), 1);
+        assert!(response.hits[0].matched.contains(&"words"));
+        assert!(response.hits[0].matched.contains(&"name"));
+        assert_eq!(
+            response.degraded.unwrap().reason,
+            seyk::DegradedReason::ModelLoading
+        );
+        assert_eq!(response.segments_embedded, 0);
+        wait_for(&server, |s| matches!(s, IndexStatus::Ready));
+        assert!(search(&server, "quartz").degraded.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_content_loading_fallback_keeps_policy_and_counts() {
+        let dir = tempfile::Builder::new()
+            .prefix("local-fallback-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("quartz.md"), "quartz lighthouse keeper").unwrap();
+        for name in [
+            ".hidden.md",
+            "Library/private.md",
+            "Targets/gaze/Debug/Deps/out.rs",
+            "id_rsa.txt",
+        ] {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "quartz excluded fixture").unwrap();
+        }
+        let provider = Arc::new(
+            seyk::local_content::LocalContentProvider::new(std::slice::from_ref(&root)).unwrap(),
+        );
+        let engine_provider = provider.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let hub = Hub::new(
+            Box::new(move || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                Ok(SearchEngine::lexical_with_provider(
+                    engine_provider.clone(),
+                )?)
+            }),
+            true,
+        );
+        let server = local_content_server(provider, hub).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let response = server
+            .run_search(SearchParams {
+                queries: vec!["quartz".into()],
+                kind_counts: true,
+                paths: vec![],
+                limit: None,
+                min_score: None,
+                include: vec![],
+                exclude: vec![],
+                mode: None,
+            })
+            .unwrap();
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            response.degraded.unwrap().reason,
+            seyk::DegradedReason::ModelLoading
+        );
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            response.hits[0].resource.to_file_path().unwrap(),
+            root.join("quartz.md")
+        );
+        assert_eq!(response.kind_counts.unwrap()["text"], 1);
+        assert_eq!(response.hits[0].r#match.matched_terms, ["quartz"]);
+        wait_for(&server, |s| matches!(s, IndexStatus::Ready));
+        let no_model = search(&server, "quartz");
+        assert_eq!(
+            no_model.degraded.unwrap().reason,
+            seyk::DegradedReason::NoModel
+        );
+        assert_eq!(no_model.hits.len(), 1);
+    }
+
+    #[test]
+    fn ready_model_mutex_contention_keeps_identical_ranked_hits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("quartz.md"), "quartz lighthouse keeper").unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let server = SeykServer::new(vec![dir.path().into()], hub.clone()).unwrap();
+        let baseline = search(&server, "quartz");
+        let _held = hub.engine.lock().unwrap();
+        let response = search(&server, "quartz");
+        assert!(response.degraded.is_none());
+        assert_eq!(
+            serde_json::to_vec(&baseline.hits).unwrap(),
+            serde_json::to_vec(&response.hits).unwrap()
+        );
+    }
+
+    #[test]
+    fn model_free_hub_reports_degradation_after_initial_index() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("quartz.md"), "quartz lighthouse keeper").unwrap();
+        let hub = Hub::new(Box::new(|| Ok(SearchEngine::lexical()?)), true);
+        let server = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        wait_for(&server, |s| matches!(s, IndexStatus::Ready));
+        let response = serde_json::to_value(search(&server, "quartz")).unwrap();
+        assert_eq!(
+            response["degraded"],
+            serde_json::json!({"mode":"lexical_only","reason":"no_model"})
+        );
+        assert_eq!(response["hits"].as_array().unwrap().len(), 1);
     }
 
     #[test]
