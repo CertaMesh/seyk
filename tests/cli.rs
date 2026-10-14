@@ -337,6 +337,64 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
     );
 }
 
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn local_content_advertises_fixed_policy_without_daemon_or_model() {
+    let temp = tempfile::Builder::new()
+        .prefix("local-content-cli-")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let daemon = root.join("daemon-not-used");
+    let mut command = std::process::Command::new(binary().get_program());
+    command
+        .args(["mcp", "--local-content", "--no-watch"])
+        .arg(&root)
+        .env("SEYK_DAEMON_DIR", &daemon)
+        .env("SEYK_MODEL", root.join("no-model"))
+        .env("SEYK_CACHE", root.join("no-cache.sqlite3"));
+    let responses = mcp_handshake(&mut command);
+    assert_eq!(
+        responses[0]["result"]["serverInfo"]["name"],
+        "seyk-local-content-v1"
+    );
+    assert!(!daemon.exists());
+    assert!(!root.join("no-cache.sqlite3").exists());
+    assert!(
+        responses[1]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "search")
+    );
+}
+
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn local_content_refuses_missing_scope_and_symlink_root_before_model_load() {
+    let temp = tempfile::Builder::new()
+        .prefix("local-content-cli-")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    binary()
+        .args(["mcp", "--local-content", "--no-watch"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "requires explicit directory roots",
+        ));
+    binary()
+        .args(["mcp", "--local-content", "--no-watch"])
+        .arg(alias)
+        .env("SEYK_MODEL", root.join("no-model"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported type"));
+}
+
 /// `seyk mcp` starts the shared daemon on first use and relays through it; the
 /// daemon reports its folders and stops on request. No model weights needed.
 #[cfg(all(feature = "mcp", unix))]

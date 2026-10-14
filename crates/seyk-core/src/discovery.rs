@@ -142,17 +142,54 @@ impl Matcher {
     }
 }
 
+/// Match request globs without requiring a missing resource to exist. Excluding
+/// a directory also excludes its descendants, just as discovery prunes the walk.
+pub(crate) fn matches_scope_filters(
+    path: &Path,
+    root: &Path,
+    opts: &DiscoveryOptions,
+) -> Result<bool> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Ok(false);
+    };
+    let include = Matcher::new(&opts.include)?;
+    let exclude = Matcher::new(&opts.exclude)?;
+    if relative
+        .ancestors()
+        .filter(|p| !p.as_os_str().is_empty())
+        .any(|p| exclude.is_match(p))
+    {
+        return Ok(false);
+    }
+    Ok(include.empty || include.is_match(relative))
+}
+
 /// Walk `roots` and return every searchable file, sorted by path, without duplicates.
 ///
 /// Files passed explicitly are always considered, even when hidden. Files with
 /// an unknown extension are treated as plain text only when passed explicitly.
 pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<DiscoveredResource>> {
+    discover_with_policy(roots, opts, |_| true)
+}
+
+/// An additional fixed policy may only narrow discovery, including explicit roots.
+pub(crate) fn discover_with_policy(
+    roots: &[PathBuf],
+    opts: &DiscoveryOptions,
+    allowed: impl Fn(&Path) -> bool,
+) -> Result<Vec<DiscoveredResource>> {
     let include = Matcher::new(&opts.include)?;
     let exclude = Matcher::new(&opts.exclude)?;
     let mut out = Vec::new();
 
     for root in roots {
+        if !allowed(root) {
+            continue;
+        }
         let root = root.canonicalize().map_err(|e| Error::io(root, e))?;
+        if !allowed(&root) {
+            continue;
+        }
         let meta = std::fs::metadata(&root).map_err(|e| Error::io(&root, e))?;
         if meta.is_file() {
             let kind =
@@ -167,6 +204,9 @@ pub fn discover(roots: &[PathBuf], opts: &DiscoveryOptions) -> Result<Vec<Discov
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
+                if !allowed(e.path()) {
+                    return false;
+                }
                 if e.depth() == 0 {
                     return true;
                 }

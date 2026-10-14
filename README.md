@@ -404,6 +404,33 @@ same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
 Windows `seyk mcp` always runs standalone.
 
+For automatic local-content collections on Unix, opt into a fixed narrower
+policy with `seyk mcp --local-content /absolute/real/folder`. It requires explicit
+directory roots and always runs in-process, bypassing the daemon. MCP initialize
+advertises `serverInfo.name: seyk-local-content-v1`; clients relying on this
+policy must require that name and JSON schema 6, and refuse an older helper
+instead of dropping the flag. Use `--no-watch` to disable background indexing.
+
+The same policy filters discovery and every content read/open: hidden paths,
+`.icloud` markers, Library/cache/caches/build/dist/target/node_modules/__pycache__
+directory names (ASCII case-insensitive), and structural Rust outputs under
+target(s)/[up to two namespace components]/debug or release followed by
+incremental/.fingerprint/build/deps/examples are excluded. Ordinary `targets/data`
+remains eligible. Include/exclude options cannot widen this fixed policy. Roots
+and file/directory links are refused, including in-root aliases; supply real
+POSIX paths, since `/tmp` can itself be a symlink on macOS. Roots are pinned by
+directory descriptors and current device/inode checks. Other Seyk modes retain
+their existing discovery and explicit-link behavior.
+
+Observed macOS dataless files are refused before content open, with descriptor
+type/identity/flags checked again afterward. Neither this mode nor the ordinary
+filesystem guard guarantees atomic prevention of hydration: cloud state can
+change between the metadata check and open, and directories can move while
+traversed. Discovery is metadata-only and path-based, with the fixed policy and
+confined metadata checks before descending. A returned seekable audio handle
+is not rechecked at each later read. Model/cache/materializer reads and custom
+resource providers are separate from this content boundary.
+
 See [MCP indexing and inline search latency](docs/mcp.md) for how inline sync
 can wait behind a watcher indexing another root.
 
