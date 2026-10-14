@@ -203,7 +203,7 @@ For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
 at `schema_version: 2`, `3`, `4`, `5`, `6` or `7`, not a bare hit. The extraction document uses
-version 6 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+version 7 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.

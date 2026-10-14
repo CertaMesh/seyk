@@ -287,7 +287,7 @@ impl Hub {
         };
         let mut result = std::collections::BTreeMap::new();
         for (root, _) in watched.iter() {
-            if allowed.is_none_or(|roots| roots.iter().any(|r| root.starts_with(r))) {
+            if allowed.is_none_or(|roots| roots.iter().any(|r| progress_visible(r, root))) {
                 result.insert(root.clone(), progress.get(root).cloned());
             } else if let Some(allowed) = allowed {
                 for child in allowed.iter().filter(|r| r.starts_with(root)) {
@@ -568,6 +568,15 @@ impl SeykServer {
         Ok(combine(states))
     }
 
+    fn index_status_json(&self) -> Result<serde_json::Value> {
+        self.validate_roots()?;
+        Ok(serde_json::json!({
+            "schema_version": crate::JSON_SCHEMA_VERSION,
+            "index": self.status()?,
+            "index_progress": self.hub.root_progress(Some(&self.roots)),
+        }))
+    }
+
     fn diagnostics(&self) -> Result<IndexDiagnostics> {
         self.validate_roots()?;
         let records = self
@@ -708,6 +717,39 @@ fn watcher_covers(watched: &Path, root: &Path) -> bool {
     }
 }
 
+// The watcher_covers rule for exposing another watcher's inventory: `watched`
+// must sit below `session` without crossing a directory symlink, and pass the
+// deny policy. A tail that does not exist yet cannot redirect anywhere.
+fn progress_visible(session: &Path, watched: &Path) -> bool {
+    let Ok(relative) = watched.strip_prefix(session) else {
+        return false;
+    };
+    if seyk::discovery::ensure_allowed_path(watched).is_err() {
+        return false;
+    }
+    match (resolve_existing(session), resolve_existing(watched)) {
+        (Some(session), Some(watched)) => session.join(relative) == watched,
+        _ => false,
+    }
+}
+
+// Canonicalize the longest existing ancestor and keep the missing tail as
+// spelled. Anything present but unresolvable, such as a dangling link, fails.
+fn resolve_existing(path: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(real) = current.canonicalize() {
+            return Some(missing.iter().rev().fold(real, |p, name| p.join(name)));
+        }
+        if current.symlink_metadata().is_ok() {
+            return None;
+        }
+        missing.push(current.file_name()?);
+        current = current.parent()?;
+    }
+}
+
 // Compare filesystem identities for watcher ownership without discarding the
 // logical roots used by discovery and policy checks.
 fn paths_overlap(a: &Path, b: &Path) -> bool {
@@ -841,15 +883,10 @@ impl SeykServer {
         description = "Current indexing state and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
-        let index = self
-            .status()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let status = serde_json::json!({
-            "schema_version": crate::JSON_SCHEMA_VERSION,
-            "index": index,
-            "index_progress": self.hub.root_progress(Some(&self.roots)),
-        });
-        Ok(CallToolResult::success(vec![ContentBlock::json(status)?]))
+        Ok(match self.index_status_json() {
+            Ok(status) => CallToolResult::success(vec![ContentBlock::json(status)?]),
+            Err(e) => CallToolResult::error(vec![ContentBlock::text(format!("{e:#}"))]),
+        })
     }
 
     #[tool(
@@ -1838,6 +1875,92 @@ mod tests {
         assert!(encoded.contains("%FF"));
         let decoded: Vec<RootProgress> = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded[0].root.to_file_path().as_ref(), Some(&root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_progress_hides_watchers_reached_through_a_directory_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let (allowed, outside) = (base.join("allowed"), base.join("outside"));
+        let plain = allowed.join("plain");
+        for dir in [&plain, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let linked = allowed.join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let confined = SeykServer::new(vec![allowed.clone()], hub.clone()).unwrap();
+        // Another session on the shared hub explicitly watches the symlink.
+        let other = SeykServer::new(vec![linked.clone()], hub.clone()).unwrap();
+        let progress = seyk::IndexProgress {
+            by_kind: [(
+                "text".into(),
+                seyk::KindProgress {
+                    indexed: 7,
+                    waiting: 1,
+                    skipped: 0,
+                },
+            )]
+            .into(),
+            eta_seconds: Some(2),
+        };
+        for root in [&linked, &plain] {
+            hub.watched
+                .lock()
+                .unwrap()
+                .push((root.clone(), Arc::new(Mutex::new(IndexStatus::Ready))));
+            hub.progress
+                .lock()
+                .unwrap()
+                .insert(root.clone(), progress.clone());
+        }
+        let roots = |progress: Vec<RootProgress>| -> Vec<_> {
+            progress
+                .into_iter()
+                .map(|p| (p.root.to_file_path().unwrap(), p.progress.is_some()))
+                .collect()
+        };
+        assert!(!progress_visible(&allowed, &linked));
+        assert_eq!(
+            roots(confined.hub.root_progress(Some(&confined.roots))),
+            [(plain.clone(), true)]
+        );
+        let status = confined.index_status_json().unwrap();
+        let shown: Vec<RootProgress> =
+            serde_json::from_value(status["index_progress"].clone()).unwrap();
+        assert_eq!(roots(shown), [(plain, true)]);
+        assert_eq!(
+            roots(other.hub.root_progress(Some(&other.roots))),
+            [(linked, true)]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_status_revalidates_retargeted_and_newly_denied_roots() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let alias = temp.path().join("alias-dir");
+        symlink("store", &alias).unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let retargeted = SeykServer::new(vec![alias.clone()], hub.clone()).unwrap();
+        let denied = SeykServer::new(vec![alias.clone()], hub).unwrap();
+        retargeted.index_status_json().unwrap();
+        denied.index_status_json().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        symlink(elsewhere.path(), &alias).unwrap();
+        let error = retargeted.index_status_json().unwrap_err();
+        assert!(error.to_string().contains("target changed"), "{error:#}");
+        // Same canonical target as at session open, reached through a secret chain.
+        std::fs::remove_file(&alias).unwrap();
+        symlink("store", temp.path().join("vault.opvault")).unwrap();
+        symlink("vault.opvault", &alias).unwrap();
+        assert_eq!(alias.canonicalize().unwrap(), store.canonicalize().unwrap());
+        assert!(denied.index_status_json().is_err());
     }
 
     #[test]
