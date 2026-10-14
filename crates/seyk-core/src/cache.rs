@@ -113,6 +113,8 @@ pub struct LexicalHit {
     pub ordinal: usize,
     /// BM25 relevance, higher is better. Only comparable within one query.
     pub score: f32,
+    /// Normalized query tokens from matching groups; no source text.
+    pub matched_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,6 +418,7 @@ impl EmbeddingCache for MemoryCache {
                 resource: path.clone(),
                 ordinal,
                 score: score as f32,
+                matched_terms: bucket[path][ordinal].matched_terms(query),
             })
             .collect())
     }
@@ -1479,23 +1482,52 @@ impl EmbeddingCache for SqliteCache {
         // bm25() is lower-is-better; ties use the stored path bytes and ordinal
         // before filtering requested paths and truncating the candidate list.
         let sql = format!(
-            "SELECT s.path, s.ordinal, -bm25({table}, {weights})
+            "SELECT s.path, s.ordinal, -bm25({table}, {weights}), s.rowid
              FROM {table} JOIN segments s ON s.rowid = {table}.rowid
              WHERE {table} MATCH ?1 AND s.profile = ?2
              ORDER BY bm25({table}, {weights}), s.path, s.ordinal"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut rows = stmt.query(params![expr, profile])?;
+        // Contentless FTS cannot return source text. Probe each query group
+        // against the selected row, returning only tokens supplied by the query.
+        // The original BM25 SELECT and its ordering stay independent of this.
+        let group_exprs: Vec<_> = query
+            .groups
+            .iter()
+            .map(|group| {
+                LexicalQuery {
+                    groups: vec![group.clone()],
+                }
+                .fts5()
+                .unwrap()
+            })
+            .collect();
+        let mut matches = self.conn.prepare_cached(&format!(
+            "SELECT EXISTS(SELECT 1 FROM {table} WHERE {table} MATCH ?1 AND rowid = ?2)"
+        ))?;
         let mut out = Vec::new();
         while out.len() < limit
             && let Some(r) = rows.next()?
         {
             let path = key_resource(r.get(0)?)?;
             if paths.contains(&path) {
+                let rowid: i64 = r.get(3)?;
+                let mut matched_terms = Vec::new();
+                for (group, expr) in query.groups.iter().zip(&group_exprs) {
+                    if matches.query_row(params![expr, rowid], |row| row.get::<_, bool>(0))? {
+                        for term in group {
+                            if !matched_terms.contains(term) {
+                                matched_terms.push(term.clone());
+                            }
+                        }
+                    }
+                }
                 out.push(LexicalHit {
                     resource: path,
                     ordinal: r.get::<_, i64>(1)? as usize,
                     score: r.get::<_, f64>(2)? as f32,
+                    matched_terms,
                 });
             }
         }

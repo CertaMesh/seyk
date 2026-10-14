@@ -28,6 +28,7 @@ fn input(dir: &Path, end_ms: u64, bytes: &[u8]) -> std::path::PathBuf {
             },
             score: 1.0,
             signals: Default::default(),
+            r#match: Default::default(),
             heading: None,
             preview: None,
             query_index: 0,

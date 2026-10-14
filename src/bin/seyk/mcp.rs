@@ -230,6 +230,7 @@ struct Hit {
     heading: Option<String>,
     /// What found it: "meaning", "words" (keywords) and/or "name" (file name).
     matched: Vec<&'static str>,
+    r#match: seyk::MatchReason,
     /// The phrasing that matched best by meaning, when meaning matched.
     #[serde(skip_serializing_if = "Option::is_none")]
     matched_query: Option<String>,
@@ -457,6 +458,7 @@ impl SeykServer {
             metadata: hit.metadata,
             score: 0.0,
             signals: Default::default(),
+            r#match: Default::default(),
             heading: None,
             preview: None,
             query_index: 0,
@@ -643,6 +645,7 @@ fn to_response(r: SearchResults) -> Response {
             metadata: h.metadata,
             score: (h.score * 1000.0).round() / 1000.0,
             heading: h.heading,
+            r#match: h.r#match,
             matched: [
                 (h.signals.semantic.is_some(), "meaning"),
                 (h.signals.lexical.is_some(), "words"),
@@ -973,6 +976,12 @@ mod tests {
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
         assert_eq!(response["schema_version"], 6);
+        assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
+        assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
+        assert_eq!(
+            response["hits"][0]["match"]["matched_terms"],
+            serde_json::json!(["lighthouse"])
+        );
         assert!(response.get("cache_status").is_none());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(

@@ -465,6 +465,13 @@ now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
 CLI JSON objects and MCP search responses include `schema_version: 6`.
+Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
+`semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
+containing only normalized query tokens confirmed by the keyword index. Ranks
+precede fusion and the final limit; `null` means the leg did not contribute.
+The additive field leaves schema version 6, existing scores/signals and ranking
+unchanged; older JSON defaults to empty provenance. See
+[match provenance](docs/mcp.md#per-hit-match-provenance) for token and compatibility details.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
 the JSON path is a display aid and can contain replacement characters.

@@ -66,6 +66,20 @@ pub struct MatchSignals {
     pub filename: bool,
 }
 
+/// Per-leg positions in the candidate lists used to rank a hit.
+/// Ranks are one-based; `None` means the leg did not contribute. These ranks
+/// precede fusion and the final result limit, so can exceed that limit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchReason {
+    pub semantic_rank: Option<usize>,
+    /// The BM25 leg, called `lexical` in [`MatchSignals`].
+    pub keyword_rank: Option<usize>,
+    pub filename_rank: Option<usize>,
+    /// Normalized query tokens from matching BM25 groups, deduplicated in query
+    /// order. Never extracted from source text. Empty without a keyword leg.
+    pub matched_terms: Vec<String>,
+}
+
 /// One ranked match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
@@ -77,6 +91,9 @@ pub struct SearchHit {
     pub score: f32,
     /// What found this hit. Use it to tell a meaning match from a name match.
     pub signals: MatchSignals,
+    /// Rank provenance, additive to the existing raw signal scores.
+    #[serde(default)]
+    pub r#match: MatchReason,
     pub metadata: ResourceMetadata,
     /// Markdown heading path of the segment, when there is one.
     pub heading: Option<String>,
@@ -1894,6 +1911,7 @@ impl<'e> SearchRequest<'e> {
         }
 
         let mut lexical: Vec<(SegmentKey, f32)> = Vec::new();
+        let mut matched_terms = HashMap::new();
         let mut named: Vec<SegmentKey> = Vec::new();
         if self.mode != SearchMode::Semantic {
             // Semantic candidates already carry locators in vectors_for; only
@@ -1945,6 +1963,7 @@ impl<'e> SearchRequest<'e> {
                         continue;
                     }
                 }
+                matched_terms.insert(key.clone(), hit.matched_terms);
                 lexical.push((key, hit.score));
                 if lexical.len() == depth {
                     break;
@@ -1982,6 +2001,23 @@ impl<'e> SearchRequest<'e> {
         };
         let ranked = rank(self.mode, &semantic, &lexical, weight, &named, self.limit);
 
+        // Annotate only after ranking. Keep the scoring arithmetic, candidate
+        // order, cutoffs and tie-breaking completely independent of provenance.
+        let semantic_ranks: HashMap<_, _> = semantic
+            .iter()
+            .enumerate()
+            .map(|(i, (key, _, _))| (key, i + 1))
+            .collect();
+        let keyword_ranks: HashMap<_, _> = lexical
+            .iter()
+            .enumerate()
+            .map(|(i, (key, _))| (key, i + 1))
+            .collect();
+        let filename_ranks: HashMap<_, _> = named
+            .iter()
+            .enumerate()
+            .map(|(i, key)| (key, i + 1))
+            .collect();
         let mut previews = PreviewReader::default();
         let mut hits = Vec::with_capacity(ranked.len());
         for (key, score, signals, query_index) in ranked {
@@ -2003,11 +2039,27 @@ impl<'e> SearchRequest<'e> {
                     n,
                 )
             });
+            let keyword_rank = signals
+                .lexical
+                .and_then(|_| keyword_ranks.get(&key).copied());
+            let reason = MatchReason {
+                semantic_rank: signals
+                    .semantic
+                    .and_then(|_| semantic_ranks.get(&key).copied()),
+                keyword_rank,
+                filename_rank: signals.filename.then(|| filename_ranks[&key]),
+                matched_terms: if keyword_rank.is_some() {
+                    matched_terms.remove(&key).unwrap_or_default()
+                } else {
+                    Vec::new()
+                },
+            };
             hits.push(SearchHit {
                 resource: key.0,
                 locator: segment.locator.clone(),
                 score,
                 signals,
+                r#match: reason,
                 metadata,
                 heading: segment.heading.clone(),
                 preview,

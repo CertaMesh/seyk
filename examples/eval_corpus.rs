@@ -479,6 +479,7 @@ mod tests {
             locator: locator(0, text.len() as u64),
             score: 1.0,
             signals: Default::default(),
+            r#match: Default::default(),
             metadata: ResourceMetadata {
                 media_type: Some("text/plain".into()),
                 modality: Modality::Text,

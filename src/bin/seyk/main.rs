@@ -1232,6 +1232,10 @@ mod tests {
             heading: None,
             preview: preview.map(str::to_string),
             query_index: 0,
+            r#match: seyk::MatchReason {
+                semantic_rank: Some(1),
+                ..Default::default()
+            },
             signals: MatchSignals {
                 semantic: Some(score),
                 ..Default::default()
@@ -1398,6 +1402,8 @@ mod tests {
                 .unwrap()
                 .as_str()
         );
+        assert_eq!(first["match"]["semantic_rank"], 1);
+        assert_eq!(first["match"]["matched_terms"], serde_json::json!([]));
         assert_eq!(first["locator"]["kind"], "text");
         assert_eq!(first["locator"]["line_start"], 81);
         assert_eq!(v["hits"][1]["locator"]["kind"], "whole_resource");

@@ -26,3 +26,36 @@ cargo test --bin seyk measure_disjoint_watcher_inline_sync -- --ignored --nocapt
 Every sample prints its load beside latency and lease wait. Searches that sync
 inline can wait behind indexing on another root. A maximum wait time would
 require a separately evaluated finer GC/lease design.
+
+## Per-hit match provenance
+
+Every MCP and CLI JSON search hit includes an additive `match` object:
+
+```json
+{"semantic_rank": 2, "keyword_rank": 1, "filename_rank": null, "matched_terms": ["cafe", "restore"]}
+```
+
+The library exposes this as `SearchHit::r#match` (`MatchReason`). Ranks are
+one-based positions in the contributing candidate lists before fusion and final
+truncation, so they can exceed the requested result limit. `keyword_rank` is the
+BM25 leg. A `null` rank means that leg did not contribute (including a disabled
+keyword weight); semantic-only searches have no keyword or filename ranks.
+Semantic ranks combine all query phrasings using their best score. Filename ranks
+follow the engine's filename candidate order, not relevance within the file.
+
+`matched_terms` contains normalized query tokens from complete matching BM25
+groups, deduplicated in query order across all phrasings. Case and accents follow
+the index's Unicode tokenizer; standalone stopwords are excluded. An identifier
+such as `INC-18372` contributes its tokens only when the entire group matches one
+indexed field. Matches can come from name, path, heading or body. Terms are
+confirmed against the existing keyword index, never recovered from source text,
+and no new text is persisted in the cache. Without a contributing keyword leg,
+the list is empty.
+
+Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
+meaning. JSON `schema_version` remains **6**: this is an optional additive field,
+with no change to existing fields or extraction requirements. Older search
+JSON without `match` deserializes to empty provenance. No cache migration is
+needed. Rust callers constructing `SearchHit` literals add `r#match:
+Default::default()` (and custom cache implementations populate the additive
+`LexicalHit::matched_terms` field).
