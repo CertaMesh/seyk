@@ -99,6 +99,7 @@ This is the only command that uses the network. It fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
 standard Hugging Face cache. Searching never downloads anything: if the weights are
 missing, search returns keyword and filename matches with a `no_model` degradation marker.
+Successful degraded lexical results use CLI exit status 0.
 Run `model download` explicitly to enable semantic search. Indexing still requires weights.
 
 To use weights you already have, pass a directory with the same layout

@@ -1145,7 +1145,7 @@ fn lexical_fallback_finds_unembedded_files_without_touching_semantic_cache() {
 }
 
 #[test]
-fn ready_results_are_byte_identical_with_lexical_fallback_enabled() {
+fn ready_results_match_with_lexical_fallback_opt_in() {
     let root = corpus();
     let (engine, _) = engine(MemoryCache::new());
     engine.index().paths([root.path()]).execute().unwrap();
@@ -1271,4 +1271,123 @@ fn fallback_search_in_embedding_callback_does_not_wait_for_indexing_lease() {
         .execute()
         .unwrap();
     assert_eq!(checked.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn skipped_current_versions_do_not_disable_ready_semantic_results() {
+    for invalid in [vec![0xff, 0xfe], b"quartz\0invalid".to_vec()] {
+        let root = corpus();
+        let bad = root.path().join("invalid.txt");
+        fs::write(&bad, invalid).unwrap();
+        let bad = bad.canonicalize().unwrap();
+        let (engine, _) = engine(MemoryCache::new());
+        let report = engine.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let ready = || {
+            engine
+                .search("father")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap()
+        };
+        let results = ready();
+        assert!(results.degraded.is_none());
+        assert!(results.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            results
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != bad)
+        );
+        // A changed version is pending again, and a later successful attempt
+        // clears the skip without keeping the collection in lexical mode.
+        fs::write(&bad, "father quartz repaired document").unwrap();
+        assert_eq!(
+            ready().degraded.unwrap().reason,
+            seyk_core::DegradedReason::NotYetEmbedded
+        );
+        engine.index().paths([root.path()]).execute().unwrap();
+        assert!(ready().degraded.is_none());
+        assert!(
+            ready()
+                .hits
+                .iter()
+                .any(|h| h.resource.to_file_path().unwrap() == bad)
+        );
+    }
+}
+
+#[test]
+fn failed_refresh_excludes_old_evidence_with_or_without_previews() {
+    for lexical_only in [false, true] {
+        for previews in [None, Some(160)] {
+            for invalid in [vec![0xff, 0xfe], b"invalid\0bytes".to_vec()] {
+                let root = TempDir::new().unwrap();
+                let path = root.path().join("quartz.txt");
+                fs::write(&path, "quartz lighthouse keeper").unwrap();
+                let engine = if lexical_only {
+                    SearchEngine::lexical().unwrap()
+                } else {
+                    engine(MemoryCache::new()).0
+                };
+                let search = |sync, fallback| {
+                    engine
+                        .search("quartz")
+                        .paths([root.path()])
+                        .sync(sync)
+                        .lexical_fallback(fallback)
+                        .previews(previews)
+                        .execute()
+                        .unwrap()
+                };
+                assert!(!search(true, false).hits.is_empty());
+                fs::write(&path, invalid).unwrap();
+                // Background-indexed callers must not serve the old version
+                // even before the new version has been attempted.
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(true, false).hits.is_empty());
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(false, false).hits.is_empty());
+                fs::write(&path, "quartz restored evidence").unwrap();
+                assert!(!search(true, false).hits.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
+    let root = corpus();
+    let db = TempDir::new().unwrap();
+    let cache_file = db.path().join("cache.sqlite3");
+    let path = root.path().join("father.md").canonicalize().unwrap();
+    let open = || engine(SqliteCache::open(&cache_file).unwrap()).0;
+    let first = open();
+    first.index().paths([root.path()]).execute().unwrap();
+    drop(first);
+    fs::write(&path, [0xff, 0xfe]).unwrap();
+    for _ in 0..2 {
+        let reopened = open();
+        // Daemon/MCP lifetimes run an initial index before reporting ready.
+        let report = reopened.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let result = reopened
+            .search("father")
+            .paths([root.path()])
+            .sync(false)
+            .lexical_fallback(true)
+            .previews(None)
+            .execute()
+            .unwrap();
+        assert!(result.degraded.is_none());
+        assert!(result.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            result
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != path)
+        );
+    }
 }

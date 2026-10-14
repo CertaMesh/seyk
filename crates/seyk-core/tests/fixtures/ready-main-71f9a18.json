@@ -1,0 +1,343 @@
+[
+  {
+    "hits": [
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 48,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "24b05e242dfe68d114565e149ce431b207ed092a3d2604b851ec683d300f020e",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 48
+        },
+        "preview": "He repeats the gestures he swore he never would.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/father.md",
+        "score": 0.9904249906539917,
+        "signals": {
+          "filename": true,
+          "lexical": 2.014084429902141e-6,
+          "semantic": 0.25
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 56,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "772371960a17bd7e28d0efa3be25feda6c931cf6ae9aaea7f8db1a5a5087e939",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 56
+        },
+        "preview": "Outage review for INC-18372: the restore path never ran.",
+        "query_index": 1,
+        "resource": "file://<CORPUS>/incident.md",
+        "score": 0.3999999761581421,
+        "signals": {
+          "filename": false,
+          "lexical": 1.6622148752212524,
+          "semantic": 0.42640143632888794
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 47,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 47
+        },
+        "preview": "My father painted the kitchen yellow in spring.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/kitchen.md",
+        "score": 0.3904249668121338,
+        "signals": {
+          "filename": false,
+          "lexical": 1.0198675681749592e-6,
+          "semantic": 0.30151134729385376
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 49,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 49
+        },
+        "preview": "Tomatoes need sun and a little basil beside them.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/garden.md",
+        "score": 0.19062499701976776,
+        "signals": {
+          "filename": false,
+          "lexical": null,
+          "semantic": 0.0
+        }
+      }
+    ],
+    "mode": "hybrid",
+    "queries": [
+      "father",
+      "INC-18372"
+    ],
+    "stats": {
+      "segments_searched": 4,
+      "sync": {
+        "embed_ms": 0,
+        "resources_discovered": 4,
+        "resources_unchanged": 0,
+        "resources_updated": 0,
+        "segments_embedded": 0,
+        "skipped": [],
+        "skipped_counts": []
+      },
+      "total_ms": 0
+    }
+  },
+  {
+    "hits": [
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 48,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "24b05e242dfe68d114565e149ce431b207ed092a3d2604b851ec683d300f020e",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 48
+        },
+        "preview": "He repeats the gestures he swore he never would.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/father.md",
+        "score": 0.9959678053855896,
+        "signals": {
+          "filename": true,
+          "lexical": 2.014084429902141e-6,
+          "semantic": null
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 56,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "772371960a17bd7e28d0efa3be25feda6c931cf6ae9aaea7f8db1a5a5087e939",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 56
+        },
+        "preview": "Outage review for INC-18372: the restore path never ran.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/incident.md",
+        "score": 0.25,
+        "signals": {
+          "filename": false,
+          "lexical": 1.6622148752212524,
+          "semantic": null
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 47,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 47
+        },
+        "preview": "My father painted the kitchen yellow in spring.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/kitchen.md",
+        "score": 0.2420635223388672,
+        "signals": {
+          "filename": false,
+          "lexical": 1.0198675681749592e-6,
+          "semantic": null
+        }
+      }
+    ],
+    "mode": "lexical",
+    "queries": [
+      "father",
+      "INC-18372"
+    ],
+    "stats": {
+      "segments_searched": 3,
+      "sync": {
+        "embed_ms": 0,
+        "resources_discovered": 4,
+        "resources_unchanged": 0,
+        "resources_updated": 0,
+        "segments_embedded": 0,
+        "skipped": [],
+        "skipped_counts": []
+      },
+      "total_ms": 0
+    }
+  },
+  {
+    "hits": [
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 56,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "772371960a17bd7e28d0efa3be25feda6c931cf6ae9aaea7f8db1a5a5087e939",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 56
+        },
+        "preview": "Outage review for INC-18372: the restore path never ran.",
+        "query_index": 1,
+        "resource": "file://<CORPUS>/incident.md",
+        "score": 0.42640143632888794,
+        "signals": {
+          "filename": false,
+          "lexical": null,
+          "semantic": 0.42640143632888794
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 47,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 47
+        },
+        "preview": "My father painted the kitchen yellow in spring.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/kitchen.md",
+        "score": 0.30151134729385376,
+        "signals": {
+          "filename": false,
+          "lexical": null,
+          "semantic": 0.30151134729385376
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 48,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "24b05e242dfe68d114565e149ce431b207ed092a3d2604b851ec683d300f020e",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 48
+        },
+        "preview": "He repeats the gestures he swore he never would.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/father.md",
+        "score": 0.25,
+        "signals": {
+          "filename": false,
+          "lexical": null,
+          "semantic": 0.25
+        }
+      },
+      {
+        "heading": null,
+        "locator": {
+          "byte_end": 49,
+          "byte_start": 0,
+          "kind": "text",
+          "line_end": 1,
+          "line_start": 1
+        },
+        "metadata": {
+          "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+          "modality": "text",
+          "modified_ns": 0,
+          "size_bytes": 49
+        },
+        "preview": "Tomatoes need sun and a little basil beside them.",
+        "query_index": 0,
+        "resource": "file://<CORPUS>/garden.md",
+        "score": 0.0,
+        "signals": {
+          "filename": false,
+          "lexical": null,
+          "semantic": 0.0
+        }
+      }
+    ],
+    "mode": "semantic",
+    "queries": [
+      "father",
+      "INC-18372"
+    ],
+    "stats": {
+      "segments_searched": 4,
+      "sync": {
+        "embed_ms": 0,
+        "resources_discovered": 4,
+        "resources_unchanged": 0,
+        "resources_updated": 0,
+        "segments_embedded": 0,
+        "skipped": [],
+        "skipped_counts": []
+      },
+      "total_ms": 0
+    }
+  }
+]

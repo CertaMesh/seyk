@@ -322,6 +322,7 @@ impl SearchEngineBuilder {
             audio_extractor: self.audio_extractor,
             embedder,
             lexical_only: false,
+            skipped_versions: Mutex::new(HashMap::new()),
             cache: Arc::new(Mutex::new(cache)),
             indexing: Arc::new(Mutex::new(())),
             pdf_diagnostics: Mutex::new(HashMap::new()),
@@ -351,6 +352,10 @@ pub struct SearchEngine {
     audio_extractor: Option<crate::audio::AudioExtractor>,
     embedder: Arc<dyn Embedder>,
     lexical_only: bool,
+    /// Completed skips for this engine lifetime, keyed by source version and
+    /// preparation descriptor. A restart retries them during the initial index;
+    /// no failure state or source content is added to the semantic cache schema.
+    skipped_versions: Mutex<HashMap<ResourceId, (ResourceVersion, String)>>,
     cache: Arc<Mutex<Box<dyn EmbeddingCache>>>,
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
@@ -712,6 +717,42 @@ impl SearchEngine {
     fn sync(
         &self,
         _indexing: &MutexGuard<'_, ()>,
+        resources: &[ProvidedResource],
+        progress: Option<ProgressFn>,
+    ) -> Result<SyncStats> {
+        let stats = self.sync_resources(resources, progress)?;
+        let skipped: HashSet<_> = stats.skipped.iter().map(|s| &s.resource).collect();
+        let mut outcomes = self
+            .skipped_versions
+            .lock()
+            .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?;
+        for resource in resources {
+            if skipped.contains(&resource.id) {
+                outcomes.insert(
+                    resource.id.clone(),
+                    (resource.version.clone(), resource.fingerprint()),
+                );
+            } else {
+                outcomes.remove(&resource.id);
+            }
+        }
+        Ok(stats)
+    }
+
+    fn skipped_at_current_version(&self, resource: &ProvidedResource) -> Result<bool> {
+        let outcomes = self
+            .skipped_versions
+            .lock()
+            .map_err(|_| Error::Config("skip outcomes lock poisoned".into()))?;
+        Ok(outcomes
+            .get(&resource.id)
+            .is_some_and(|(version, descriptor)| {
+                version.matches(&resource.version) && *descriptor == resource.fingerprint()
+            }))
+    }
+
+    fn sync_resources(
+        &self,
         resources: &[ProvidedResource],
         progress: Option<ProgressFn>,
     ) -> Result<SyncStats> {
@@ -1875,12 +1916,19 @@ impl<'e> SearchRequest<'e> {
         }
         if self.lexical_fallback && !self.sync && !engine.lexical_only {
             let cached = engine.with_cache(|c| c.resource_index(&engine.profile_id))?;
-            if resources.iter().any(|r| {
-                engine.supports_kind(r.kind)
+            let mut pending = false;
+            for r in &resources {
+                if engine.supports_kind(r.kind)
+                    && !engine.skipped_at_current_version(r)?
                     && !cached
                         .get(&r.id)
                         .is_some_and(|m| !r.version.is_known() || m.version.matches(&r.version))
-            }) {
+                {
+                    pending = true;
+                    break;
+                }
+            }
+            if pending {
                 let lexical = engine.lexical_fallback()?;
                 let mut results = SearchRequest {
                     engine: &lexical,
@@ -1910,6 +1958,21 @@ impl<'e> SearchRequest<'e> {
             .map(|r| r.id.clone())
             .collect();
         let metadata = engine.with_cache(|c| c.resource_index(pid))?;
+        // Failed preparation must never expose a previous version's evidence,
+        // including filename-only hits and requests without previews. Apply this
+        // to normal synchronized searches as well as the model-free engine.
+        for r in &resources {
+            if sync.skipped.iter().any(|s| s.resource == r.id)
+                || engine.skipped_at_current_version(r)?
+                || (self.lexical_fallback
+                    && r.version.is_known()
+                    && !metadata
+                        .get(&r.id)
+                        .is_some_and(|m| m.version.matches(&r.version)))
+            {
+                wanted.remove(&r.id);
+            }
+        }
         for r in resources.iter().filter(|r| r.kind == ResourceKind::Audio) {
             let failed = sync.skipped.iter().any(|s| s.resource == r.id);
             if failed {
