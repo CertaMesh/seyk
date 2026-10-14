@@ -19,7 +19,7 @@
         "preview": "He repeats the gestures he swore he never would.",
         "query_index": 0,
         "resource": "file://<CORPUS>/father.md",
-        "score": 0.9904249906539917,
+        "score": 0.9214285016059875,
         "signals": {
           "filename": true,
           "lexical": 2.014084429902141e-6,
@@ -44,7 +44,7 @@
         "preview": "Outage review for INC-18372: the restore path never ran.",
         "query_index": 1,
         "resource": "file://<CORPUS>/incident.md",
-        "score": 0.3999999761581421,
+        "score": 0.4000000059604645,
         "signals": {
           "filename": false,
           "lexical": 1.6622148752212524,
@@ -69,7 +69,7 @@
         "preview": "My father painted the kitchen yellow in spring.",
         "query_index": 0,
         "resource": "file://<CORPUS>/kitchen.md",
-        "score": 0.3904249668121338,
+        "score": 0.3214285373687744,
         "signals": {
           "filename": false,
           "lexical": 1.0198675681749592e-6,
@@ -94,7 +94,7 @@
         "preview": "Tomatoes need sun and a little basil beside them.",
         "query_index": 0,
         "resource": "file://<CORPUS>/garden.md",
-        "score": 0.19062499701976776,
+        "score": 0.13333332538604736,
         "signals": {
           "filename": false,
           "lexical": null,
@@ -141,7 +141,7 @@
         "preview": "He repeats the gestures he swore he never would.",
         "query_index": 0,
         "resource": "file://<CORPUS>/father.md",
-        "score": 0.9959678053855896,
+        "score": 0.964285671710968,
         "signals": {
           "filename": true,
           "lexical": 2.014084429902141e-6,
@@ -191,7 +191,7 @@
         "preview": "My father painted the kitchen yellow in spring.",
         "query_index": 0,
         "resource": "file://<CORPUS>/kitchen.md",
-        "score": 0.2420635223388672,
+        "score": 0.1875,
         "signals": {
           "filename": false,
           "lexical": 1.0198675681749592e-6,

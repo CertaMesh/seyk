@@ -2511,9 +2511,10 @@ pub fn keyword_weight(queries: &[String]) -> f32 {
 /// Keyword weight for questions in prose; see [`keyword_weight`].
 pub const PROSE_KEYWORD_WEIGHT: f32 = 0.3;
 
-/// Reciprocal rank fusion constant: damps the gap between the first few ranks
-/// so one signal's top hit cannot drown out a hit two signals agree on.
-const RRF_K: f32 = 60.0;
+/// Reciprocal rank fusion damping. A full SciFact/NFCorpus/IRPAPERS sweep
+/// improved hybrid nDCG@10 on all three datasets with k=5 versus k=60,
+/// keeping lexical weights, filename weight and candidate depth unchanged.
+const RRF_K: f32 = 5.0;
 /// A file the query names outweighs a semantic and a keyword first place.
 const FILENAME_WEIGHT: f32 = 3.0;
 
@@ -3307,6 +3308,25 @@ mod tests {
             Path::new(r"C:\book\people\father.md")
         ));
         assert!(!names_file("my father", Path::new(r"C:\book\father.md")));
+    }
+
+    #[test]
+    fn hybrid_rrf_k5_preserves_a_strong_semantic_lead() {
+        assert_eq!(RRF_K, 5.0);
+        let semantic: Vec<_> = (0..10)
+            .map(|i| {
+                let key = (format!("mem://rrf/{i}").parse().unwrap(), 0);
+                (key, 1.0 - i as f32 * 0.05, 0)
+            })
+            .collect();
+        // At k=60, the tenth semantic hit's lexical vote overtakes rank one.
+        // At k=5, a prose keyword match still contributes without erasing that lead.
+        let lexical = vec![(semantic[9].0.clone(), 1.0)];
+        let hits = rank(SearchMode::Hybrid, &semantic, &lexical, 0.3, &[], 10);
+        assert_eq!(hits[0].0, semantic[0].0);
+        assert_eq!(hits[3].0, semantic[9].0);
+        assert!((hits[0].1 - 10.0 / 13.0).abs() < 1e-6);
+        assert!((hits[3].1 - 7.0 / 13.0).abs() < 1e-6);
     }
 
     #[test]
