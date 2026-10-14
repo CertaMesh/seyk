@@ -11,7 +11,8 @@ use crate::discovery::{
 };
 use crate::provider::ReadSeek;
 use crate::{
-    Error, ProvidedResource, ResourceId, ResourceProvider, ResourceScope, ResourceVersion, Result,
+    Error, ProvidedResource, ResourceId, ResourceListing, ResourceProvider, ResourceScope,
+    ResourceVersion, Result,
 };
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -447,6 +448,10 @@ impl ResourceProvider for LocalContentProvider {
     }
 
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
+        Ok(self.list_walked(scope)?.resources)
+    }
+
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
         let paths = scope
             .roots
             .iter()
@@ -458,7 +463,9 @@ impl ResourceProvider for LocalContentProvider {
         for path in &paths {
             self.stat(path)?;
         }
-        discover_with_policy(&paths, &scope.discovery, |p| self.stat(p).is_ok())?
+        let walked = discover_with_policy(&paths, &scope.discovery, |p| self.stat(p).is_ok())?;
+        let resources = walked
+            .resources
             .into_iter()
             .filter_map(|r| {
                 // Discovery is metadata-only and path-based. Revalidate through the
@@ -474,7 +481,17 @@ impl ResourceProvider for LocalContentProvider {
                     title: r.path.file_stem().map(|s| s.to_string_lossy().into_owned()),
                 }))
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(ResourceListing {
+            resources,
+            walked_roots: Some(
+                walked
+                    .walked_roots
+                    .iter()
+                    .map(ResourceId::from_path)
+                    .collect::<Result<_>>()?,
+            ),
+        })
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = id

@@ -30,8 +30,10 @@ pub mod index;
 pub mod lexical;
 #[cfg(unix)]
 pub mod local_content;
+mod progress;
 pub mod provider;
 mod resource;
+pub use progress::{IndexProgress, KindProgress};
 pub mod segment;
 #[cfg(feature = "watch")]
 pub mod watch;
@@ -53,7 +55,7 @@ pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};
 pub use seyk_embed::{EmbeddingRequest, EmbeddingTask, Modality};
 
 pub use provider::{
-    FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
+    FsProvider, ProvidedResource, ResourceListing, ResourceProvider, ResourceScope, ResourceVersion,
 };
 
 pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};

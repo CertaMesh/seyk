@@ -61,7 +61,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 6);
+    assert_eq!(stats["schema_version"], 7);
     assert_eq!(stats["profiles"], serde_json::json!([]));
     assert_eq!(stats["in_synced_folder"], false);
     #[cfg(target_os = "macos")]
@@ -315,6 +315,13 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
     let responses = mcp_handshake(&mut command);
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
     let tools = &responses[1]["result"]["tools"];
+    assert!(
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "index_status")
+    );
     let search = tools
         .as_array()
         .unwrap()
@@ -517,7 +524,7 @@ fn extract_round_trip_without_a_model() {
             .output()
             .unwrap()
     };
-    for version in 2..=6 {
+    for version in 2..=7 {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let data = document.to_string();
@@ -533,7 +540,7 @@ fn extract_round_trip_without_a_model() {
         let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
         assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     }
-    for version in [1, 7] {
+    for version in [1, 8] {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let bad = run(&["extract", "--from-json", "-"], &document.to_string());
@@ -550,7 +557,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 6);
+    assert_eq!(extracted["schema_version"], 7);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);

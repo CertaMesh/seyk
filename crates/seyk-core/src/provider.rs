@@ -1,8 +1,8 @@
 //! Resource access. Filesystem is the only supported production provider.
 
 use crate::discovery::{
-    DiscoveryOptions, ResourceKind, absolute_logical_path, discover, ensure_allowed_path,
-    modified_ns,
+    DiscoveryOptions, ResourceKind, absolute_logical_path, discover_with_policy,
+    ensure_allowed_path, modified_ns,
 };
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
@@ -127,6 +127,14 @@ pub trait ResourceProvider: Send + Sync {
     }
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
+    /// `list`, plus the resolved root identity each scope root was walked under
+    /// when the provider can prove it. The default proves nothing.
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
+        Ok(ResourceListing {
+            resources: self.list(scope)?,
+            walked_roots: None,
+        })
+    }
     /// Opt in to authorizing indexed identities without discovering uncached descendants.
     /// Other providers retain their normal listing behavior in cached-only searches.
     fn supports_cached_listing(&self) -> bool {
@@ -158,6 +166,15 @@ pub trait ResourceProvider: Send + Sync {
     }
 }
 
+/// A provider listing and, when known, the roots that listing actually walked.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceListing {
+    pub resources: Vec<ProvidedResource>,
+    /// Resolved once per walked scope root, before its walk, in scope order.
+    /// `None` when the provider cannot attribute its listing to resolved roots.
+    pub walked_roots: Option<Vec<ResourceId>>,
+}
+
 /// Local files, using the same discovery filters and no-follow walk as `discover`.
 #[derive(Debug, Default)]
 pub struct FsProvider;
@@ -178,12 +195,17 @@ impl ResourceProvider for FsProvider {
         Ok(Box::new(open_local_content(&path)?))
     }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
+        Ok(self.list_walked(scope)?.resources)
+    }
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
         let paths = scope
             .roots
             .iter()
             .map(file_path)
             .collect::<Result<Vec<_>>>()?;
-        discover(&paths, &scope.discovery)?
+        let walked = discover_with_policy(&paths, &scope.discovery, |_| true)?;
+        let resources = walked
+            .resources
             .into_iter()
             .map(|r| {
                 Ok(ProvidedResource {
@@ -195,7 +217,17 @@ impl ResourceProvider for FsProvider {
                     title: r.path.file_stem().map(|s| s.to_string_lossy().into_owned()),
                 })
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(ResourceListing {
+            resources,
+            walked_roots: Some(
+                walked
+                    .walked_roots
+                    .iter()
+                    .map(ResourceId::from_path)
+                    .collect::<Result<_>>()?,
+            ),
+        })
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;

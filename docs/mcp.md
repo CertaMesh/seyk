@@ -53,8 +53,9 @@ and no new text is persisted in the cache. Without a contributing keyword leg,
 the list is empty.
 
 Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
-meaning. JSON `schema_version` remains **6**: this is an optional additive field,
-with no change to existing fields or extraction requirements. Older search
+meaning. Current JSON `schema_version` is **7**, including optional result-kind
+counts and indexing progress. Match provenance does not change existing fields
+or extraction requirements. Older search
 JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:
 Default::default()`; custom cache implementations implement

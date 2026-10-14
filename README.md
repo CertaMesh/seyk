@@ -216,8 +216,8 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
 For raw text, extract writes the exact bytes without an added newline; PDF text
 also needs no model. Audio STT is optional and clearly labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4`, `5` or `6`, not a bare hit. The extraction document uses
-version 6 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5`, `6` or `7`, not a bare hit. The extraction document uses
+version 7 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 The `--no-preview` option sets `preview` to
 null. This flag skips preview reads; indexing still reads source content.
@@ -523,13 +523,13 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 6`.
+CLI JSON objects and MCP search responses include `schema_version: 7`.
 Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
 `semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
 containing only normalized query tokens confirmed by the keyword index. Ranks
 precede fusion and the final limit; `null` means the leg did not contribute.
-The additive field leaves schema version 6, existing scores/signals and ranking
-unchanged; older JSON defaults to empty provenance. See
+Match provenance leaves existing scores/signals and ranking unchanged; older
+JSON defaults to empty provenance. See
 [match provenance](docs/mcp.md#per-hit-match-provenance) for token and compatibility details.
 A search hit's `resource` is a URI (`file:///notes/my%20note.md`); MCP also keeps
 an explicit decoded `path`. URI identity preserves non-UTF-8 Unix path bytes;
@@ -539,8 +539,8 @@ for all API changes and cache upgrade details.
 
 The engine uses `ResourceProvider` for enumeration, reads, freshness and deletion
 checks. `FsProvider` is the default. `ResourceProvider`, `ResourceScope`,
-`ProvidedResource` and `ResourceVersion` may change before 1.0; filesystem is the
-only supported provider. There are no remote connectors.
+`ProvidedResource`, `ResourceListing` and `ResourceVersion` may change before 1.0;
+filesystem is the only supported provider. There are no remote connectors.
 
 Other backends plug in through the `Embedder` trait:
 
@@ -961,3 +961,50 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
+
+### Result counts and indexing progress
+
+Opt in with `seyk search "query" ./folder --json --kind-counts`, MCP search
+`kind_counts: true`, or the Rust builder `.kind_counts(true)`. The optional
+`kind_counts` map counts **returned segment hits**, after filtering, ranking and
+limit. Keys are the existing locator kinds: `text`, `page_text` (PDF text),
+`page` (rendered/scanned PDF page), `time` (audio window), `whole_resource`
+(e.g. an image), and reserved `image_region`. Absent kinds have zero hits;
+an empty result has `{}`. These are not unique-file counts or corpus totals.
+No candidate-total query is added, and ranking and candidate depth are unchanged.
+
+Daemon status (including `--json`), MCP `index_status`, and MCP search expose
+`index_progress`: one entry per watched root, with `root` (a lossless file URI)
+and nullable `progress`.
+Existing `folders` and `index.state` fields remain unchanged. Library callers get
+`ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
+`SyncStats::progress`. A library request spanning several roots gets one combined
+pass snapshot; daemon watchers each index one root. Before `Discovered`, a pass
+also sends `ProgressEvent::Walked` with the roots its listing actually walked,
+resolved once before the walk, when the provider reports them through
+`ResourceProvider::list_walked` (`FsProvider` does; the default reports none).
+MCP sessions see a watcher's counts only when that walked root lies inside the
+session's pinned root; a pass without one exposes no counts.
+
+`progress.by_kind` uses resource kinds `text`, `pdf`, `image`, and `audio`.
+Each entry counts resources `indexed`, `waiting`, and `skipped` in the current
+or last completed discovery pass, **not a persistent cache inventory**. All
+resources initially wait; successful cache reuse or a committed update moves
+them to indexed, and observed whole-resource failures move them to skipped.
+An empty/partially searchable PDF committed successfully counts as indexed;
+individual failed pages remain in page diagnostics. Counts reset on rediscovery,
+so removed files disappear. Skips describe this pass only; durable skipped-version
+counts across process restarts are unavailable. No skipped-version storage is added.
+
+`eta_seconds` is `ceil(waiting_resources * elapsed_pass_seconds /
+newly_indexed_resources)`, using this process's current pass only. It stays null
+until at least two newly indexed resources complete and at least 1 ms elapses,
+and returns to null when nothing waits. Cache reuse and skips do not train the
+rate. This rough resource-throughput estimate includes discovery-following
+preparation/embedding/commit time and assumes the remaining resource mix has
+similar cost; it is not a segment-based prediction or a countdown. Snapshots
+update at resource completions. A large first PDF/audio resource can therefore
+keep ETA null until later resources finish. Failed/stopped watchers invalidate
+the snapshot. Loading/unavailable progress is null. A session confined to a child
+of a watched root receives null progress for its own root rather than revealing
+the parent's inventory. Status never starts indexing or loads a model.

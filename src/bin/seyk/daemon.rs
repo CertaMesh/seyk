@@ -99,6 +99,8 @@ pub struct DaemonStatus {
     pub sessions: usize,
     pub folders: Vec<(PathBuf, IndexStatus)>,
     pub cache_status: Option<seyk::CacheStats>,
+    #[serde(default)]
+    pub index_progress: Vec<super::mcp::RootProgress>,
 }
 
 // ---- daemon side -----------------------------------------------------------
@@ -253,6 +255,7 @@ async fn handle(
                 version: env!("CARGO_PKG_VERSION").into(),
                 sessions: sessions.active(),
                 folders: hub.watched(),
+                index_progress: hub.root_progress(None),
                 cache_status: hub.cache_status().ok().flatten(),
             };
             reply(&mut write, Ok(Some(status))).await
