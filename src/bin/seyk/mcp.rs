@@ -46,6 +46,7 @@ pub struct Hub {
     background: bool,
     watched: Mutex<Vec<(PathBuf, Arc<Mutex<IndexStatus>>)>>,
     diagnostics: Mutex<std::collections::HashMap<PathBuf, WatcherDiagnostics>>,
+    progress: Mutex<std::collections::BTreeMap<PathBuf, seyk::IndexProgress>>,
 }
 
 /// One agent session: the folders it may search, and the watchers covering them.
@@ -181,6 +182,9 @@ fn combine_diagnostics(records: impl IntoIterator<Item = IndexDiagnostics>) -> I
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchParams {
+    /// Include counts of returned hits by locator kind (after the limit).
+    #[serde(default)]
+    pub kind_counts: bool,
     /// One to eight phrasings of what you are looking for. Describe the passage
     /// ("the protagonist's name and role"), not only the question.
     pub queries: Vec<String>,
@@ -243,6 +247,9 @@ struct Hit {
 struct Response {
     schema_version: u32,
     hits: Vec<Hit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind_counts: Option<std::collections::BTreeMap<String, usize>>,
+    index_progress: Vec<RootProgress>,
     segments_searched: usize,
     files: usize,
     skipped: Vec<seyk::SkippedCount>,
@@ -255,7 +262,36 @@ struct Response {
     index: Option<IndexStatus>,
 }
 
+/// Per watched root. A session restricted to a child gets no parent inventory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootProgress {
+    pub root: PathBuf,
+    pub progress: Option<seyk::IndexProgress>,
+}
+
 impl Hub {
+    pub fn root_progress(&self, allowed: Option<&[PathBuf]>) -> Vec<RootProgress> {
+        let Ok(watched) = self.watched.lock() else {
+            return Vec::new();
+        };
+        let Ok(progress) = self.progress.lock() else {
+            return Vec::new();
+        };
+        let mut result = std::collections::BTreeMap::new();
+        for (root, _) in watched.iter() {
+            if allowed.is_none_or(|roots| roots.iter().any(|r| root.starts_with(r))) {
+                result.insert(root.clone(), progress.get(root).cloned());
+            } else if let Some(allowed) = allowed {
+                for child in allowed.iter().filter(|r| r.starts_with(root)) {
+                    result.entry(child.clone()).or_insert(None);
+                }
+            }
+        }
+        result
+            .into_iter()
+            .map(|(root, progress)| RootProgress { root, progress })
+            .collect()
+    }
     pub fn new(factory: EngineFactory, background: bool) -> Arc<Self> {
         Arc::new(Self {
             engine: Mutex::new(None),
@@ -263,6 +299,7 @@ impl Hub {
             background,
             watched: Mutex::new(Vec::new()),
             diagnostics: Mutex::new(std::collections::HashMap::new()),
+            progress: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 
@@ -373,6 +410,17 @@ impl Hub {
         };
         indexing(0, 0);
         let progress = |e: ProgressEvent| {
+            if matches!(e, ProgressEvent::Discovered { .. }) {
+                indexing(0, 0);
+                if let Ok(mut roots) = self.progress.lock() {
+                    roots.remove(root);
+                }
+            }
+            if let ProgressEvent::IndexProgress { ref progress } = e
+                && let Ok(mut roots) = self.progress.lock()
+            {
+                roots.insert(root.to_path_buf(), progress.clone());
+            }
             if let ProgressEvent::Embedding { done, total } = e {
                 indexing(done, total);
             }
@@ -394,12 +442,20 @@ impl Hub {
                         }
                         IndexStatus::Ready
                     }
-                    Err(e) => IndexStatus::PassFailed {
-                        error: e.to_string(),
-                    },
+                    Err(e) => {
+                        if let Ok(mut roots) = self.progress.lock() {
+                            roots.remove(root);
+                        }
+                        IndexStatus::PassFailed {
+                            error: e.to_string(),
+                        }
+                    }
                 })
             },
         );
+        if let Ok(mut roots) = self.progress.lock() {
+            roots.remove(root);
+        }
         set(IndexStatus::Stopped {
             error: match result {
                 Ok(()) => "file watcher stopped".into(),
@@ -537,6 +593,7 @@ impl SeykServer {
         let mut req = queries
             .fold(engine.search(first), |r, q| r.query(q))
             .paths(&paths)
+            .kind_counts(p.kind_counts)
             .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT))
             .sync(inline);
         if let Some(m) = p.mode.as_deref() {
@@ -553,6 +610,7 @@ impl SeykServer {
         }
         let mut resp = to_response(req.execute()?);
         resp.index = status;
+        resp.index_progress = self.hub.root_progress(Some(&self.roots));
         resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
     }
@@ -680,6 +738,8 @@ fn to_response(r: SearchResults) -> Response {
     Response {
         schema_version: crate::JSON_SCHEMA_VERSION,
         hits,
+        kind_counts: r.kind_counts,
+        index_progress: Vec::new(),
         segments_searched: r.stats.segments_searched,
         files: r.stats.sync.resources_discovered,
         skipped: r.stats.sync.skipped_counts,
@@ -700,6 +760,21 @@ fn to_response(r: SearchResults) -> Response {
 
 #[tool_router]
 impl SeykServer {
+    #[tool(
+        description = "Current indexing state and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
+    )]
+    async fn index_status(&self) -> Result<CallToolResult, McpError> {
+        let index = self
+            .status()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let status = serde_json::json!({
+            "schema_version": crate::JSON_SCHEMA_VERSION,
+            "index": index,
+            "index_progress": self.hub.root_progress(Some(&self.roots)),
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::json(status)?]))
+    }
+
     #[tool(
         description = "Extract readable evidence from one selected search hit. Pass the entire hit object. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
     )]
@@ -1027,6 +1102,7 @@ mod tests {
     fn search(server: &SeykServer, q: &str) -> Response {
         server
             .run_search(SearchParams {
+                kind_counts: false,
                 queries: vec![q.into()],
                 paths: vec![],
                 limit: None,
@@ -1127,7 +1203,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 6);
+        assert_eq!(response["schema_version"], 7);
         assert!(response.get("cache_status").is_none());
         let canonical = file.canonicalize().unwrap();
         assert_eq!(
@@ -1443,6 +1519,7 @@ mod tests {
 
     fn params(paths: &[PathBuf]) -> SearchParams {
         SearchParams {
+            kind_counts: false,
             queries: vec!["quartz".into()],
             paths: paths.iter().map(|p| p.to_str().unwrap().into()).collect(),
             limit: None,
@@ -1451,6 +1528,74 @@ mod tests {
             exclude: vec![],
             mode: None,
         }
+    }
+
+    #[test]
+    fn root_progress_is_scoped_and_does_not_leak_parent_inventory() {
+        let base = tempfile::tempdir().unwrap();
+        let a = base.path().join("a");
+        let b = base.path().join("b");
+        let child = a.join("child");
+        for path in [&a, &b, &child] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let a = a.canonicalize().unwrap();
+        let b = b.canonicalize().unwrap();
+        let child = child.canonicalize().unwrap();
+        let (server, _) = ownership_server(
+            vec![child.clone()],
+            vec![
+                (a.clone(), IndexStatus::Ready),
+                (b.clone(), IndexStatus::Ready),
+            ],
+        );
+        let progress = seyk::IndexProgress {
+            by_kind: [(
+                "text".into(),
+                seyk::KindProgress {
+                    indexed: 41,
+                    waiting: 9,
+                    skipped: 2,
+                },
+            )]
+            .into(),
+            eta_seconds: Some(3),
+        };
+        server
+            .hub
+            .progress
+            .lock()
+            .unwrap()
+            .insert(a.clone(), progress.clone());
+        server
+            .hub
+            .progress
+            .lock()
+            .unwrap()
+            .insert(b.clone(), progress.clone());
+        let confined = server.hub.root_progress(Some(&server.roots));
+        assert_eq!(confined.len(), 1);
+        assert_eq!(confined[0].root, child);
+        assert!(confined[0].progress.is_none());
+        let own = server.hub.root_progress(Some(&[a]));
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].progress.as_ref(), Some(&progress));
+        assert_eq!(server.hub.root_progress(None).len(), 2);
+    }
+
+    #[test]
+    fn mcp_returns_the_same_opt_in_counts_as_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "quartz lighthouse").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "quartz harbor").unwrap();
+        let (server, _) = ownership_server(vec![dir.path().to_path_buf()], Vec::new());
+        let mut request = params(&[]);
+        request.queries = vec!["quartz".into()];
+        request.kind_counts = true;
+        request.limit = Some(1);
+        let response = server.run_search(request).unwrap();
+        assert_eq!(response.kind_counts.unwrap()["text"], response.hits.len());
+        assert_eq!(response.hits.len(), 1);
     }
 
     /// Seed statuses without live threads so only the search can embed documents.

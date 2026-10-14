@@ -1,0 +1,3459 @@
+[
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "hybrid",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "hybrid",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.3935483694076538,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681911826133728,
+            "semantic": 0.30151134729385376
+          }
+        },
+        "score_bits": 1053392684
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.19365081191062927,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1044794470
+      }
+    ],
+    "limit": 3,
+    "mode": "hybrid",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.3935483694076538,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681911826133728,
+            "semantic": 0.30151134729385376
+          }
+        },
+        "score_bits": 1053392684
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.19365081191062927,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1044794470
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.19062499701976776,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1044591411
+      }
+    ],
+    "limit": 20,
+    "mode": "hybrid",
+    "query": "father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "hybrid",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "hybrid",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855139255523682,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.4841270446777344,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056432000
+      }
+    ],
+    "limit": 3,
+    "mode": "hybrid",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855139255523682,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.4841270446777344,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056432000
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4765625298023224,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056178177
+      }
+    ],
+    "limit": 20,
+    "mode": "hybrid",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "hybrid",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "hybrid",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1064820608
+      }
+    ],
+    "limit": 3,
+    "mode": "hybrid",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1064820608
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.4765625298023224,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056178177
+      }
+    ],
+    "limit": 20,
+    "mode": "hybrid",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "hybrid",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "hybrid",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.9760624766349792,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8513954877853394,
+            "semantic": 0.26726123690605164
+          }
+        },
+        "score_bits": 1064951611
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9760624766349792,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1064951611
+      }
+    ],
+    "limit": 3,
+    "mode": "hybrid",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.9760624766349792,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8513954877853394,
+            "semantic": 0.26726123690605164
+          }
+        },
+        "score_bits": 1064951611
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9760624766349792,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1064951611
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4765625298023224,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056178177
+      }
+    ],
+    "limit": 20,
+    "mode": "hybrid",
+    "query": "basil"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "hybrid",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "hybrid",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.4841270446777344,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056432000
+      }
+    ],
+    "limit": 3,
+    "mode": "hybrid",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.4841270446777344,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056432000
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4765625298023224,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 1056178177
+      }
+    ],
+    "limit": 20,
+    "mode": "hybrid",
+    "query": "absent"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "semantic",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      }
+    ],
+    "limit": 1,
+    "mode": "semantic",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.30151134729385376,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.30151134729385376
+          }
+        },
+        "score_bits": 1050304434
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 3,
+    "mode": "semantic",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.30151134729385376,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.30151134729385376
+          }
+        },
+        "score_bits": 1050304434
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 20,
+    "mode": "semantic",
+    "query": "father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "semantic",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.6396021842956543,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1059306744
+      }
+    ],
+    "limit": 1,
+    "mode": "semantic",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.6396021842956543,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1059306744
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 3,
+    "mode": "semantic",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.6396021842956543,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.6396021842956543
+          }
+        },
+        "score_bits": 1059306744
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 20,
+    "mode": "semantic",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "semantic",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4472135901451111,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1055193390
+      }
+    ],
+    "limit": 1,
+    "mode": "semantic",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4472135901451111,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1055193390
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      }
+    ],
+    "limit": 3,
+    "mode": "semantic",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.4472135901451111,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.4472135901451111
+          }
+        },
+        "score_bits": 1055193390
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 20,
+    "mode": "semantic",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "semantic",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      }
+    ],
+    "limit": 1,
+    "mode": "semantic",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.26726123690605164,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.26726123690605164
+          }
+        },
+        "score_bits": 1049155191
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      }
+    ],
+    "limit": 3,
+    "mode": "semantic",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.26726123690605164,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.26726123690605164
+          }
+        },
+        "score_bits": 1049155191
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 20,
+    "mode": "semantic",
+    "query": "basil"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "semantic",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      }
+    ],
+    "limit": 1,
+    "mode": "semantic",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 3,
+    "mode": "semantic",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 1,
+          "resource": "mem://golden/father.md",
+          "score": 0.3162277638912201,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.3162277638912201
+          }
+        },
+        "score_bits": 1050798235
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 1,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.21320071816444397,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.21320071816444397
+          }
+        },
+        "score_bits": 1046106442
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 0.0,
+          "signals": {
+            "filename": false,
+            "lexical": null,
+            "semantic": 0.0
+          }
+        },
+        "score_bits": 0
+      }
+    ],
+    "limit": 20,
+    "mode": "semantic",
+    "query": "absent"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "lexical",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "lexical",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.24596774578094482,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681911826133728,
+            "semantic": null
+          }
+        },
+        "score_bits": 1048305400
+      }
+    ],
+    "limit": 3,
+    "mode": "lexical",
+    "query": "father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": true,
+            "lexical": 1.4855139255523682,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.24596774578094482,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681911826133728,
+            "semantic": null
+          }
+        },
+        "score_bits": 1048305400
+      }
+    ],
+    "limit": 20,
+    "mode": "lexical",
+    "query": "father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "lexical",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "lexical",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855139255523682,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      }
+    ],
+    "limit": 3,
+    "mode": "lexical",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 2.5910849571228027,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855139255523682,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      }
+    ],
+    "limit": 20,
+    "mode": "lexical",
+    "query": "kitchen father"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "lexical",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "lexical",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1064820608
+      }
+    ],
+    "limit": 3,
+    "mode": "lexical",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 52,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "4e47362134117490519b99e67bcdb4505589880c0f7dd403b54e4ac3644b4c23",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 52
+          },
+          "preview": "Outage review INC-18372: the restore path never ran.",
+          "query_index": 0,
+          "resource": "mem://golden/incident.txt",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.7027909755706787,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1064820608
+      }
+    ],
+    "limit": 20,
+    "mode": "lexical",
+    "query": "INC-18372"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "lexical",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "lexical",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8513954877853394,
+            "semantic": null
+          }
+        },
+        "score_bits": 1064820608
+      }
+    ],
+    "limit": 3,
+    "mode": "lexical",
+    "query": "basil"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 49,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "d0cf02e4c1af9e65ca4bc04f890a871ba3e264416660161e3daaba4ba233dae1",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 49
+          },
+          "preview": "Tomatoes need sun and a little basil beside them.",
+          "query_index": 0,
+          "resource": "mem://golden/garden.md",
+          "score": 0.9682540893554688,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8513954877853394,
+            "semantic": null
+          }
+        },
+        "score_bits": 1064820608
+      }
+    ],
+    "limit": 20,
+    "mode": "lexical",
+    "query": "basil"
+  },
+  {
+    "hits": [],
+    "limit": 0,
+    "mode": "lexical",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      }
+    ],
+    "limit": 1,
+    "mode": "lexical",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      }
+    ],
+    "limit": 3,
+    "mode": "lexical",
+    "query": "absent"
+  },
+  {
+    "hits": [
+      {
+        "hit": {
+          "heading": "Family",
+          "locator": {
+            "byte_end": 57,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 2,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "ae553f0d1efe7462895e2291df02a92d9d5a02e4120766bd28fd72fe01c9afff",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 57
+          },
+          "preview": "He repeats the gestures he swore he never would.",
+          "query_index": 0,
+          "resource": "mem://golden/father.md",
+          "score": 1.0,
+          "signals": {
+            "filename": false,
+            "lexical": 1.4855118989944458,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065353216
+      },
+      {
+        "hit": {
+          "heading": null,
+          "locator": {
+            "byte_end": 47,
+            "byte_start": 0,
+            "kind": "text",
+            "line_end": 1,
+            "line_start": 1
+          },
+          "metadata": {
+            "content_hash": "04ac0b491481d5c4ab4e7d987d8bc6ec0b194d4bafdeae7a2cbe4cb4d3dc6a7f",
+            "modality": "text",
+            "modified_ns": null,
+            "size_bytes": 47
+          },
+          "preview": "My father painted the kitchen yellow in spring.",
+          "query_index": 0,
+          "resource": "mem://golden/kitchen.txt",
+          "score": 0.9838709831237793,
+          "signals": {
+            "filename": false,
+            "lexical": 0.8681901097297668,
+            "semantic": null
+          }
+        },
+        "score_bits": 1065082616
+      }
+    ],
+    "limit": 20,
+    "mode": "lexical",
+    "query": "absent"
+  }
+]

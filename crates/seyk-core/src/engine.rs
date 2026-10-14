@@ -133,6 +133,9 @@ pub struct PageDiagnostic {
 /// What happened while bringing the cache up to date.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStats {
+    /// Current-pass resource inventory (unavailable when synchronization is disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<crate::IndexProgress>,
     pub resources_discovered: usize,
     /// Reused from cache without re-embedding.
     pub resources_unchanged: usize,
@@ -162,6 +165,9 @@ pub struct SearchResults {
     pub mode: SearchMode,
     pub hits: Vec<SearchHit>,
     pub stats: SearchStats,
+    /// Counts of returned hits, after ranking and limit, keyed by locator kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_counts: Option<std::collections::BTreeMap<String, usize>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -176,6 +182,10 @@ pub struct IndexReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgressEvent {
+    /// Resource counts for this indexing pass; independent of batch-local segments.
+    IndexProgress {
+        progress: crate::IndexProgress,
+    },
     Discovered {
         resources: usize,
     },
@@ -186,8 +196,9 @@ pub enum ProgressEvent {
     },
 }
 
-/// Called without the cache mutex held. During embedding, the indexing lease
-/// is held: callbacks may inspect the cache or search with `sync(false)`, but
+/// Called without the cache mutex held. Resource-count and embedding events
+/// hold the indexing lease: callbacks may inspect the cache or search with
+/// `sync(false)`, but
 /// must not synchronously start another indexing pass or call `scrub_cache`
 /// on the same engine, since either would reacquire the indexing lease.
 pub type ProgressFn<'a> = &'a (dyn Fn(ProgressEvent) + Sync);
@@ -550,6 +561,7 @@ impl SearchEngine {
             sync: true,
             mode: SearchMode::default(),
             lexical_weight: None,
+            kind_counts: false,
         }
     }
 
@@ -667,8 +679,14 @@ impl SearchEngine {
         let pid = self.profile_id.as_str();
         let known = self.with_cache(|c| c.resource_index(pid))?;
 
+        let telemetry = crate::progress::PassProgress::new(resources, progress);
         let mut pending: Vec<Pending> = Vec::new();
+        let mut reported_skips = 0;
         for r in resources {
+            for skipped in &stats.skipped[reported_skips..] {
+                telemetry.complete(&skipped.resource, false, false);
+            }
+            reported_skips = stats.skipped.len();
             let modality = r.kind.modality();
             if !self.supports_kind(r.kind) {
                 stats.skipped.push(skip(
@@ -722,6 +740,7 @@ impl SearchEngine {
                 } else {
                     stats.resources_unchanged += 1;
                     self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
+                    telemetry.complete(&r.id, stats.skipped.len() == reported_skips, false);
                 }
                 continue;
             }
@@ -785,6 +804,7 @@ impl SearchEngine {
                     metadata.modified_ns = r.modified_ns;
                     self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                     stats.resources_unchanged += 1;
+                    telemetry.complete(&r.id, true, false);
                     continue;
                 }
                 use std::io::{Read, Seek};
@@ -818,6 +838,8 @@ impl SearchEngine {
                 };
                 if let Some(reason) = self.sync_audio(r, source, target, &mut stats, progress)? {
                     stats.skipped.push(skip(&r.id, reason));
+                } else {
+                    telemetry.complete(&r.id, true, true);
                 }
                 continue;
             }
@@ -852,6 +874,7 @@ impl SearchEngine {
                 self.with_cache(|c| c.touch_resource(pid, &r.id, &metadata, &version))?;
                 stats.resources_unchanged += 1;
                 self.replay_pdf_diagnostics(&r.id, &descriptor_hash, &mut stats)?;
+                telemetry.complete(&r.id, stats.skipped.len() == reported_skips, false);
                 continue;
             }
             let metadata = ResourceMetadata {
@@ -878,6 +901,8 @@ impl SearchEngine {
                 };
                 if let Some(entry) = self.sync_pdf(r, bytes, target, &mut stats, progress)? {
                     stats.skipped.push(entry);
+                } else {
+                    telemetry.complete(&r.id, true, true);
                 }
                 continue;
             }
@@ -893,6 +918,10 @@ impl SearchEngine {
                 }),
                 Err(reason) => stats.skipped.push(skip(&r.id, reason)),
             }
+        }
+
+        for skipped in &stats.skipped[reported_skips..] {
+            telemetry.complete(&skipped.resource, false, false);
         }
 
         // Only inputs the cache has never seen go to the model.
@@ -945,13 +974,26 @@ impl SearchEngine {
             // Persist every resource whose segments are now all embedded, so an
             // interrupted run keeps its progress.
             let ready_upto = batch.last().map(|(ri, _)| *ri).unwrap_or(0);
-            written = self.write_resources(&pending, written, ready_upto, &failed, &mut stats)?;
+            written = self.write_resources(
+                &pending, written, ready_upto, &failed, &mut stats, &telemetry,
+            )?;
         }
-        self.write_resources(&pending, written, pending.len(), &failed, &mut stats)?;
+        self.write_resources(
+            &pending,
+            written,
+            pending.len(),
+            &failed,
+            &mut stats,
+            &telemetry,
+        )?;
         stats.embed_ms += started.elapsed().as_millis() as u64;
         if stats.resources_updated > 0 {
             self.with_cache(|c| c.prune_orphans(pid))?;
         }
+        for skipped in &stats.skipped {
+            telemetry.complete(&skipped.resource, false, false);
+        }
+        stats.progress = Some(telemetry.snapshot());
         stats.skipped_counts = skipped_counts(&stats.skipped);
         Ok(stats)
     }
@@ -964,6 +1006,7 @@ impl SearchEngine {
         upto: usize,
         failed: &HashMap<String, String>,
         stats: &mut SyncStats,
+        telemetry: &crate::progress::PassProgress<'_>,
     ) -> Result<usize> {
         let pid = self.profile_id.as_str();
         for p in pending.iter().take(upto).skip(from) {
@@ -973,6 +1016,7 @@ impl SearchEngine {
                 .find_map(|j| failed.get(&j.segment.input_hash))
             {
                 stats.skipped.push(skip(&p.resource, reason.clone()));
+                telemetry.complete(&p.resource, false, false);
                 continue;
             }
             let resource = ResourceWrite {
@@ -990,6 +1034,7 @@ impl SearchEngine {
             };
             self.with_cache(|c| c.put_resource(pid, &p.resource, &resource))?;
             stats.resources_updated += 1;
+            telemetry.complete(&p.resource, true, true);
             stats.page_diagnostics.extend(p.page_diagnostics.clone());
         }
         Ok(upto.max(from))
@@ -1684,9 +1729,16 @@ pub struct SearchRequest<'e> {
     sync: bool,
     mode: SearchMode,
     lexical_weight: Option<f32>,
+    kind_counts: bool,
 }
 
 impl<'e> SearchRequest<'e> {
+    /// Include counts of returned hits by locator kind; no second search is run.
+    pub fn kind_counts(mut self, enabled: bool) -> Self {
+        self.kind_counts = enabled;
+        self
+    }
+
     /// Add provider-specific roots without filesystem path conversion.
     pub fn roots(mut self, roots: impl IntoIterator<Item = ResourceId>) -> Self {
         self.roots.extend(roots);
@@ -2030,7 +2082,15 @@ impl<'e> SearchRequest<'e> {
             });
         }
 
+        let kind_counts = self.kind_counts.then(|| {
+            let mut counts = std::collections::BTreeMap::new();
+            for hit in &hits {
+                *counts.entry(hit.locator.kind().to_owned()).or_insert(0) += 1;
+            }
+            counts
+        });
         Ok(SearchResults {
+            kind_counts,
             queries: self.queries,
             mode: self.mode,
             hits,

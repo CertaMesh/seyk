@@ -20,7 +20,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 6;
+const JSON_SCHEMA_VERSION: u32 = 7;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -155,6 +155,9 @@ enum Command {
         /// Do not read previews. JSON hits retain preview: null.
         #[arg(long)]
         no_preview: bool,
+        /// Include returned-hit counts by locator kind in JSON.
+        #[arg(long)]
+        kind_counts: bool,
         /// Print results as JSON.
         #[arg(long)]
         json: bool,
@@ -342,6 +345,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             min_score,
             no_cache,
             no_preview,
+            kind_counts,
             json,
             filter,
             model,
@@ -354,6 +358,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .into_iter()
                 .fold(engine.search(&query), |r, q| r.query(q))
                 .mode(mode)
+                .kind_counts(kind_counts)
                 .paths(&paths)
                 .limit(limit)
                 .discovery(filter.discovery())
@@ -813,6 +818,22 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
             .and_then(|v| v["state"].as_str().map(str::to_string))
             .unwrap_or_default();
         out.push_str(&format!("  {state:<14} {}\n", folder.display()));
+        if let Some(progress) = s
+            .index_progress
+            .iter()
+            .find(|p| &p.root == folder)
+            .and_then(|p| p.progress.as_ref())
+        {
+            for (kind, counts) in &progress.by_kind {
+                out.push_str(&format!(
+                    "    {kind}: {} indexed, {} waiting, {} skipped\n",
+                    counts.indexed, counts.waiting, counts.skipped
+                ));
+            }
+            if let Some(seconds) = progress.eta_seconds {
+                out.push_str(&format!("    estimated remaining: {seconds}s\n"));
+            }
+        }
     }
     out
 }
@@ -825,9 +846,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=6)
+        Some(2..=7)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4, 5 or 6");
+        bail!("expected search JSON schema_version 2, 3, 4, 5, 6 or 7");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -1287,6 +1308,7 @@ mod tests {
 
     fn results() -> SearchResults {
         SearchResults {
+            kind_counts: None,
             queries: vec!["father".into()],
             mode: SearchMode::Semantic,
             hits: vec![
@@ -1436,7 +1458,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 6);
+        assert_eq!(v["schema_version"], 7);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1456,12 +1478,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["schema_version"], 7);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            6
+            7
         );
     }
 
@@ -1492,7 +1514,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["schema_version"], 7);
         assert!(
             value["hits"]
                 .as_array()

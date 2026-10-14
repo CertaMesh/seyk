@@ -30,8 +30,10 @@ pub mod index;
 pub mod lexical;
 #[cfg(unix)]
 pub mod local_content;
+mod progress;
 pub mod provider;
 mod resource;
+pub use progress::{IndexProgress, KindProgress};
 pub mod segment;
 #[cfg(feature = "watch")]
 pub mod watch;
