@@ -1,10 +1,111 @@
 # Benchmarks
 
-> **Caveat.** Every number here was measured on an Apple M5 Max (18 cores) **while
+> **Timing caveat.** The historical timing measurements below used an Apple M5 Max (18 cores) **while
 > other, unrelated builds and benchmarks were running** (1-minute load average 23–80,
 > recorded per run). Treat absolute timings as pessimistic and approximate. Ratios
 > measured in the same run are more reliable. Rerun on a quiet machine before
 > quoting them.
+
+## Published retrieval comparison
+
+Measured on 2026-10-14 with Seyk 0.1.0, clean commit
+`28814a851ded4d1b3d5e0def1d112094a852e334` (the current `origin/main` when these runs started).
+The chart records that measured commit; later documentation commits do not change
+the search engine. Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads. ONNX Runtime CPU inference, q8,
+256-dimensional vectors, default segmentation and fusion, 200-segment retrieval
+depth, all hybrid/semantic/lexical queries. Model:
+`onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
+Only provisioned weights were used; SHA-256 hashes were checked against the pinned
+model files. Compatible document embedding caches were reused; every query was
+rerun. This measures ranking quality, not cold indexing speed.
+
+The full test splits contain 5,183 documents / 300 queries (SciFact),
+3,633 / 323 (NFCorpus), and 3,226 nonempty pages / 180 queries (IRPAPERS text).
+All 180 IRPAPERS questions remain in the denominator, including the question
+whose relevant page has an empty transcription. Resource-level metrics use the
+first returned segment per resource; IRPAPERS text resources are individual pages.
+One-minute load samples across these runs: SciFact: 25.4–35.5; NFCorpus: 17.9–22.4; IRPAPERS text: 17.2–23.9.
+No timing or quiet-machine performance claim is made.
+
+| Dataset | Seyk mode | nDCG@10 | MRR@10 | Recall@10 |
+|---|---|---:|---:|---:|
+| SciFact | hybrid | 0.76764 | 0.73208 | 0.89189 |
+| SciFact | semantic | 0.82192 | 0.80290 | 0.90122 |
+| SciFact | lexical | 0.64764 | 0.61227 | 0.77867 |
+| NFCorpus | hybrid | 0.35968 | 0.56807 | 0.17379 |
+| NFCorpus | semantic | 0.33831 | 0.54093 | 0.16152 |
+| NFCorpus | lexical | 0.30220 | 0.50526 | 0.14644 |
+| IRPAPERS text | hybrid | 0.63204 | 0.56024 | 0.85556 |
+| IRPAPERS text | semantic | 0.58941 | 0.51834 | 0.81111 |
+| IRPAPERS text | lexical | 0.62941 | 0.56413 | 0.83333 |
+
+Hybrid trails semantic-only on SciFact. This known fusion limitation is tracked
+in Solo todo 4542; this documentation change does not tune ranking.
+nDCG@10 rewards relevant documents near the top of the first ten results, with
+linear graded relevance and a 0–1 scale (higher is better).
+
+### Published systems and sources
+
+These are published results from **different setups**, not systems rerun on this
+machine. BEIR/MTEB retrieval embeds or indexes whole documents without Seyk's
+segmentation; neural models can truncate inputs at their context limit. Prompts,
+model precision, dimensions, training data, scoring implementations and index
+configuration can differ. Do not interpret the bars as a controlled comparison or
+as a measurement of Seyk's underlying embedding model in isolation.
+Model-card nDCG@10 percentages are divided by 100. Sources retrieved 2026-10-14.
+
+| Published system | SciFact nDCG@10 | NFCorpus nDCG@10 | Protocol |
+|---|---:|---:|---|
+| [bge-large-en-v1.5](https://huggingface.co/BAAI/bge-large-en-v1.5/blob/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md) | 0.74607 | 0.38129 | MTEB/BEIR test; whole documents, no chunking; 1024 dimensions; model-specific prompts; inputs truncated at model context limit |
+| [bge-base-en-v1.5](https://huggingface.co/BAAI/bge-base-en-v1.5/blob/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md) | 0.74039 | 0.37389 | MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit |
+| [e5-base-v2](https://huggingface.co/intfloat/e5-base-v2/blob/f52bf8ec8c7124536f0efb74aca902b2995e5bcd/README.md) | 0.71944 | 0.35389 | MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit |
+| [BM25 (BEIR)](https://arxiv.org/html/2104.08663v4#S5.T2) | 0.665 | 0.325 | BEIR test; whole documents, no chunking; Anserini/Lucene BM25 k=0.9, b=0.4; separate title and passage fields |
+
+No per-dataset SciFact/NFCorpus nDCG@10 scores were found for EmbeddingGemma 2 in
+[Google's model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2)
+or the [MTEB GitHub results](https://github.com/embeddings-benchmark/results)
+and [MTEB aggregate archive](https://huggingface.co/datasets/mteb/results/tree/2246f8f15ca638d26179d396c71f4fceae4f80da)
+checked on that date; the card gives aggregate
+MTEB scores, which cannot substitute for dataset-level scores. The same check
+found no English SciFact/NFCorpus rows for the older EmbeddingGemma-300M variant.
+The chart therefore has no published EmbeddingGemma bar. IRPAPERS' original
+[dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md)
+reports recall, not nDCG@10, so it has no published comparison bar either.
+
+### Reproduce the chart
+
+The [comparison manifest](benchmarks/comparisons.toml) retains each source title,
+URL, retrieval date, protocol and numeric source score. The small
+[aggregate snapshots](benchmarks/results) retain measured provenance and metrics;
+no dataset text, document maps, per-query rows or per-document hash lists are
+committed. This run's per-query rows and uv environments were deleted after scoring.
+When datasets are shared with concurrent runs, retain the raw inputs and
+materialized corpora until every consumer finishes; coordinate cleanup with the
+orchestrator. Preserve provisioned model files.
+
+Run the public retrieval pipeline below for `scifact`, `nfcorpus` and `irpapers`,
+with `--dimension 256 --precision q8 --threads 2 --depth 200
+--modes hybrid,semantic,lexical`. Hold the project's shared local-gate lock during
+runs. Score the three files for each dataset together. The chart command defaults
+to `~/.cache/seyk-bench/results`; it picks the newest matching aggregate per
+dataset by modification time, with filename as the tie-breaker, for an explicit
+full commit SHA. It ignores other dimensions, precisions and ranking/depth
+settings, and rejects dirty, incomplete or inconsistent mode provenance.
+Use a dedicated result directory to reproduce an exact archived selection:
+
+```bash
+python3.12 scripts/bench/chart.py \
+  --results docs/benchmarks/results \
+  --commit 28814a851ded4d1b3d5e0def1d112094a852e334 \
+  --version 0.1.0 \
+  --machine 'Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads'
+python3.12 -m unittest discover -s scripts/bench -p test_chart.py
+```
+
+Rendering uses Python 3.11+ and its standard library only. The SVG uses a fixed
+0–1 axis, embeds light/dark styles and contains no timestamp or host-dependent
+content. Given the same selected inputs and caption arguments, output bytes are
+identical.
 
 ## Reproduce
 
@@ -379,9 +480,5 @@ The pinned full IRPAPERS CSV contains four empty-transcription pages among its
 documents. One qrel targets a skipped page and remains a miss; the manifest and
 score output record that count.
 
-Published comparison points: SciFact BM25/TAS-B nDCG@10 .665/.643 and NFCorpus
-.325/.319 ([BEIR baselines](https://github.com/beir-cellar/beir/wiki/Results));
-IRPAPERS text hybrid Recall@1/5/20 .46/.78/.91
-([original dataset card](https://huggingface.co/datasets/weaviate/IRPAPERS/blob/7d8ca2f6dd9efded3e27013d15782d584f93e9da/README.md)).
-Report aggregate results with the dataset/model revisions, commit, machine and
-load context. Schedule full runs separately from the harness PR.
+See [the current published comparison](#published-retrieval-comparison) for
+full measured results, source links and setup differences.

@@ -40,6 +40,20 @@ generate answers or summaries. Audio retrieval and on-demand speech-to-text
 extraction are [opt-in](#speech-to-text-extraction-opt-in); scanned PDFs support
 image-based retrieval, with [OCR still a follow-up](#pdfs).
 
+## Benchmarks
+
+![Seyk hybrid, semantic and lexical retrieval compared with sourced published model scores; higher nDCG@10 is better](docs/assets/benchmarks.svg)
+
+nDCG@10 measures how well the first ten results rank relevant documents, giving
+more credit to relevant results near the top. Scores range from 0 to 1; published
+bars use different models and whole-document setups, so they provide context
+rather than a controlled comparison with Seyk's segmented-document retrieval.
+
+Seyk 0.1.0 at `28814a851ded` · EmbeddingGemma 2 · q8 · 256 dimensions · CPU ·
+Apple M5 Max (18 cores, 64 GiB), macOS 26.5 · 2 inference threads.
+Hybrid trails semantic-only on SciFact; fusion tuning is tracked in todo 4542.
+See [full results, sources and reproduction steps](docs/benchmarks.md#published-retrieval-comparison).
+
 ## Why EmbeddingGemma 2
 
 - **Small and local.** The text part is 270M parameters. It runs on a laptop CPU,
