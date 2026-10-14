@@ -414,7 +414,7 @@ fn docker_symlink_root_preserves_context_and_filters_cached_results() {
         Err(Error::SecretFile { .. })
     ));
     assert!(matches!(
-        discover(&[logical.clone()], &permissive()),
+        discover(std::slice::from_ref(&logical), &permissive()),
         Err(Error::SecretFile { .. })
     ));
     let engine = SearchEngine::builder()
