@@ -3,8 +3,9 @@ mod common;
 
 use seyk_core::local_content::LocalContentProvider;
 use seyk_core::{
-    Dimension, ProvidedResource, ResourceId, ResourceProvider, ResourceScope, ResourceVersion,
-    Result, SearchEngine, SearchMode, SqliteCache,
+    DegradedMode, DegradedReason, Dimension, ProgressEvent, ProvidedResource, ResourceId,
+    ResourceProvider, ResourceScope, ResourceVersion, Result, SearchDegradation, SearchEngine,
+    SearchMode, SqliteCache,
 };
 use std::fs;
 use std::sync::{
@@ -139,6 +140,87 @@ fn indexed_only_query_uses_cached_hook_and_preserves_sqlite_signals() {
         .unwrap();
     assert_eq!(updated.stats.sync.resources_discovered, 2);
     assert_eq!(updated.hits.len(), 2);
+}
+
+#[test]
+fn pending_lexical_fallback_keeps_indexed_only_scope() {
+    let temporary = tempfile::Builder::new()
+        .prefix("cached-local-pending-")
+        .tempdir()
+        .unwrap();
+    let base = temporary.path().canonicalize().unwrap();
+    let root = base.join("content");
+    fs::create_dir(&root).unwrap();
+    let path = root.join("quartz.md");
+    fs::write(&path, "public quartz orchard notes").unwrap();
+    fs::write(root.join("id_rsa.txt"), "synthetic quartz secret").unwrap();
+    let lists = Arc::new(AtomicUsize::new(0));
+    let cached = Arc::new(AtomicUsize::new(0));
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "cached-pending"))
+        .cache(SqliteCache::open(base.join("cache.sqlite3")).unwrap())
+        .provider(ListingSpy {
+            inner: LocalContentProvider::new(std::slice::from_ref(&root)).unwrap(),
+            lists: lists.clone(),
+            cached: cached.clone(),
+        })
+        .build()
+        .unwrap();
+    engine.index().paths([&root]).execute().unwrap();
+    lists.store(0, Ordering::SeqCst);
+    fs::write(root.join("uncached.md"), "public unindexed quartz orchard").unwrap();
+    // Edited but not yet re-embedded: the fallback must prepare only this
+    // indexed identity, never walk the root for the unindexed sibling.
+    fs::write(&path, "public quartz orchard notes, edited after indexing").unwrap();
+    let discovered = AtomicUsize::new(0);
+    let walked = AtomicUsize::new(0);
+    let progress = |event: ProgressEvent| match event {
+        ProgressEvent::Discovered { .. } => {
+            discovered.fetch_add(1, Ordering::SeqCst);
+        }
+        ProgressEvent::Walked { .. } => {
+            walked.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
+    };
+    let fallback = engine
+        .search("quartz")
+        .paths([&root])
+        .sync(false)
+        .lexical_fallback(true)
+        .kind_counts(true)
+        .progress(&progress)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        0,
+        "Pending fallback must never recurse via list"
+    );
+    assert_eq!(cached.load(Ordering::SeqCst), 1);
+    assert_eq!(discovered.load(Ordering::SeqCst), 1, "Discovered once");
+    assert_eq!(walked.load(Ordering::SeqCst), 0, "No walk to report");
+    assert_eq!(
+        fallback.degraded,
+        Some(SearchDegradation {
+            mode: DegradedMode::LexicalOnly,
+            reason: DegradedReason::NotYetEmbedded,
+        })
+    );
+    let files: Vec<_> = fallback
+        .hits
+        .iter()
+        .map(|hit| hit.resource.to_file_path().unwrap())
+        .collect();
+    assert_eq!(files, vec![path.clone()], "Only the indexed identity");
+    assert_eq!(fallback.stats.sync.resources_discovered, 1);
+    assert_eq!(
+        fallback.kind_counts,
+        Some(std::collections::BTreeMap::from([(
+            fallback.hits[0].locator.kind().to_owned(),
+            1
+        )]))
+    );
 }
 
 #[test]

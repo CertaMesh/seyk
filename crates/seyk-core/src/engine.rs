@@ -657,6 +657,7 @@ impl SearchEngine {
             lexical_weight: None,
             lexical_fallback: false,
             kind_counts: false,
+            listed: None,
         }
     }
 
@@ -1894,6 +1895,9 @@ pub struct SearchRequest<'e> {
     lexical_weight: Option<f32>,
     lexical_fallback: bool,
     kind_counts: bool,
+    /// Resources the outer request already listed and authorized. A nested
+    /// fallback prepares exactly these, so it never widens scope or re-walks.
+    listed: Option<Vec<ProvidedResource>>,
 }
 
 impl<'e> SearchRequest<'e> {
@@ -2022,24 +2026,32 @@ impl<'e> SearchRequest<'e> {
         let pid = engine.profile_id.as_str();
         // Only opted-in providers authorize the indexed subset without walking
         // uncached descendants. Default providers retain their original list path.
-        let cached_metadata = if !self.sync && engine.provider.supports_cached_listing() {
-            Some(engine.with_cache(|c| c.resource_index(pid))?)
+        let listed = self.listed.take();
+        let cached_metadata =
+            if listed.is_none() && !self.sync && engine.provider.supports_cached_listing() {
+                Some(engine.with_cache(|c| c.resource_index(pid))?)
+            } else {
+                None
+            };
+        let resources = if let Some(listed) = listed {
+            // The outer request already reported Walked/Discovered.
+            listed
         } else {
-            None
+            let resources = if let Some(metadata) = &cached_metadata {
+                let ids: Vec<_> = metadata.keys().cloned().collect();
+                engine.provider.list_cached(&scope, &ids)?
+            } else {
+                let listing = engine.provider.list_walked(&scope)?;
+                report_walked(self.progress, listing.walked_roots);
+                listing.resources
+            };
+            if let Some(p) = self.progress {
+                p(ProgressEvent::Discovered {
+                    resources: resources.len(),
+                });
+            }
+            resources
         };
-        let resources = if let Some(metadata) = &cached_metadata {
-            let ids: Vec<_> = metadata.keys().cloned().collect();
-            engine.provider.list_cached(&scope, &ids)?
-        } else {
-            let listing = engine.provider.list_walked(&scope)?;
-            report_walked(self.progress, listing.walked_roots);
-            listing.resources
-        };
-        if let Some(p) = self.progress {
-            p(ProgressEvent::Discovered {
-                resources: resources.len(),
-            });
-        }
         if self.lexical_fallback && !self.sync && !engine.lexical_only {
             let cached = engine.with_cache(|c| c.resource_index(&engine.profile_id))?;
             let mut pending = false;
@@ -2059,6 +2071,7 @@ impl<'e> SearchRequest<'e> {
                 let mut results = SearchRequest {
                     engine: &lexical,
                     sync: true,
+                    listed: Some(resources),
                     ..self
                 }
                 .execute()?;
