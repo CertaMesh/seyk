@@ -1544,6 +1544,8 @@ impl EmbeddingCache for SqliteCache {
         }
         // Resolve final keys in batches, keeping arbitrary path bytes intact.
         // Bound placeholders below SQLite's variable limit even for large limits.
+        // CROSS JOIN keeps the small requested set outermost: reordering can
+        // scan the whole profile and join every sibling of a large resource.
         let mut positions = HashMap::new();
         for (batch, chunk) in keys.chunks(400).enumerate() {
             let values = (0..chunk.len())
@@ -1553,7 +1555,7 @@ impl EmbeddingCache for SqliteCache {
             let sql = format!(
                 "WITH requested(path, ordinal, position) AS (VALUES {values})
                 SELECT s.rowid, r.position FROM requested r
-                JOIN segments s ON s.path = r.path AND s.ordinal = r.ordinal
+                CROSS JOIN segments s ON s.path = r.path AND s.ordinal = r.ordinal
                 WHERE s.profile = ?"
             );
             let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
