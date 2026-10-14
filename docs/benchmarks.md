@@ -463,17 +463,19 @@ DigUp's `hybrid` mode uses its stock `index --include-datasets` and persistent
 disabled. Its index must contain every corpus file, with no pending/unfinished
 files. A silent keyword fallback is an error. LEANN's `contriever` mode explicitly
 selects local Contriever with its stock HNSW CLI ingestion/chunking and persistent
-search API on CPU; Contriever is not the current macOS CLI default (MiniLM is).
+search API with PyTorch MPS embedding; Contriever is not the current macOS CLI
+default (MiniLM is). HNSW traversal remains on CPU.
 Its embedding process is started inside the sandbox, without reusing a daemon.
 LEANN receives `--include-hidden --file-types .txt` because its directory reader
 otherwise filters files under the harness's `.cache` ancestor. The adapter first
 checks that the corpus contains exactly the manifest's files, then verifies that
 every file appears in the built passage metadata. The reported index time excludes
-this post-build integrity check. LEANN uses one CPU thread for PyTorch, HNSW and
-OpenMP/BLAS: the initial multi-thread configuration crashed in `libomp` during model
+this post-build integrity check. LEANN uses one thread for HNSW and CPU
+OpenMP/BLAS pools: the initial multi-thread CPU configuration crashed in `libomp` during model
 initialization, matching the stack in this [upstream PyTorch/Faiss issue](https://github.com/pytorch/pytorch/issues/149201).
-The one-thread configuration passed offline indexing and retrieval. Treat its
-timings as measurements of this configuration, not maximum LEANN throughput.
+Both the one-thread CPU fallback and the selected MPS configuration passed
+offline indexing and retrieval. Reported runs use MPS with the native FP16 default;
+the timings describe this configuration, not maximum LEANN throughput.
 
 Mapping uses the opaque corpus filename, never QMD's content-derived docid.
 Unexpected paths, unknown document keys, invalid scores or incomplete indexing

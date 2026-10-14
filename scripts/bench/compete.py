@@ -107,7 +107,7 @@ def environment(work):
                XDG_CONFIG_HOME=str(work / "config"), HF_HOME=str(INSTALL / "hf"),
                HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
                TOKENIZERS_PARALLELISM="false", OMP_NUM_THREADS="2", MKL_NUM_THREADS="2",
-               LEANN_EMBEDDING_DEVICE="cpu", LEANN_CPU_THREADS="1", LEANN_EMBEDDING_SERVER_HOST="127.0.0.1",
+               LEANN_EMBEDDING_DEVICE="mps", LEANN_CPU_THREADS="1", LEANN_EMBEDDING_SERVER_HOST="127.0.0.1",
                DIGUP_MODELS=str(INSTALL / "digup-models"), QMD_LLAMA_GPU="metal",
                QMD_EMBED_PARALLELISM="2", GGML_METAL_NO_RESIDENCY="1", NO_COLOR="1")
     return env
@@ -280,7 +280,8 @@ def run(args):
                 "thread_settings": {"leann": "LEANN_CPU_THREADS=1; OMP/MKL/OPENBLAS=1; index num_threads=1",
                     "qmd": "QMD embedding parallelism=2; native runtime defaults",
                     "digup": "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"}[tool],
-                "competitor_mode": mode, "hardware_path": "CPU" if tool == "leann" or mode == "bm25" else "Metal",
+                "competitor_mode": mode,
+                "hardware_path": "Metal (PyTorch MPS; CPU HNSW)" if tool == "leann" else "CPU" if mode == "bm25" else "Metal",
                 "platform": platform.platform(), "cpu": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
                 **provenance, "index": index,
                 "load_before": os.getloadavg(), "offline": proof}
