@@ -1911,7 +1911,6 @@ impl<'e> SearchRequest<'e> {
         }
 
         let mut lexical: Vec<(SegmentKey, f32)> = Vec::new();
-        let mut matched_terms = HashMap::new();
         let mut named: Vec<SegmentKey> = Vec::new();
         if self.mode != SearchMode::Semantic {
             // Semantic candidates already carry locators in vectors_for; only
@@ -1963,7 +1962,6 @@ impl<'e> SearchRequest<'e> {
                         continue;
                     }
                 }
-                matched_terms.insert(key.clone(), hit.matched_terms);
                 lexical.push((key, hit.score));
                 if lexical.len() == depth {
                     break;
@@ -2020,6 +2018,8 @@ impl<'e> SearchRequest<'e> {
             .collect();
         let mut previews = PreviewReader::default();
         let mut hits = Vec::with_capacity(ranked.len());
+        let mut keyword_keys = Vec::new();
+        let mut keyword_positions = Vec::new();
         for (key, score, signals, query_index) in ranked {
             let Some(metadata) = metadata.get(&key.0).map(|s| s.metadata.clone()) else {
                 continue;
@@ -2048,12 +2048,12 @@ impl<'e> SearchRequest<'e> {
                     .and_then(|_| semantic_ranks.get(&key).copied()),
                 keyword_rank,
                 filename_rank: signals.filename.then(|| filename_ranks[&key]),
-                matched_terms: if keyword_rank.is_some() {
-                    matched_terms.remove(&key).unwrap_or_default()
-                } else {
-                    Vec::new()
-                },
+                matched_terms: Vec::new(),
             };
+            if keyword_rank.is_some() {
+                keyword_keys.push(key.clone());
+                keyword_positions.push(hits.len());
+            }
             hits.push(SearchHit {
                 resource: key.0,
                 locator: segment.locator.clone(),
@@ -2065,6 +2065,15 @@ impl<'e> SearchRequest<'e> {
                 preview,
                 query_index,
             });
+        }
+
+        if !keyword_keys.is_empty() {
+            let query = LexicalQuery::new(self.queries.iter().map(String::as_str));
+            let terms =
+                engine.with_cache(|c| c.lexical_matched_terms(pid, &query, &keyword_keys))?;
+            for (position, terms) in keyword_positions.into_iter().zip(terms) {
+                hits[position].r#match.matched_terms = terms;
+            }
         }
 
         Ok(SearchResults {

@@ -57,5 +57,8 @@ meaning. JSON `schema_version` remains **6**: this is an optional additive field
 with no change to existing fields or extraction requirements. Older search
 JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:
-Default::default()` (and custom cache implementations populate the additive
-`LexicalHit::matched_terms` field).
+Default::default()`; custom cache implementations implement
+`EmbeddingCache::lexical_matched_terms`, returning one query-token list per key
+in request order. The engine calls this batch method only for final returned
+hits ranked by the keyword leg. SQLite checks each query group in one statement
+over the selected rowids; candidate ranking does no term-membership probes.
