@@ -20,6 +20,7 @@ use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabiliti
 use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use seyk::discovery::PolicyRoot;
 use seyk::watch::{WatchOptions, watch};
 use seyk::{
     DiscoveryOptions, ProgressEvent, ResourceId, ResourceLocator, SearchEngine, SearchResults,
@@ -73,9 +74,8 @@ struct PassIdentity {
 pub struct SeykServer {
     #[cfg(unix)]
     local_content: Option<Arc<seyk::local_content::LocalContentProvider>>,
-    roots: Arc<Vec<PathBuf>>,
     // Pin authorization even if a logical root symlink is later retargeted.
-    resolved_roots: Arc<Vec<PathBuf>>,
+    roots: Arc<Vec<PolicyRoot>>,
     hub: Arc<Hub>,
     /// Status of each watcher covering `roots`; empty when background indexing is off.
     watchers: Arc<Vec<Arc<Mutex<IndexStatus>>>>,
@@ -300,7 +300,7 @@ pub struct RootProgress {
 
 impl Hub {
     /// `allowed` pairs a session's logical roots with their pinned canonical roots.
-    pub fn root_progress(&self, allowed: Option<(&[PathBuf], &[PathBuf])>) -> Vec<RootProgress> {
+    pub fn root_progress(&self, allowed: Option<&[PolicyRoot]>) -> Vec<RootProgress> {
         let Ok(watched) = self.watched.lock() else {
             return Vec::new();
         };
@@ -312,21 +312,20 @@ impl Hub {
             let snapshot = progress.get(root);
             let shown = match (allowed, snapshot) {
                 (None, snapshot) => Some(snapshot.map(|s| s.progress.clone())),
-                (Some((logical, resolved)), Some(snapshot)) => logical
+                (Some(roots), Some(snapshot)) => roots
                     .iter()
-                    .zip(resolved)
-                    .any(|(l, r)| snapshot_visible(l, r, root, &snapshot.identity))
+                    .any(|session| snapshot_visible(session, root, &snapshot.identity))
                     .then(|| Some(snapshot.progress.clone())),
-                (Some((logical, _)), None) => logical
+                (Some(roots), None) => roots
                     .iter()
-                    .any(|r| progress_visible(r, root))
+                    .any(|r| progress_visible(r.uri_path(), root))
                     .then_some(None),
             };
             if let Some(shown) = shown {
                 result.insert(root.clone(), shown);
-            } else if let Some((allowed, _)) = allowed {
-                for child in allowed.iter().filter(|r| r.starts_with(root)) {
-                    result.entry(child.clone()).or_insert(None);
+            } else if let Some(allowed) = allowed {
+                for child in allowed.iter().filter(|r| r.uri_path().starts_with(root)) {
+                    result.entry(child.uri_path().to_path_buf()).or_insert(None);
                 }
             }
         }
@@ -565,34 +564,42 @@ impl SeykServer {
                 seyk::discovery::ensure_allowed_path(&r)?;
                 r.canonicalize()
                     .with_context(|| format!("root {}", r.display()))?;
-                seyk::discovery::absolute_logical_path(&r)
-                    .with_context(|| format!("root {}", r.display()))
+                PolicyRoot::new(&r).with_context(|| format!("root {}", r.display()))
             })
             .collect::<Result<Vec<_>>>()?;
         if roots.is_empty() {
             return Err(anyhow!("no folders to serve"));
         }
-        let resolved_roots = roots
+        let paths = roots
             .iter()
-            .map(|r| r.canonicalize())
-            .collect::<std::io::Result<Vec<_>>>()?;
-        let watchers = hub.watch_roots(&roots)?;
+            .map(|r| r.uri_path().to_path_buf())
+            .collect::<Vec<_>>();
+        let watchers = hub.watch_roots(&paths)?;
         Ok(Self {
             #[cfg(unix)]
             local_content: None,
             roots: Arc::new(roots),
-            resolved_roots: Arc::new(resolved_roots),
             hub,
             watchers: Arc::new(watchers),
             tool_router: Self::tool_router(),
         })
     }
 
+    fn logical_paths(&self) -> Vec<PathBuf> {
+        self.roots
+            .iter()
+            .map(|r| r.uri_path().to_path_buf())
+            .collect()
+    }
+
     fn validate_roots(&self) -> Result<()> {
-        for (logical, resolved) in self.roots.iter().zip(self.resolved_roots.iter()) {
-            seyk::discovery::ensure_allowed_path(logical)?;
-            if logical.canonicalize()? != *resolved {
-                return Err(anyhow!("server root target changed: {}", logical.display()));
+        for root in self.roots.iter() {
+            seyk::discovery::ensure_allowed_path(root.uri_path())?;
+            if !root.revalidate()? {
+                return Err(anyhow!(
+                    "server root target changed: {}",
+                    root.uri_path().display()
+                ));
             }
         }
         Ok(())
@@ -639,8 +646,7 @@ impl SeykServer {
 
     /// Callers validate roots first, so the pinned canonical roots are current.
     fn root_progress(&self) -> Vec<RootProgress> {
-        self.hub
-            .root_progress(Some((&self.roots, &self.resolved_roots)))
+        self.hub.root_progress(Some(&self.roots))
     }
 
     fn index_status_json(&self) -> Result<serde_json::Value> {
@@ -664,14 +670,15 @@ impl SeykServer {
             .filter(|(root, _)| {
                 self.roots
                     .iter()
-                    .any(|session| paths_overlap(session, root))
+                    .any(|session| paths_overlap(session.uri_path(), root))
             })
             .collect();
         matching.sort_by_key(|(root, _)| *root);
+        let roots = self.logical_paths();
         Ok(combine_diagnostics(
             matching
                 .into_iter()
-                .map(|(_, record)| record.confined(&self.roots)),
+                .map(|(_, record)| record.confined(&roots)),
         ))
     }
 
@@ -690,7 +697,7 @@ impl SeykServer {
             return Err(anyhow!("at most {MAX_QUERIES} queries per call"));
         }
         let paths = if p.paths.is_empty() {
-            self.roots.to_vec()
+            self.logical_paths()
         } else {
             p.paths
                 .iter()
@@ -774,7 +781,7 @@ impl SeykServer {
             let path = if path.is_absolute() {
                 path
             } else {
-                self.roots[0].join(path)
+                self.roots[0].uri_path().join(path)
             };
             provider.validate_path(&path)?;
             return Ok(path);
@@ -832,15 +839,15 @@ fn watcher_covers(watched: &Path, root: &Path) -> bool {
 // the identity it was measured under, and that identity is the session's
 // pinned root joined with the same relative path (the watcher_covers rule).
 // A root that is missing, dangling or retargeted hides its snapshot.
-fn snapshot_visible(session: &Path, resolved: &Path, watched: &Path, measured: &Path) -> bool {
-    let Ok(relative) = watched.strip_prefix(session) else {
+fn snapshot_visible(session: &PolicyRoot, watched: &Path, measured: &Path) -> bool {
+    let Ok(relative) = watched.strip_prefix(session.uri_path()) else {
         return false;
     };
     seyk::discovery::ensure_allowed_path(watched).is_ok()
         && watched
             .canonicalize()
             .is_ok_and(|current| current == measured)
-        && resolved.join(relative) == measured
+        && session.authorize_path().join(relative) == measured
 }
 
 // Whether a watcher with no snapshot may be listed (null progress, no
@@ -887,12 +894,12 @@ fn paths_overlap(a: &Path, b: &Path) -> bool {
 
 /// Resolve `path` against the first root and refuse anything outside the roots,
 /// so an agent cannot read previews of arbitrary files through this server.
-fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
+fn confine(path: &Path, roots: &[PolicyRoot]) -> Result<PathBuf> {
     let path = seyk::expand_tilde(path);
     let joined = if path.is_absolute() {
         path
     } else {
-        roots[0].join(path)
+        roots[0].uri_path().join(path)
     };
     seyk::discovery::ensure_allowed_path(&joined)?;
     let real = joined
@@ -900,17 +907,16 @@ fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
         .with_context(|| format!("{} does not exist", joined.display()))?;
     let mut logical = None;
     for root in roots {
-        let resolved = root
-            .canonicalize()
-            .with_context(|| format!("root {}", root.display()))?;
-        if let Ok(relative) = real.strip_prefix(&resolved) {
-            let candidate = root.join(relative);
+        let root = root
+            .current()
+            .with_context(|| format!("root {}", root.uri_path().display()))?;
+        if let Some(candidate) = root.logical_child(&real) {
             // Check every applicable logical root, including for absolute cached IDs.
             seyk::discovery::ensure_allowed_path(&candidate)?;
-            let supplied = if joined.starts_with(root) {
+            let supplied = if joined.starts_with(root.uri_path()) {
                 joined.clone()
-            } else if let Ok(relative) = joined.strip_prefix(&resolved) {
-                root.join(relative)
+            } else if let Ok(relative) = joined.strip_prefix(root.authorize_path()) {
+                root.uri_path().join(relative)
             } else {
                 candidate
             };
@@ -926,7 +932,7 @@ fn confine(path: &Path, roots: &[PathBuf]) -> Result<PathBuf> {
             real.display(),
             roots
                 .iter()
-                .map(|r| r.display().to_string())
+                .map(|r| r.uri_path().display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         ))
@@ -1106,14 +1112,14 @@ fn local_content_server(
     hub: Arc<Hub>,
 ) -> Result<SeykServer> {
     let roots = provider.roots();
-    let resolved_roots = roots
+    let policy_roots = roots
         .iter()
-        .map(|root| root.canonicalize())
-        .collect::<std::io::Result<Vec<_>>>()?;
+        .map(|root| PolicyRoot::new(root))
+        .collect::<seyk::Result<Vec<_>>>()?;
     let watchers = hub.watch_roots(&roots)?;
+    let roots = policy_roots;
     Ok(SeykServer {
         local_content: Some(provider),
-        resolved_roots: Arc::new(resolved_roots),
         roots: Arc::new(roots),
         hub,
         watchers: Arc::new(watchers),
@@ -1270,7 +1276,15 @@ mod tests {
         let server =
             local_content_server(provider, Hub::new(Box::new(fake_engine), false)).unwrap();
         server.validate_roots().unwrap();
-        assert_eq!(server.resolved_roots.as_ref(), &[stored]);
+        assert_eq!(
+            server
+                .roots
+                .iter()
+                .map(|r| r.authorize_path().to_path_buf())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            &[stored]
+        );
     }
 
     #[cfg(unix)]
@@ -1680,7 +1694,7 @@ mod tests {
         assert!(SeykServer::new(vec![alias.clone()], hub.clone()).is_err());
         symlink("store/note.txt", temp.path().join("id_rsa")).unwrap();
         symlink("id_rsa", temp.path().join("alias.txt")).unwrap();
-        let roots = vec![temp.path().to_path_buf()];
+        let roots = vec![PolicyRoot::new(temp.path()).unwrap()];
         for path in [
             alias,
             temp.path().join("alias-dir/note.txt"),
@@ -1699,9 +1713,13 @@ mod tests {
         std::fs::write(&secret, "outside quartz").unwrap();
         let link = inside.path().join("link.txt");
         std::os::unix::fs::symlink(&secret, &link).unwrap();
-        let roots = vec![inside.path().canonicalize().unwrap()];
+        let roots = vec![PolicyRoot::new(&inside.path().canonicalize().unwrap()).unwrap()];
         assert!(confine(&link, &roots).is_err());
-        let server = SeykServer::new(roots, Hub::new(Box::new(fake_engine), false)).unwrap();
+        let server = SeykServer::new(
+            roots.iter().map(|r| r.uri_path().to_path_buf()).collect(),
+            Hub::new(Box::new(fake_engine), false),
+        )
+        .unwrap();
         assert!(search(&server, "quartz").hits.is_empty());
     }
 
@@ -2128,7 +2146,7 @@ mod tests {
         assert!(confined[0].progress.is_none());
         let own = server
             .hub
-            .root_progress(Some((std::slice::from_ref(&a), std::slice::from_ref(&a))));
+            .root_progress(Some(&[PolicyRoot::new(&a).unwrap()]));
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].progress.as_ref(), Some(&progress));
         assert_eq!(server.hub.root_progress(None).len(), 2);
@@ -2445,7 +2463,12 @@ mod tests {
         server.watchers = Arc::new(
             watched
                 .iter()
-                .filter(|(path, _)| server.roots.iter().any(|root| root.starts_with(path)))
+                .filter(|(path, _)| {
+                    server
+                        .roots
+                        .iter()
+                        .any(|root| root.uri_path().starts_with(path))
+                })
                 .map(|(_, cell)| cell.clone())
                 .collect(),
         );
@@ -2786,6 +2809,7 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         std::fs::write(root.join("safe.txt"), "safe").unwrap();
         std::os::unix::fs::symlink(root.join("safe.txt"), root.join("id_rsa")).unwrap();
+        let root = PolicyRoot::new(&root).unwrap();
         let error = confine(Path::new("id_rsa"), &[root]).unwrap_err();
         assert!(error.to_string().contains("refusing secret file"));
     }
@@ -2795,7 +2819,7 @@ mod tests {
         let root = std::env::temp_dir().canonicalize().unwrap();
         let inside = root.join("seyk-confine-test");
         std::fs::create_dir_all(&inside).unwrap();
-        let roots = vec![inside.clone()];
+        let roots = vec![PolicyRoot::new(&inside).unwrap()];
         assert_eq!(confine(Path::new("."), &roots).unwrap(), inside);
         assert!(confine(Path::new(".."), &roots).is_err());
         assert!(confine(Path::new("/"), &roots).is_err());
