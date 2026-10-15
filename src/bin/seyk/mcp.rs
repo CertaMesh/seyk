@@ -20,7 +20,7 @@ use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabiliti
 use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use seyk::discovery::PolicyRoot;
+use seyk::discovery::{PolicyRoot, RootRevalidationError};
 use seyk::watch::{WatchOptions, watch};
 use seyk::{
     DiscoveryOptions, ProgressEvent, ResourceId, ResourceLocator, SearchEngine, SearchResults,
@@ -76,6 +76,7 @@ pub struct SeykServer {
     local_content: Option<Arc<seyk::local_content::LocalContentProvider>>,
     // Pin authorization even if a logical root symlink is later retargeted.
     roots: Arc<Vec<PolicyRoot>>,
+    logical_paths: Arc<[PathBuf]>,
     hub: Arc<Hub>,
     /// Status of each watcher covering `roots`; empty when background indexing is off.
     watchers: Arc<Vec<Arc<Mutex<IndexStatus>>>>,
@@ -579,23 +580,25 @@ impl SeykServer {
             #[cfg(unix)]
             local_content: None,
             roots: Arc::new(roots),
+            logical_paths: paths.into(),
             hub,
             watchers: Arc::new(watchers),
             tool_router: Self::tool_router(),
         })
     }
 
-    fn logical_paths(&self) -> Vec<PathBuf> {
-        self.roots
-            .iter()
-            .map(|r| r.uri_path().to_path_buf())
-            .collect()
+    fn logical_paths(&self) -> &[PathBuf] {
+        &self.logical_paths
     }
 
     fn validate_roots(&self) -> Result<()> {
         for root in self.roots.iter() {
-            seyk::discovery::ensure_allowed_path(root.uri_path())?;
-            if !root.revalidate()? {
+            // Preserve the errors exposed before revalidation owned both checks.
+            let current = root.revalidate().map_err(|error| match error {
+                RootRevalidationError::Policy(error) => anyhow::Error::new(error),
+                RootRevalidationError::Identity(error) => anyhow::Error::new(error),
+            })?;
+            if !current {
                 return Err(anyhow!(
                     "server root target changed: {}",
                     root.uri_path().display()
@@ -678,7 +681,7 @@ impl SeykServer {
         Ok(combine_diagnostics(
             matching
                 .into_iter()
-                .map(|(_, record)| record.confined(&roots)),
+                .map(|(_, record)| record.confined(roots)),
         ))
     }
 
@@ -696,20 +699,23 @@ impl SeykServer {
         if queries.len() > MAX_QUERIES {
             return Err(anyhow!("at most {MAX_QUERIES} queries per call"));
         }
+        let explicit_paths;
         let paths = if p.paths.is_empty() {
             self.logical_paths()
         } else {
-            p.paths
+            explicit_paths = p
+                .paths
                 .iter()
                 .map(|s| self.confine(Path::new(s)))
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?;
+            &explicit_paths
         };
 
         let status = self.status()?;
         // Display status is session-wide; ownership depends on the requested
         // paths and every overlapping hub watcher, including other sessions.
         // PassFailed still owns its root because it retries on the next change.
-        let inline = self.hub.may_sync_inline(&paths)?;
+        let inline = self.hub.may_sync_inline(paths)?;
         // Loading holds the model mutex. Never wait on it in a search: the
         // background worker will publish the semantic engine when it is ready.
         let available = if let Some(engine) = self.hub.ready_engine.get() {
@@ -745,7 +751,7 @@ impl SeykServer {
         let first = queries.next().expect("checked non-empty");
         let mut req = queries
             .fold(engine.search(first), |r, q| r.query(q))
-            .paths(&paths)
+            .paths(paths)
             .kind_counts(p.kind_counts)
             .limit(p.limit.unwrap_or(10).clamp(1, MAX_LIMIT))
             .sync(inline || loading)
@@ -1116,11 +1122,15 @@ fn local_content_server(
         .iter()
         .map(|root| PolicyRoot::new(root))
         .collect::<seyk::Result<Vec<_>>>()?;
-    let watchers = hub.watch_roots(&roots)?;
-    let roots = policy_roots;
+    let paths = policy_roots
+        .iter()
+        .map(|root| root.uri_path().to_path_buf())
+        .collect::<Vec<_>>();
+    let watchers = hub.watch_roots(&paths)?;
     Ok(SeykServer {
         local_content: Some(provider),
-        roots: Arc::new(roots),
+        roots: Arc::new(policy_roots),
+        logical_paths: paths.into(),
         hub,
         watchers: Arc::new(watchers),
         tool_router: SeykServer::tool_router(),
@@ -2430,6 +2440,32 @@ mod tests {
         symlink("vault.opvault", &alias).unwrap();
         assert_eq!(alias.canonicalize().unwrap(), store.canonicalize().unwrap());
         assert!(denied.index_status_json().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_revalidation_preserves_exposed_error_types() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let alias = temp.path().join("alias");
+        symlink("store", &alias).unwrap();
+        let server =
+            SeykServer::new(vec![alias.clone()], Hub::new(Box::new(fake_engine), false)).unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        let missing = server.validate_roots().unwrap_err();
+        assert_eq!(
+            missing.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        symlink("store", temp.path().join("vault.opvault")).unwrap();
+        symlink("vault.opvault", &alias).unwrap();
+        let denied = server.validate_roots().unwrap_err();
+        assert!(matches!(
+            denied.downcast_ref::<seyk::Error>(),
+            Some(seyk::Error::SecretFile { .. })
+        ));
     }
 
     #[test]
