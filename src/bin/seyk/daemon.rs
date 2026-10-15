@@ -320,7 +320,8 @@ pub fn relay(endpoint: &Endpoint, roots: Vec<PathBuf>) -> Result<()> {
             seyk::discovery::ensure_allowed_path(r)?;
             r.canonicalize()
                 .with_context(|| format!("root {}", r.display()))?;
-            seyk::discovery::absolute_logical_path(r)
+            seyk::discovery::PolicyRoot::new(r)
+                .map(|root| root.uri_path().to_path_buf())
                 .with_context(|| format!("root {}", r.display()))
         })
         .collect::<Result<Vec<_>>>()?;

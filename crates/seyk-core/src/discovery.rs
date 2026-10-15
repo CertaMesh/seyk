@@ -11,6 +11,65 @@ use serde::{Deserialize, Serialize};
 use crate::segment::TextFormat;
 use crate::{Error, Modality, Result};
 
+/// A policy-checked root with separate logical and canonical identities.
+///
+/// Use the logical path for URIs, display and discovery (which must retain
+/// directory aliases), and the resolved path for authorization. This captures
+/// a path identity, not a pinned descriptor; callers must revalidate before
+/// using a stored root to authorize access.
+#[derive(Debug, Clone)]
+pub struct PolicyRoot {
+    logical: PathBuf,
+    resolved: PathBuf,
+}
+
+impl PolicyRoot {
+    /// Validate the name policy once and capture an existing root's identities.
+    /// Tilde expansion, if desired, remains the caller's responsibility.
+    pub fn new(path: &Path) -> Result<Self> {
+        ensure_allowed_path(path)?;
+        path.canonicalize().map_err(|e| Error::io(path, e))?;
+        let logical = logical_absolute_path(path)?;
+        let resolved = logical.canonicalize().map_err(|e| Error::io(&logical, e))?;
+        Ok(Self { logical, resolved })
+    }
+
+    pub fn uri_path(&self) -> &Path {
+        &self.logical
+    }
+
+    pub fn authorize_path(&self) -> &Path {
+        &self.resolved
+    }
+
+    /// Map a resolved descendant back to the spelling used for name policy.
+    pub fn logical_child(&self, resolved: &Path) -> Option<PathBuf> {
+        resolved
+            .strip_prefix(&self.resolved)
+            .ok()
+            .map(|p| self.logical.join(p))
+    }
+
+    /// Report whether the captured filesystem identity is still current.
+    /// Callers must also recheck name policy: a retargeted symlink chain can
+    /// introduce a denied alias even when its final canonical target is unchanged.
+    pub fn revalidate(&self) -> std::io::Result<bool> {
+        self.logical
+            .canonicalize()
+            .map(|current| current == self.resolved)
+    }
+
+    /// Resolve live for callers whose existing behavior follows root retargets.
+    /// This does not replace the captured authorization identity or recheck
+    /// name policy. Check the resulting logical child before authorizing it.
+    pub fn current(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            logical: self.logical.clone(),
+            resolved: self.logical.canonicalize()?,
+        })
+    }
+}
+
 /// Directory names skipped unless `default_excludes` is turned off.
 pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".git",
