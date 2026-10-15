@@ -236,7 +236,7 @@ impl EmbeddingGemma2 {
             data.to_vec()
         };
         let ids = self
-            .token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(tokens)))?
+            .template_token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(tokens)))?
             .into_iter()
             .map(i64::from)
             .collect::<Vec<_>>();

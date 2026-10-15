@@ -539,9 +539,22 @@ impl EmbeddingGemma2 {
     /// For verifying trusted image/audio templates against the reference only.
     /// Text embedding uses a separate plain-text tokenizer, so user-controlled
     /// text and titles cannot insert special tokens. Ordinary text ids agree.
-    pub fn token_ids(&self, input: &str) -> Result<Vec<u32>> {
+    pub fn template_token_ids(&self, input: &str) -> Result<Vec<u32>> {
         Ok(self
             .tokenizer
+            .encode(input, true)
+            .map_err(ort_err)?
+            .get_ids()
+            .to_vec())
+    }
+
+    /// Token ids for an already-formatted text prompt, using the same tokenizer
+    /// and truncation as text embedding. Literal special-token spellings remain
+    /// ordinary text; the postprocessor still adds the template's BOS/EOS.
+    /// Use `document_input`, `query_input`, or `text_input` to format the prompt.
+    pub fn text_token_ids(&self, input: &str) -> Result<Vec<u32>> {
+        Ok(self
+            .text_tokenizer
             .encode(input, true)
             .map_err(ort_err)?
             .get_ids()
@@ -714,7 +727,11 @@ impl EmbeddingGemma2 {
         // The processor expands `<|image|>` to <|image> + N x <|image|> + <image|>,
         // and images get no task prefix (model card, "Task Instruction Prefixes").
         let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
-        let ids: Vec<i64> = self.token_ids(&text)?.into_iter().map(i64::from).collect();
+        let ids: Vec<i64> = self
+            .template_token_ids(&text)?
+            .into_iter()
+            .map(i64::from)
+            .collect();
         let mut out = self.run_text(&[&ids], Some((features, pre.soft_tokens)), None)?;
         Ok(out.pop().expect("one input"))
     }

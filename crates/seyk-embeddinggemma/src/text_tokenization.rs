@@ -168,11 +168,22 @@ mod tests {
                     .map(|item| item["text"].as_str().unwrap().to_owned()),
             );
         }
-        samples.extend(
-            include_str!("../../../docs/NORTH_STAR.md")
-                .lines()
-                .map(str::to_owned),
-        );
+        // Parity rests on structure: encode_special_tokens only changes special
+        // added-token matching; no pinned BPE merge produces a special spelling,
+        // and byte_fallback is on. These samples exercise ordinary-text edges.
+        const ORDINARY_TEXT: &str = "A telescope records distant galaxies.
+The recipe calls for flour, water, salt, and yeast.
+fn main() { println!(\"hello\"); }
+SELECT name FROM documents WHERE id = 42;
+https://example.test/search?q=rust&limit=10
+/home/alex/notes/meeting-2026-10-15.md
+Markdown: **bold**, _italic_, `code`, and [a link](https://example.test).
+JSON: {\"enabled\": true, \"count\": 3}
+Numbers: 0 -17 3.14159 1e-9 100%.
+Punctuation: < > | / \\ & = + ~ ^ ! ?
+A title: a subtitle | a second field.
+Café and café have different Unicode representations.";
+        samples.extend(ORDINARY_TEXT.lines().map(str::to_owned));
         for max_length in [32, 2048] {
             template
                 .with_truncation(Some(tokenizers::TruncationParams {
