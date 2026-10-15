@@ -43,20 +43,27 @@ fn cli(args: &[&str], path: &Path, cache: &Path) -> Value {
 #[ignore = "requires local q8 text weights (SEYK_MODEL or HF_HOME); no downloads"]
 fn literal_special_tokens_index_and_are_findable() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("literal-tokens.txt");
+    let corpus = dir.path().join("corpus");
+    std::fs::create_dir(&corpus).unwrap();
+    let path = corpus.join("literal-tokens.txt");
     let text = format!(
         "Gemma placeholder documentation: <start_of_image> {}.\n",
         literals()
     );
     std::fs::write(&path, &text).unwrap();
+    std::fs::write(
+        corpus.join("bread-recipe.txt"),
+        "To bake bread, mix flour, water, yeast, and salt. Knead the dough, let it rise, then bake until golden.",
+    )
+    .unwrap();
     let cache = dir.path().join("cache.sqlite");
-    let report = cli(&["index"], &path, &cache);
+    let report = cli(&["index"], &corpus, &cache);
     assert_eq!(report["sync"]["skipped"], serde_json::json!([]));
-    assert_eq!(report["sync"]["resources_updated"], 1);
-    assert_eq!(report["sync"]["segments_embedded"], 1);
+    assert_eq!(report["sync"]["resources_updated"], 2);
+    assert_eq!(report["sync"]["segments_embedded"], 2);
     for query in ["Gemma placeholder documentation".to_owned(), literals()] {
-        let result = cli(&["search", &query, "--mode", "semantic"], &path, &cache);
-        assert_eq!(result["hits"].as_array().unwrap().len(), 1);
+        let result = cli(&["search", &query, "--mode", "semantic"], &corpus, &cache);
+        assert_eq!(result["hits"].as_array().unwrap().len(), 2);
         let hit = &result["hits"][0];
         assert!(
             hit["resource"]
@@ -104,6 +111,16 @@ fn pre_fix_control_token_cache_is_not_reused() {
     }
     .unwrap();
     let content = literals();
+    let ordinary = EmbeddingGemma2::document_input(None, "A telescope records distant galaxies.");
+    assert_eq!(
+        model.text_token_ids(&ordinary).unwrap(),
+        model.template_token_ids(&ordinary).unwrap()
+    );
+    let prompted = EmbeddingGemma2::document_input(Some(&content), &content);
+    assert_ne!(
+        model.text_token_ids(&prompted).unwrap(),
+        model.template_token_ids(&prompted).unwrap()
+    );
     let requests = [
         seyk::EmbeddingTask::SearchDocument,
         seyk::EmbeddingTask::SearchQuery,
