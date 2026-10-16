@@ -528,9 +528,11 @@ file. `--verify` never fetches. The evaluator also runs this verification before
 reading images. Vector cache keys include the model identity, modality identity,
 task and input bytes. Each completed 768-dimensional embedding is cached
 atomically; 256-dimensional vectors are derived by truncating and normalizing.
-An interrupted inference run resumes from completed vectors. The inference loop
-stops after 35 minutes; local runs additionally need the shared gate lock and a
-40-minute bound on the **whole phase**, including compilation.
+An interrupted inference run resumes from completed vectors. The 35-minute guard
+is cooperative: it stops between photos once the budget is reached, without
+interrupting an in-flight embedding. The text-query loop is not time-checked.
+Local runs additionally need the shared gate lock and a separate external
+40-minute timeout for the **whole phase**, including compilation.
 
 `--score-only` checks the current fixture/queries against the prepared cache and
 runs without a model. Output `tmp/photo-fixture/results.json` includes per-query
