@@ -100,3 +100,7 @@ required-features = ["audio-stt"]
 [[example]]
 name = "bench_audio_identity"
 required-features = ["audio", "onnx"]
+
+[[example]]
+name = "image_quant_eval"
+required-features = ["onnx", "image"]
