@@ -56,6 +56,18 @@ for the new default, not a claim that rankings remain identical to old main.
 The focused `hybrid_rrf_k5_preserves_a_strong_semantic_lead` test independently
 pins the fusion behavior.
 
+`match-ranking-rrf-k5.jsonl` and `match-pdf-rrf-k5.jsonl` extend the same
+coverage to 168 text and 144 mixed text/PDF cases across memory and SQLite
+caches. Originally captured on main `71f9a184`, they were regenerated from
+the k=5 engine after integrating main through `7c4012ed`. They retain all
+case settings, hit order, query identities and signal/locator fields. Only
+normalized fusion score bits change: 196 hybrid and 68 lexical scores.
+Semantic cases remain byte-identical. An independent float32 calculation
+from the frozen semantic, keyword and filename ranks reproduced both the
+old k=60 snapshots and the new k=5 captures exactly across all 312 cases.
+Lexical mode also uses RRF normalization, so its scores change even when
+its ordering does not. The complete snapshot assertions remain in place.
+
 To intentionally refresh a golden, temporarily replace the test's final
 assertion with a write of `actual`, run that integration test, then restore the
 assertion and rerun it against the captured fixture. Review the resulting diff:
