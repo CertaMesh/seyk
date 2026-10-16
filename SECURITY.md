@@ -4,11 +4,11 @@
 
 Please report security problems privately through GitHub: open the repository's
 **Security** tab and choose **Report a vulnerability**. Do not open a public
-issue.
+issue. The repository owner must enable private vulnerability reporting in the
+repository settings for this form to appear.
 
 Include the Seyk version or commit, your platform, steps to reproduce, and the
-impact you expect. We aim to acknowledge reports within seven days and will
-keep you informed while a fix is prepared.
+impact you expect.
 
 ## Supported versions
 

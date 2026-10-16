@@ -9,7 +9,8 @@ language are not accepted in issues, pull requests or any other project space.
 
 ## Reporting
 
-Report conduct problems privately to the maintainers through the repository's
-**Security** tab (**Report a vulnerability**), noting that it is a conduct
-report. Reports are handled confidentially. Maintainers may edit or remove
+Report conduct problems privately to the maintainers through GitHub. GitHub
+has no private issues, so use the repository's **Security** tab (**Report a
+vulnerability**) and start the title with "Conduct report". Reports are
+handled confidentially. Maintainers may edit or remove
 content and restrict participation for people who break this code.

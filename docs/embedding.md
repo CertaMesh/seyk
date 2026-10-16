@@ -132,7 +132,7 @@ For images, opt into preprocessing and provision the vision weights:
 seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk", features = ["image"] }
 ```
 
-The backend has two optional features, `image` and `audio` (see below). Without `image` the default is text
+The backend has two optional features, `image` and `audio` (audio is described above). Without `image` the default is text
 only; with it the default config enables vision, which can be disabled with
 `.vision(false)`. Images use `SearchDocument` and the existing unprefixed media
 path. Other image tasks return `UnsupportedTask`. Text/image matching uses
@@ -237,9 +237,10 @@ continues to reject them atomically through its foreign key constraint.
 
 This split kept the cache at schema v4 at the time (it is now schema 6), and kept the profile JSON/hash, model identity values, input hashes,
 vector bytes, tokenization, field weights, ranking and extraction behavior.
-Existing valid vectors require no migration or re-embedding. Older Seyk binaries
-reset caches whose schema they do not recognize; use separate `--cache-path`
-values when running builds with different cache schemas.
+Existing valid vectors require no migration or re-embedding. Current binaries
+refuse a newer cache schema; v0.1.0 deletes a cache it does not recognize, so
+keep a copy or use separate `--cache-path` values when running builds with
+different cache schemas.
 
 ## Dependency boundaries
 

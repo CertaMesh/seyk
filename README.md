@@ -313,9 +313,9 @@ memory use.
 
 CLI/MCP output uses JSON schema 8. `seyk extract` accepts search envelopes with
 schema 2 through 8. The cache is at schema 6; upgrades migrate older caches and
-preserve existing vectors, profiles and keyword indexes. A binary refuses a
-cache schema newer than it supports, so keep a copy or use a separate
-`--cache-path` if downgrading.
+preserve existing vectors, profiles and keyword indexes. Current binaries
+refuse a newer cache schema; v0.1.0 deletes a cache it does not recognize, so
+keep a copy or use a separate `--cache-path` if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
 `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream

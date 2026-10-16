@@ -94,4 +94,5 @@ allow = ["MPL-2.0"]
 # THIRD_PARTY.md and assets/photo-anchor/NOTICE.md); scoped to this crate only.
 [[licenses.exceptions]]
 name = "seyk-embed"
+version = "=0.1.0"
 allow = ["CC-BY-4.0"]
