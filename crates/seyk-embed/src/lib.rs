@@ -2,6 +2,7 @@
 mod embedder;
 mod embedding;
 mod error;
+pub mod quant;
 pub use embedder::{Embedder, EmbeddingRequest, ModelIdentity, ResourceInput, VideoFrame};
 pub use embedding::{Dimension, Embedding, cosine_similarity, dot_product, normalize};
 pub use error::{Error, Result};
