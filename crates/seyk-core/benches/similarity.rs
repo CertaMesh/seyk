@@ -212,5 +212,61 @@ fn cache_load(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, brute_force, dot_kernel, cache_load);
+fn photo_anchor_scan(c: &mut Criterion) {
+    use seyk_embed::{
+        Embedding, dot_product,
+        quant::{PhotoAnchorQ4, QueryLut},
+    };
+    for dim in [256, 768] {
+        let codec = PhotoAnchorQ4::new(dim).unwrap();
+        let mut rng = Rng(4517);
+        let dimension = Dimension::try_from(dim).unwrap();
+        let query = Embedding::from_raw(rng.unit_vector(dim), dimension).unwrap();
+        let lut = QueryLut::new(&query).unwrap();
+        let rows: Vec<_> = (0..1_000)
+            .map(|_| Embedding::from_raw(rng.unit_vector(dim), dimension).unwrap())
+            .collect();
+        let codes: Vec<u8> = rows
+            .iter()
+            .flat_map(|row| codec.encode(row).unwrap())
+            .collect();
+        let floats: Vec<f32> = rows
+            .iter()
+            .flat_map(|row| row.as_slice().iter().copied())
+            .collect();
+        let mut group = c.benchmark_group(format!("photo_anchor_scan/{dim}"));
+        group
+            .sample_size(30)
+            .warm_up_time(Duration::from_millis(500))
+            .measurement_time(Duration::from_secs(2));
+        group.throughput(Throughput::Elements(1_000));
+        // Both paths scan all 1k rows and consume every score. Setup, allocation,
+        // encoding and LUT construction are excluded from the timed region.
+        group.bench_function("f32", |b| {
+            b.iter(|| {
+                black_box(&floats)
+                    .chunks_exact(dim)
+                    .map(|row| dot_product(row, black_box(query.as_slice())).unwrap())
+                    .fold(f32::MIN, f32::max)
+            })
+        });
+        group.bench_function("q4_lut", |b| {
+            b.iter(|| {
+                black_box(&codes)
+                    .chunks_exact(dim / 2)
+                    .map(|row| black_box(&lut).score(row).unwrap())
+                    .fold(f32::MIN, f32::max)
+            })
+        });
+        group.finish();
+    }
+}
+
+criterion_group!(
+    benches,
+    brute_force,
+    dot_kernel,
+    cache_load,
+    photo_anchor_scan
+);
 criterion_main!(benches);

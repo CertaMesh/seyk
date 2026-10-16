@@ -11,6 +11,112 @@ use serde::{Deserialize, Serialize};
 use crate::segment::TextFormat;
 use crate::{Error, Modality, Result};
 
+/// A policy-checked root with separate logical and canonical identities.
+///
+/// Use the logical path for URIs, display and discovery (which must retain
+/// directory aliases), and the resolved path for authorization. This captures
+/// a path identity, not a pinned descriptor; callers must revalidate before
+/// using a stored root to authorize access.
+#[derive(Debug, Clone)]
+pub struct PolicyRoot {
+    logical: PathBuf,
+    resolved: PathBuf,
+}
+
+impl PolicyRoot {
+    /// Validate the name policy once and capture an existing root's identities.
+    /// Tilde expansion, if desired, remains the caller's responsibility.
+    pub fn new(path: &Path) -> Result<Self> {
+        ensure_allowed_path(path)?;
+        let logical = logical_absolute_path(path)?;
+        // Resolve the supplied spelling once, preserving filesystem handling
+        // of a file with a trailing slash or `/.` on each platform.
+        let resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
+        Ok(Self { logical, resolved })
+    }
+
+    pub fn uri_path(&self) -> &Path {
+        &self.logical
+    }
+
+    pub fn authorize_path(&self) -> &Path {
+        &self.resolved
+    }
+
+    /// Map a resolved descendant back to the spelling used for name policy.
+    /// Reject parent traversal in the relative part instead of emitting an escape.
+    pub fn logical_child(&self, resolved: &Path) -> Option<PathBuf> {
+        logical_child(&self.logical, &self.resolved, resolved)
+    }
+
+    /// Recheck name policy and report whether the captured identity is current.
+    /// A symlink chain can introduce a denied alias without changing its target.
+    pub fn revalidate(&self) -> std::result::Result<bool, RootRevalidationError> {
+        ensure_allowed_path(&self.logical).map_err(RootRevalidationError::Policy)?;
+        self.logical
+            .canonicalize()
+            .map(|current| current == self.resolved)
+            .map_err(RootRevalidationError::Identity)
+    }
+
+    /// Resolve live for callers whose existing behavior follows root retargets.
+    /// This observation does not recheck name policy and cannot be used as a
+    /// policy-checked root. Check the resulting logical child before authorizing it.
+    ///
+    /// ```compile_fail
+    /// use seyk_core::discovery::PolicyRoot;
+    /// fn unchecked_root(root: &PolicyRoot) -> PolicyRoot {
+    ///     root.current().unwrap()
+    /// }
+    /// ```
+    pub fn current(&self) -> std::io::Result<LiveRoot<'_>> {
+        Ok(LiveRoot {
+            logical: &self.logical,
+            resolved: self.logical.canonicalize()?,
+        })
+    }
+}
+
+/// Revalidation preserves the distinction between a name-policy refusal and
+/// an I/O failure while checking the captured identity.
+#[derive(Debug, thiserror::Error)]
+pub enum RootRevalidationError {
+    #[error(transparent)]
+    Policy(Error),
+    #[error(transparent)]
+    Identity(std::io::Error),
+}
+
+/// A live path observation, not a policy-checked authorization root.
+#[derive(Debug)]
+pub struct LiveRoot<'a> {
+    logical: &'a Path,
+    resolved: PathBuf,
+}
+
+impl LiveRoot<'_> {
+    pub fn uri_path(&self) -> &Path {
+        self.logical
+    }
+
+    /// The live resolved path; name policy must still be checked by the caller.
+    pub fn authorize_path(&self) -> &Path {
+        &self.resolved
+    }
+
+    pub fn logical_child(&self, resolved: &Path) -> Option<PathBuf> {
+        logical_child(self.logical, &self.resolved, resolved)
+    }
+}
+
+fn logical_child(logical: &Path, root: &Path, resolved: &Path) -> Option<PathBuf> {
+    let relative = resolved.strip_prefix(root).ok()?;
+    relative
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+        .then(|| logical.join(relative))
+}
+
 /// Directory names skipped unless `default_excludes` is turned off.
 pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
     ".git",

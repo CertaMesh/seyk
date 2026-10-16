@@ -1,8 +1,9 @@
 # Multimodal support: status and what is missing
 
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
-space. This crate implements text, images, PDF retrieval and opt-in audio retrieval. This note records
-current support and what audio transcription, video and scanned-page text extraction still need, based on the model's processor configuration
+space. This crate implements text, images, PDF retrieval and opt-in audio retrieval.
+This note records current support and what audio transcription, video and
+scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 `Gemma4AudioFeatureExtractor`).
@@ -11,11 +12,13 @@ implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 
 - **Types.** `ResourceInput` has `Text`, `Image`, `Audio { samples, sample_rate }`
   and `Video { frames }` variants. `ResourceLocator` has `Text`, `PageText`, `Page`,
-  `Time { start_ms, end_ms }` and `WholeResource`. PDF uses `PageText` for embedded text and `Page` for scanned pages.
+  `Time { start_ms, end_ms }` and `WholeResource`. PDF uses `PageText` for embedded
+  text and `Page` for scanned pages.
 - **Capability check.** `Embedder::supports(Modality)` gates every resource. The
   engine reports unsupported files as skipped, with a reason, instead of guessing.
-- **Model plumbing.** The ONNX text model already takes `image_features`,
-  `video_features` and `audio_features` inputs (`[n_tokens, 512]`). Video features remain empty. The optional audio encoder supplies audio features.
+- **Model plumbing.** The ONNX text model takes `image_features`,
+  `video_features` and `audio_features` inputs (`[n_tokens, 512]`). Video features
+  stay empty. The optional audio encoder supplies audio features.
 - **Cache.** Vectors are keyed by a hash of the exact model input, so time windows
   include the audio preparation and weights policy in their input hash and resource
   descriptor. Audio changes do not invalidate text vectors or the global profile.
@@ -45,7 +48,8 @@ Possible improvements:
   1120 soft tokens. A lower budget would make large photo libraries much cheaper.
   It must become part of the cache profile.
 - **Lazy vision loading.** The encoder loads at start-up even for text-only
-  folders. That costs about 0.1 s, plus the memory for its weights (the q8 weight file is 195 MB).
+  folders. That costs about 0.1 s, plus the memory for its weights (the q8 weight
+  file is 195 MB).
 
 ## Audio retrieval (done, opt-in)
 
@@ -115,7 +119,7 @@ remain recall limitations.
 Scanned-page text extraction needs OCR, which is tracked as a follow-up.
 `extract` on a `Page` hit returns the typed `PdfOcrUnavailable` error; no OCR
 model is shipped or downloaded. Text-only models, `--text-only`, and builds
-without `pdf-render` retain embedded-text search and report omitted image pages
+without `pdf-render` keep embedded-text search and report omitted image pages
 as page diagnostics. Rendering alone measured roughly 34 ms/page in the spike;
 image embedding takes seconds per page on CPU. See the
 [Phase 4b architecture report](architecture.md#phase-4b-retrieval--scanned-pdf-pages)

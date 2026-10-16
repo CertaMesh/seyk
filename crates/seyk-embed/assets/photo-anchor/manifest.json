@@ -1,0 +1,90 @@
+{
+ "repo": "pastel-labs/embeddinggemma-2-photo-anchor",
+ "publisher": "Pastel Labs, the public research side of Pastel-Cloud O\u00dc (pastel-labs.com)",
+ "license": "CC-BY-4.0",
+ "models": {
+  "fp16": {
+   "id": "google/embeddinggemma-2",
+   "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+   "how_run": "Sentence Transformers, half-precision (float16) weights on a GPU",
+   "folder": "half-precision-model",
+   "per_dim": {
+    "768": {
+     "anchor_norm": 0.7770854234695435,
+     "n_photos": 18232,
+     "clip_percentile": 0.5,
+     "reconstruction_mse_on_anchor_photos": 0.004426934290677309
+    },
+    "512": {
+     "anchor_norm": 0.7805142998695374,
+     "n_photos": 18232,
+     "clip_percentile": 0.5,
+     "reconstruction_mse_on_anchor_photos": 0.004360807128250599
+    },
+    "256": {
+     "anchor_norm": 0.790104329586029,
+     "n_photos": 18232,
+     "clip_percentile": 0.5,
+     "reconstruction_mse_on_anchor_photos": 0.004171541426330805
+    },
+    "128": {
+     "anchor_norm": 0.8648947477340698,
+     "n_photos": 18232,
+     "clip_percentile": 0.5,
+     "reconstruction_mse_on_anchor_photos": 0.0027967127971351147
+    }
+   }
+  }
+ },
+ "recommended_anchor": "half-precision-model",
+ "source_photos": {
+  "dataset": "COCO 2017 train",
+  "count": 18232,
+  "licenses": {
+   "CC BY 2.0": 17805,
+   "No known copyright restrictions": 427
+  },
+  "held_out_for_testing": 10000,
+  "held_out_seed": 42
+ },
+ "anchor_method": "For each size d: keep the first d of the 768 numbers, rescale to length 1, average over the photos (64-bit sums). The average is not rescaled.",
+ "quant4_method": "c = vector - anchor. For each position i: offset_i = 0.5th percentile and offset_i + 15 * scale_i = 99.5th percentile of c over the anchor photos. code = round((clamp(c, offset_i, offset_i + 15 * scale_i) - offset_i) / scale_i), 0 to 15. Decode: anchor + offset + code * scale. Percentile chosen from 0.1, 0.25, 0.5, 1, 2 by lowest mean squared error on the anchor photos.",
+ "bit_order": "1 bit: first number = highest bit of byte 0. 4 bits: two codes per byte, first number in the high 4 bits.",
+ "sha256": {
+  "HOW_WE_DID_IT.md": "9670b8ea017963a010a31db367209795f7738a4795bcd5d54003c694ed117b4f",
+  "README.md": "1977b79035b26f4b1a2696c04f09abb0cf33904dce838cc9f74475d04271d16b",
+  "calibration-4bit/half-precision-model/quant4_128.f32.bin": "d632d7977303a8f56499506a66c995b7f3a50ff207aa81164378a9a5c4ef5322",
+  "calibration-4bit/half-precision-model/quant4_128.json": "a1706262d329b9293f215cbb399bc34bea3f81b3661dde71115a49cd688c8faf",
+  "calibration-4bit/half-precision-model/quant4_256.f32.bin": "fe029c4cf510f6a628a24bcdc3db097ce8c387e948080d5065ef81ff904a2353",
+  "calibration-4bit/half-precision-model/quant4_256.json": "ecde69dafb01a42c171c3424aa01eefee347b5452df3956ff59710cf6377b865",
+  "calibration-4bit/half-precision-model/quant4_512.f32.bin": "21bd51618972f0efc457d4a8146116e37a773c7712803447b9ebcad6c5940d2e",
+  "calibration-4bit/half-precision-model/quant4_512.json": "9d0908ea3e1b7daa9b1a4b8f403fa84bf8ce3e02f032cfc1f5ea51e09cdaec70",
+  "calibration-4bit/half-precision-model/quant4_768.f32.bin": "5088d57dbb8ae53da9f45f94ce20aa9177160fcbc499d41a8ecb755270ba5560",
+  "calibration-4bit/half-precision-model/quant4_768.json": "5c17e0219137393c817fedc55e85e9cc93d461aa9c1e3b697206661f98e5e89b",
+  "anchors/half-precision-model/photo_anchor.json": "6b41948aa9f73aed0017b7fd35e3e1808b1b79c6f1bc989ba7cc01884dfe339e",
+  "anchors/half-precision-model/photo_anchor_128.f16.bin": "c07658f3598c8c5b853e8005648b16b23af8fbad0f8e1e7b5771e101e88d6dd3",
+  "anchors/half-precision-model/photo_anchor_128.f16.npy": "9330e135113992a10303c8cd5f43f762cb534f27162d6e38c94ca90f32b55064",
+  "anchors/half-precision-model/photo_anchor_128.f32.bin": "324d1bd55212f9b87de176c14b208fe064437b7f6a904b00205d7b22e2172a2a",
+  "anchors/half-precision-model/photo_anchor_128.f32.npy": "5200d5a6fc67cfe1400318d8f813c020fc28ea57a988c4bdbb6dd7d38a2bcb85",
+  "anchors/half-precision-model/photo_anchor_256.f16.bin": "9c9a8e44bf6263ef5d8ca50e1b272d57b7b3bc1d5e768910b8b817605a533263",
+  "anchors/half-precision-model/photo_anchor_256.f16.npy": "d94581b104fe14ed25f5f0275809d57ff5627716cda3f7527369887c70e969ec",
+  "anchors/half-precision-model/photo_anchor_256.f32.bin": "4e30ed052129ee745bb810fc1673e360857557e4a97daffdb2734e2b8dc5dc28",
+  "anchors/half-precision-model/photo_anchor_256.f32.npy": "1a83fbd6c7dadad1cecaf81373086eaf13ca1072707add17cc4aa11755567ff2",
+  "anchors/half-precision-model/photo_anchor_512.f16.bin": "a5f963dcfc524c4e208da4fb263050dbb5bfc76c514bca6c4e7da5c439d49fae",
+  "anchors/half-precision-model/photo_anchor_512.f16.npy": "3587bdbfc5d26b3cd03cee8342c1ef3d59ab8e78db05869449569059601a2dba",
+  "anchors/half-precision-model/photo_anchor_512.f32.bin": "6584ac0c145f85d3975319bccdd4db09c83e7131d396f4569e12e22e604fec48",
+  "anchors/half-precision-model/photo_anchor_512.f32.npy": "bdf19ddf29866f75e4d31aee3b723fbaffe39fa27f75e45ffe56d6722ce9dc26",
+  "anchors/half-precision-model/photo_anchor_768.f16.bin": "39b13193806f84a3b56e1434e17728790070a280cecb5977d417e73f5f46c45b",
+  "anchors/half-precision-model/photo_anchor_768.f16.npy": "fbd013b8265effebb4f259b175c1f017a069da712b222a169c4b7266b7e213ba",
+  "anchors/half-precision-model/photo_anchor_768.f32.bin": "a3978221be716a22f0d738efdc93df0de90fb8c490339011422ab15c2e8a3bb6",
+  "anchors/half-precision-model/photo_anchor_768.f32.npy": "2dbe6b411476c916ee5a057a6c846adb71b204a6785ed5c3e868b6558376f3f6",
+  "scripts/compute_anchor.py": "34f910f80956b93818020fa9987b2def32cb44e262fd3c37c43630a2a26b1492",
+  "scripts/quant4.py": "161b5b9ea97ff6dbe60925483b4ca52d1470023bc72114832634d2b029dd8a52",
+  "data/anchor_eval.json": "3ba062830dfa2b55c1ef72e2c4f9113f7ade40198e7070c3afd3f2c80b34ef76",
+  "data/anchor_image_ids.json": "9656f45ff3b55adb1b8f3f339e24ebc7128e6116a12d9bfdd98479e46053f276",
+  "data/heldout_image_ids.json": "25e8d4f97267991e8c34ac73952b3ffc35771784e1e239617d6f4772e48ae7d7",
+  "data/photo_credits.csv": "94381386fe628196ba9dfc7db5a3aec15c33bbc09b13e6c22089ab6c27c1ba92",
+  "data/quant_eval.json": "7923d76ec8db6fad6ee58fb258cd59fca224a49d210b7972d2e7845e1f30eaeb",
+  "data/rerank_eval.json": "3e8a5c0dc932e605db39f80ab2a75212dbe12ba269cbd0636c9687dfcd7380b6"
+ }
+}

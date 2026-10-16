@@ -238,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tokens = 0;
     for t in &texts {
         tokens += embedder
-            .token_ids(&GemmaEmbedder::document_input(Some("Scene"), t))?
+            .text_token_ids(&GemmaEmbedder::document_input(Some("Scene"), t))?
             .len();
     }
     let mean_tokens = tokens as f64 / texts.len().max(1) as f64;

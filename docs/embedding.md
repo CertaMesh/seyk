@@ -1,6 +1,6 @@
 # Standalone embeddings and API migration
 
-Seyk's embedding layer is reusable independently of search. The crates are not
+Seyk's embedding layer works without search. The crates are not
 on crates.io yet; all workspace packages currently have version `0.1.0`.
 
 ```toml
@@ -47,15 +47,15 @@ model-directory/
     vision_encoder_quantized.onnx_data  # only when vision is enabled
 ```
 
-Use the unsuffixed filenames for `Precision::Fp32`. Defaults remain q8, 256
+Use the unsuffixed filenames for `Precision::Fp32`. Defaults are q8, 256
 output dimensions, 2048 tokens, and batches of 16. The builder also accepts
 `precision`, `max_tokens`, `batch_size` and `threads`. Gemma accepts only
 128/256/512/768 dimensions; truncation is followed by L2 normalization.
 
 Provision files before loading, through the Hugging Face client or the explicit
-`seyk model download` command. The compatibility facade also retains
-`seyk::embedder::gemma::download(&config)`. The standalone backend deliberately
-has no downloader: keeping hf-hub outside it avoids HTTP/url dependencies.
+`seyk model download` command. The compatibility facade also keeps
+`seyk::embedder::gemma::download(&config)`. The standalone backend has no
+downloader, so it carries no hf-hub, HTTP or url dependencies.
 The model's terms and license apply to the weights separately from this code.
 
 ONNX Runtime's prebuilt native library may be fetched **at build time** by `ort`.
@@ -85,9 +85,9 @@ let vectors = model.embed_batch(&requests)?;
 
 Successful batches return one vector per request in the original order. Empty
 batches return no vectors. Text tokenization and inference batch internally,
-sorting by length and restoring order afterward. Image inference is currently
-one image at a time. Session mutexes serialize inference; this API does not
-promise parallel calls increase throughput.
+sorting by length and restoring order afterward. Image inference runs one image
+at a time. Session mutexes serialize inference, so parallel calls are not
+guaranteed to increase throughput.
 
 The backend implements the eight distinct prompt meanings in the
 [pinned official prompt configuration](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/blob/daa72c51243991dfcaf9f9137d2c573d8f7790c0/config_sentence_transformers.json):
@@ -116,8 +116,8 @@ optional files produce `ModelNotFound` for the audio request without preventing
 text embedding. Video returns `UnsupportedModality`. `GemmaConfig::audio` and
 `.audio(bool)` control audio acceptance; `GemmaConfig::files()` remains the
 ordinary model file list. The CLI provisions `audio::FILES` separately.
-`Embedder::input_identity(modality)` returns `Result<&str>`, defaults to `Ok("")`, and adds
-modality-specific weights/preprocessing to input hashes without changing the
+`Embedder::input_identity(modality)` returns `Result<&str>`, defaults to `Ok("")`, and
+adds modality-specific weights/preprocessing to input hashes without changing the
 shared `ModelIdentity` or text cache profile. Audio hashing starts on the first
 audio identity request, before cache admission (including cached-only search),
 or direct audio embedding. Text-only use reads no audio assets. Failed
@@ -151,9 +151,9 @@ numerical framework. `dot_product` rejects dimension mismatch and nonfinite
 results. `normalize` uses f64 accumulation and rejects zero or non-finite input
 without modifying it; model-output construction retains its legacy arithmetic
 for cache compatibility. The backend re-exports all three helpers.
-`Embedding::cosine` retains the existing fast dot-product convenience
-for same-width normalized embeddings. Model metadata lives once in
-`ModelIdentity`, not redundantly on every vector; tasks/modalities are on requests.
+`Embedding::cosine` is still the fast dot-product convenience for same-width
+normalized embeddings. Model metadata lives once in `ModelIdentity`, not on every
+vector; tasks and modalities are on requests.
 
 `Dimension` now represents any nonzero width, with the existing D128/D256/D512/
 D768 constants, `ALL`, `get()`, default and numeric serialization. A generic
