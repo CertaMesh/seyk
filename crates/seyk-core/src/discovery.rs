@@ -28,9 +28,10 @@ impl PolicyRoot {
     /// Tilde expansion, if desired, remains the caller's responsibility.
     pub fn new(path: &Path) -> Result<Self> {
         ensure_allowed_path(path)?;
-        path.canonicalize().map_err(|e| Error::io(path, e))?;
         let logical = logical_absolute_path(path)?;
-        let resolved = logical.canonicalize().map_err(|e| Error::io(&logical, e))?;
+        // Resolve the supplied spelling once, preserving filesystem handling
+        // of a file with a trailing slash or `/.` on each platform.
+        let resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
         Ok(Self { logical, resolved })
     }
 
@@ -43,31 +44,77 @@ impl PolicyRoot {
     }
 
     /// Map a resolved descendant back to the spelling used for name policy.
+    /// Reject parent traversal in the relative part instead of emitting an escape.
     pub fn logical_child(&self, resolved: &Path) -> Option<PathBuf> {
-        resolved
-            .strip_prefix(&self.resolved)
-            .ok()
-            .map(|p| self.logical.join(p))
+        logical_child(&self.logical, &self.resolved, resolved)
     }
 
-    /// Report whether the captured filesystem identity is still current.
-    /// Callers must also recheck name policy: a retargeted symlink chain can
-    /// introduce a denied alias even when its final canonical target is unchanged.
-    pub fn revalidate(&self) -> std::io::Result<bool> {
+    /// Recheck name policy and report whether the captured identity is current.
+    /// A symlink chain can introduce a denied alias without changing its target.
+    pub fn revalidate(&self) -> std::result::Result<bool, RootRevalidationError> {
+        ensure_allowed_path(&self.logical).map_err(RootRevalidationError::Policy)?;
         self.logical
             .canonicalize()
             .map(|current| current == self.resolved)
+            .map_err(RootRevalidationError::Identity)
     }
 
     /// Resolve live for callers whose existing behavior follows root retargets.
-    /// This does not replace the captured authorization identity or recheck
-    /// name policy. Check the resulting logical child before authorizing it.
-    pub fn current(&self) -> std::io::Result<Self> {
-        Ok(Self {
-            logical: self.logical.clone(),
+    /// This observation does not recheck name policy and cannot be used as a
+    /// policy-checked root. Check the resulting logical child before authorizing it.
+    ///
+    /// ```compile_fail
+    /// use seyk_core::discovery::PolicyRoot;
+    /// fn unchecked_root(root: &PolicyRoot) -> PolicyRoot {
+    ///     root.current().unwrap()
+    /// }
+    /// ```
+    pub fn current(&self) -> std::io::Result<LiveRoot<'_>> {
+        Ok(LiveRoot {
+            logical: &self.logical,
             resolved: self.logical.canonicalize()?,
         })
     }
+}
+
+/// Revalidation preserves the distinction between a name-policy refusal and
+/// an I/O failure while checking the captured identity.
+#[derive(Debug, thiserror::Error)]
+pub enum RootRevalidationError {
+    #[error(transparent)]
+    Policy(Error),
+    #[error(transparent)]
+    Identity(std::io::Error),
+}
+
+/// A live path observation, not a policy-checked authorization root.
+#[derive(Debug)]
+pub struct LiveRoot<'a> {
+    logical: &'a Path,
+    resolved: PathBuf,
+}
+
+impl LiveRoot<'_> {
+    pub fn uri_path(&self) -> &Path {
+        self.logical
+    }
+
+    /// The live resolved path; name policy must still be checked by the caller.
+    pub fn authorize_path(&self) -> &Path {
+        &self.resolved
+    }
+
+    pub fn logical_child(&self, resolved: &Path) -> Option<PathBuf> {
+        logical_child(self.logical, &self.resolved, resolved)
+    }
+}
+
+fn logical_child(logical: &Path, root: &Path, resolved: &Path) -> Option<PathBuf> {
+    let relative = resolved.strip_prefix(root).ok()?;
+    relative
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+        .then(|| logical.join(relative))
 }
 
 /// Directory names skipped unless `default_excludes` is turned off.
