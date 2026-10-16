@@ -113,6 +113,31 @@ def environment(work):
     return env
 
 
+def stop_process_group(process, timeout=10):
+    def signal_group(sig):
+        try:
+            os.killpg(process.pid, sig)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def wait_group(seconds):
+        deadline = time.monotonic() + seconds
+        while True:
+            process.poll()  # Reap the leader without mistaking its exit for group exit.
+            if not signal_group(0):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
+    signal_group(signal.SIGTERM)
+    if not wait_group(timeout):
+        signal_group(signal.SIGKILL)
+        if not wait_group(5):
+            raise TimeoutError("competitor process group did not exit after SIGKILL")
+
+
 class Worker:
     def __init__(self, command, work, env, log, ready=False):
         self.process = subprocess.Popen(offline(command), stdin=subprocess.PIPE,
@@ -157,19 +182,21 @@ class Worker:
         return json.loads(line)
 
     def close(self):
-        self.process.stdin.close()
         try:
-            self.process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            os.killpg(self.process.pid, signal.SIGTERM)
             try:
-                self.process.wait(timeout=10)
+                self.process.stdin.close()
+            except BrokenPipeError:
+                pass
+            try:
+                self.process.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait()
+                pass
         finally:
-            self.process.stdout.close()
-            self.selector.close()
+            try:
+                stop_process_group(self.process)
+            finally:
+                self.process.stdout.close()
+                self.selector.close()
 
 
 def run_index(command, work, env, log, timeout):
@@ -179,13 +206,7 @@ def run_index(command, work, env, log, timeout):
         code = process.wait(timeout=timeout)
         bench.require(code == 0, "indexer failed; see private log")
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+        stop_process_group(process)
 
 
 def resume_rows(partial, header, queries):

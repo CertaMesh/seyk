@@ -648,6 +648,10 @@ configurations, including their different models and native chunking. All use
 the same materialized corpora, query sets and scoring. Each configuration has
 one evaluation pass; QMD's stochastic expansion can vary on another pass.
 
+A later cleanup-only fix terminates surviving process-group children even when
+their leader has exited. The 18 measurements retain the commit above; this fix
+does not change retrieval, ranking, scoring or their recorded provenance.
+
 | Tool / mode | SciFact nDCG@10 | NFCorpus nDCG@10 | IRPAPERS text nDCG@10 |
 |---|---:|---:|---:|
 | QMD vector | 0.718541 | 0.376507 | 0.447891 |

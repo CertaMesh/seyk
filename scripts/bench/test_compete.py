@@ -1,8 +1,13 @@
 """Boundary tests: a plausible score with wrong document mapping is worse than failure."""
 import json
 import io
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -16,6 +21,84 @@ class Tests(unittest.TestCase):
         self.a, self.b = "a" * 16, "b" * 16
         self.corpus = Path("/corpus")
         self.docmap = {self.a: "doc one", self.b: "doc two"}
+
+    def check_process_group_cleanup(self, kind, exited):
+        child_code = """import signal,time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print('ready', flush=True)
+time.sleep(30)
+"""
+        leader_code = """import json,os,subprocess,sys,time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, '-c', sys.argv[2]], stdout=subprocess.PIPE)
+assert child.stdout.readline() == b'ready\\n'
+Path(sys.argv[1]).write_text(json.dumps([os.getpid(), child.pid]))
+if sys.argv[3] == 'wait': time.sleep(30)
+"""
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile() as log:
+            pidfile = Path(directory) / "pids.json"
+            command = [sys.executable, "-c", leader_code, str(pidfile), child_code,
+                       "exit" if exited else "wait"]
+            worker = None
+            stop_group = compete.stop_process_group
+            started = time.monotonic()
+            try:
+                with mock.patch.object(compete, "offline", side_effect=lambda command: command), \
+                     mock.patch.object(compete, "stop_process_group",
+                                       side_effect=lambda process: stop_group(process, timeout=0.2)):
+                    if kind == "worker":
+                        worker = compete.Worker(command, directory, os.environ.copy(), log)
+                        deadline = time.monotonic() + 5
+                        while not pidfile.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        self.assertTrue(pidfile.exists(), "synthetic child failed to start")
+                        if exited:
+                            worker.process.wait(timeout=5)
+                        wait = worker.process.wait
+                        with mock.patch.object(worker.process, "wait",
+                                               side_effect=lambda timeout: wait(timeout=min(timeout, 0.2))):
+                            worker.close()
+                        self.assertTrue(worker.process.stdin.closed)
+                        self.assertTrue(worker.process.stdout.closed)
+                        self.assertIsNone(worker.selector.get_map())
+                        if not exited:
+                            self.assertEqual(worker.process.returncode, -signal.SIGTERM)
+                    elif exited:
+                        compete.run_index(command, directory, os.environ.copy(), log, timeout=5)
+                    else:
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            compete.run_index(command, directory, os.environ.copy(), log, timeout=1)
+                leader, child = json.loads(pidfile.read_text())
+                for pid in (leader, child):
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(pid, 0)
+                self.assertLess(time.monotonic() - started, 12)
+            finally:
+                if pidfile.exists():
+                    leader, _ = json.loads(pidfile.read_text())
+                    try:
+                        os.killpg(leader, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if worker is not None:
+                    try:
+                        os.killpg(worker.process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    worker.process.wait(timeout=5)
+                    worker.process.stdin.close()
+                    worker.process.stdout.close()
+                    worker.selector.close()
+
+    def test_cleanup_after_leader_already_exited(self):
+        for kind in ("worker", "indexer"):
+            with self.subTest(kind=kind):
+                self.check_process_group_cleanup(kind, exited=True)
+
+    def test_cleanup_child_surviving_leader_termination(self):
+        for kind in ("worker", "indexer"):
+            with self.subTest(kind=kind):
+                self.check_process_group_cleanup(kind, exited=False)
 
     def test_first_passage_wins_without_resorting_scores(self):
         hits = [{"path": f"/corpus/{key}.txt", "score": score}
