@@ -8,41 +8,54 @@
 
 ## Published retrieval comparison
 
-Measured on 2026-10-14 with Seyk 0.1.0, clean commit
-`28814a851ded4d1b3d5e0def1d112094a852e334` (the current `origin/main` when these runs started).
-The chart records that measured commit; later documentation commits do not change
-the search engine. Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2
-inference threads. ONNX Runtime CPU inference, q8,
-256-dimensional vectors, default segmentation and fusion, 200-segment retrieval
-depth, all hybrid/semantic/lexical queries. Model:
+Measured on 2026-10-15–16 with Seyk 0.1.0, clean commit
+`a4a0eea63f747b0acf4e3a5fa844f79fc5bef39c`, with default RRF k=5.
+The chart records the measured source commit, before later main integration.
+Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads.
+ONNX Runtime CPU inference, q8, 256-dimensional vectors, default segmentation,
+adaptive lexical weighting, filename weight 3, candidate depth 800 and
+200-segment output depth; all hybrid/semantic/lexical queries. Model:
 `onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
 Only provisioned weights were used; SHA-256 hashes were checked against the pinned
-model files. Compatible document embedding caches were reused; every query was
-rerun. This measures ranking quality, not cold indexing speed.
+model files. Main populated the `;text-literals-v1` embedding profile across
+bounded runs; the k=5 branch reused those embeddings and embedded zero new
+segments. Every query was rerun. This measures ranking quality, not indexing speed.
 
 The full test splits contain 5,183 documents / 300 queries (SciFact),
 3,633 / 323 (NFCorpus), and 3,226 nonempty pages / 180 queries (IRPAPERS text).
 All 180 IRPAPERS questions remain in the denominator, including the question
 whose relevant page has an empty transcription. Resource-level metrics use the
 first returned segment per resource; IRPAPERS text resources are individual pages.
-One-minute load samples across these runs were 25.4–35.5 (SciFact), 17.9–22.4
-(NFCorpus) and 17.2–23.9 (IRPAPERS text). These runs make no timing or
-quiet-machine performance claim.
+Machine load varied and the baseline required cold indexing while the branch
+used warm caches. These runs make no timing or quiet-machine performance claim.
 
 | Dataset | Seyk mode | nDCG@10 | MRR@10 | Recall@10 |
 |---|---|---:|---:|---:|
-| SciFact | hybrid | 0.76764 | 0.73208 | 0.89189 |
+| SciFact | hybrid | 0.80700 | 0.77649 | 0.92056 |
 | SciFact | semantic | 0.82192 | 0.80290 | 0.90122 |
 | SciFact | lexical | 0.64764 | 0.61227 | 0.77867 |
-| NFCorpus | hybrid | 0.35968 | 0.56807 | 0.17379 |
+| NFCorpus | hybrid | 0.35972 | 0.55989 | 0.17545 |
 | NFCorpus | semantic | 0.33831 | 0.54093 | 0.16152 |
 | NFCorpus | lexical | 0.30220 | 0.50526 | 0.14644 |
-| IRPAPERS text | hybrid | 0.63204 | 0.56024 | 0.85556 |
+| IRPAPERS text | hybrid | 0.64951 | 0.57637 | 0.87778 |
 | IRPAPERS text | semantic | 0.58941 | 0.51834 | 0.81111 |
 | IRPAPERS text | lexical | 0.62941 | 0.56413 | 0.83333 |
 
-Hybrid trails semantic-only on SciFact. This known fusion limitation is tracked
-in Solo todo 4542.
+The same-profile baseline was clean main commit
+`4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb` with RRF k=60. Separate release
+builds supplied the main and branch binaries. Changing only k to 5 improved
+hybrid nDCG@10 in all three datasets:
+
+| Dataset | k=60 | k=5 | Delta |
+|---|---:|---:|---:|
+| SciFact | 0.767638 | 0.807000 | +0.039362 |
+| NFCorpus | 0.359682 | 0.359716 | +0.000034 |
+| IRPAPERS text | 0.632042 | 0.649511 | +0.017469 |
+
+Semantic and lexical rankings were unchanged across all 803 queries. The NFCorpus
+increase is small; the result meets the 0.005 maximum-drop gate for both NFCorpus
+and SciFact. Hybrid still trails semantic-only on SciFact. These datasets also
+informed the choice of k, so the comparison is not an unseen-dataset evaluation.
 nDCG@10 rewards relevant documents near the top of the first ten results, with
 linear graded relevance and a 0–1 scale (higher is better).
 
@@ -80,7 +93,8 @@ The [comparison manifest](benchmarks/comparisons.toml) records each source title
 URL, retrieval date, protocol and numeric source score. The small
 [aggregate snapshots](benchmarks/results) record measured provenance and metrics;
 no dataset text, document maps, per-query rows or per-document hash lists are
-committed. This run's per-query rows and uv environments were deleted after scoring.
+committed. Raw captures stay outside the repository; shared scoring environments
+are retained for concurrent work.
 When datasets are shared with concurrent runs, retain the raw inputs and
 materialized corpora until every consumer finishes; coordinate cleanup with the
 orchestrator. Preserve provisioned model files.
@@ -98,7 +112,7 @@ Use a dedicated result directory to reproduce an exact archived selection:
 ```bash
 python3.12 scripts/bench/chart.py \
   --results docs/benchmarks/results \
-  --commit 28814a851ded4d1b3d5e0def1d112094a852e334 \
+  --commit a4a0eea63f747b0acf4e3a5fa844f79fc5bef39c \
   --version 0.1.0 \
   --machine 'Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads'
 python3.12 -m unittest discover -s scripts/bench -p test_chart.py
