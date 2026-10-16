@@ -11,7 +11,8 @@
 Measured on 2026-10-14 with Seyk 0.1.0, clean commit
 `28814a851ded4d1b3d5e0def1d112094a852e334` (the current `origin/main` when these runs started).
 The chart records that measured commit; later documentation commits do not change
-the search engine. Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads. ONNX Runtime CPU inference, q8,
+the search engine. Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2
+inference threads. ONNX Runtime CPU inference, q8,
 256-dimensional vectors, default segmentation and fusion, 200-segment retrieval
 depth, all hybrid/semantic/lexical queries. Model:
 `onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
@@ -24,8 +25,9 @@ The full test splits contain 5,183 documents / 300 queries (SciFact),
 All 180 IRPAPERS questions remain in the denominator, including the question
 whose relevant page has an empty transcription. Resource-level metrics use the
 first returned segment per resource; IRPAPERS text resources are individual pages.
-One-minute load samples across these runs: SciFact: 25.4–35.5; NFCorpus: 17.9–22.4; IRPAPERS text: 17.2–23.9.
-No timing or quiet-machine performance claim is made.
+One-minute load samples across these runs were 25.4–35.5 (SciFact), 17.9–22.4
+(NFCorpus) and 17.2–23.9 (IRPAPERS text). These runs make no timing or
+quiet-machine performance claim.
 
 | Dataset | Seyk mode | nDCG@10 | MRR@10 | Recall@10 |
 |---|---|---:|---:|---:|
@@ -40,7 +42,7 @@ No timing or quiet-machine performance claim is made.
 | IRPAPERS text | lexical | 0.62941 | 0.56413 | 0.83333 |
 
 Hybrid trails semantic-only on SciFact. This known fusion limitation is tracked
-in Solo todo 4542; this documentation change does not tune ranking.
+in Solo todo 4542.
 nDCG@10 rewards relevant documents near the top of the first ten results, with
 linear graded relevance and a 0–1 scale (higher is better).
 
@@ -74,9 +76,9 @@ reports recall, not nDCG@10, so it has no published comparison bar either.
 
 ### Reproduce the chart
 
-The [comparison manifest](benchmarks/comparisons.toml) retains each source title,
+The [comparison manifest](benchmarks/comparisons.toml) records each source title,
 URL, retrieval date, protocol and numeric source score. The small
-[aggregate snapshots](benchmarks/results) retain measured provenance and metrics;
+[aggregate snapshots](benchmarks/results) record measured provenance and metrics;
 no dataset text, document maps, per-query rows or per-document hash lists are
 committed. This run's per-query rows and uv environments were deleted after scoring.
 When datasets are shared with concurrent runs, retain the raw inputs and
@@ -241,19 +243,21 @@ Record startup, first/warmed embedding, query p50/p95, cold indexing and cached
 search separately. Stop growing configurations on swap/memory pressure. Do not
 compare quiet results with the old busy baseline to claim an optimization ratio.
 
-CPU defaults and all cache/profile fields remain unchanged. Optional tuning is
-for explicit experiments; selecting q8 versus fp32 still uses separate profiles.
+The tuning controls leave CPU defaults and all cache/profile fields unchanged.
+They are for explicit experiments; selecting q8 versus fp32 still uses separate profiles.
 The pool bounds concurrent inference only. It does not bound total queued memory
 across library callers, which prepare inputs before entering the pool. Callers
 must limit their own concurrency and input window sizes.
 
 ### Busy-machine CPU controls measurement
 
-**Busy-machine, indicative only — 2026-10-09.** Apple M5 Max, 18 cores,
+**Busy-machine, indicative only, 2026-10-09.** Apple M5 Max, 18 cores,
 64 GiB, macOS 26.5; Rust 1.99.0; ORT 1.28.0 build da9b5e3; model
-`onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`. All correctness tests and our builds finished before
-these timings, but unrelated work continued. Memory pressure stayed normal and
-pre-existing swap usage stayed at 23,102 MiB (load before/after the set: 21.8/81.2). These results cannot choose a default.
+`onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
+All correctness tests and our builds finished before these timings, but unrelated
+work continued. Memory pressure stayed normal and pre-existing swap usage stayed
+at 23,102 MiB (load before/after the set: 21.8/81.2). These results cannot choose
+a default.
 
 Each row is five alternating A/B or B/A pairs. Configurations are
 `precision:sessions:threads:microbatch:window`. Throughput and RSS are medians of
@@ -310,8 +314,9 @@ A separate same-run pair used `--pairs 1 --segments 32 --corpus 16 --queries 20`
 This is a diagnostic sample, not a latency guarantee. Query samples follow one
 warm query; query shape warmup is not pinned to every pool session. These are
 **queries during a workload started concurrently**: document embedding may finish
-before all query samples, and per-sample overlap was not recorded. Cold search includes indexing the
-16 generated files; cached search reuses the same in-memory engine.
+before all query samples, and per-sample overlap was not recorded. Cold search
+includes indexing the 16 generated files; cached search reuses the same in-memory
+engine.
 
 | Configuration | Idle query p50/p95 | 1-min load | Queries during a workload started concurrently, p50/p95 | 1-min load |
 |---|---:|---|---:|---|
@@ -328,10 +333,10 @@ or tail-latency guarantee from this single, heavily contended pair.
 
 ## Public retrieval harness
 
-This is evaluation tooling, with no ranking, segmentation, cache-schema or public
-API changes. Dataset contents, document maps, runs and per-query diagnostics stay
-under `~/.cache/seyk-bench`. Do not commit or paste them into issues or PRs. Only
-aggregate metrics and provenance belong in a later results PR. NanoSciFact is a
+The harness is evaluation tooling; it does not change ranking, segmentation, the
+cache schema or the public API. Dataset contents, document maps, runs and per-query
+diagnostics stay under `~/.cache/seyk-bench`. Do not commit or paste them into
+issues or PRs. Commit only aggregate metrics and provenance. NanoSciFact is a
 pipeline **smoke** check, not evidence of general retrieval quality.
 
 The inputs are pinned in `scripts/bench/datasets.toml` by URL, revision and SHA-256.
@@ -368,8 +373,8 @@ numbers are one-based physical pages, as in the upstream PDF conversion notebook
 Text resources hash `paper_id#page`; PDF resources hash the numbered PDF's paper ID.
 The text adapter streams the 3.78 GB CSV and discards base64 image fields. It never
 decodes images. The PDF adapter reads only numbered PDFs from the pinned
-source archive (318 MB of uncompressed PDFs). PDF inference disables vision and audio and records omitted-page
-diagnostics; it measures embedded PDF text, not the OCR text track. The image
+source archive (318 MB of uncompressed PDFs). PDF inference disables vision and
+audio and records omitted-page diagnostics; it measures embedded PDF text, not the OCR text track. The image
 track is deferred.
 
 IRPAPERS text skips pages whose transcription is empty or whitespace-only, after

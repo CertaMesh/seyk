@@ -4,14 +4,15 @@ Seyk is Apache-2.0. Dependency licence choices are checked by `cargo deny check
 licenses` against `deny.toml` and the locked graph. GPL, AGPL, LGPL and SSPL
 choices are not allowed. A permissive alternative in a dual-licence expression
 may be selected. MPL requires explicit review, including existing
-dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing transitive dependency of `dirs`. Its unmodified source is available at
+dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing
+transitive dependency of `dirs`. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
 Additional scoped exceptions for opt-in audio are listed below.
 
 PDF text extraction uses pdf-extract 0.12.1 (MIT) and lopdf 0.42.0 (MIT), plus
 MIT-licensed Adobe CMap, Type 1 encoding and font parsers. See their packaged
-licences and source notices in the Cargo registry. The `pdf-render` feature adds Hayro 0.5.0 (Apache-2.0 OR MIT), its CPU
-rasterizer and bundled fallback fonts. No OCR runtime or model assets are included.
+licences and source notices in the Cargo registry. The `pdf-render` feature adds
+Hayro 0.5.0 (Apache-2.0 OR MIT), its CPU rasterizer and bundled fallback fonts. No OCR runtime or model assets are included.
 
 EmbeddingGemma 2 weights and tokenizer files are not bundled in the executable.
 The operator provisions them locally or uses the explicit model download
@@ -19,10 +20,9 @@ command. The pinned export declares Apache-2.0 in its
 [model card](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/blob/daa72c51243991dfcaf9f9137d2c573d8f7790c0/README.md).
 Preserve that licence and upstream notices when distributing the model assets.
 
-ONNX Runtime is the existing native inference dependency (MIT); SQLite is
-bundled by rusqlite (SQLite is public domain). Their upstream distributions
-include notices for native/transitive components. This PDF phase adds no native
-runtime. Release builders must preserve applicable upstream notices when
+ONNX Runtime (MIT) is the native inference dependency; SQLite is bundled by
+rusqlite (SQLite is public domain). Their upstream distributions include notices
+for native/transitive components. PDF support adds no native runtime. Release builders must preserve applicable upstream notices when
 redistributing native artifacts or separately provisioned model assets.
 
 ## PDF rendering fonts
@@ -87,7 +87,10 @@ hayro-interpret archive (`assets/README.md`, `assets/CGATS_LICENSE.txt`).
 
 ## Optional audio decoding (Phase 5a)
 
-Unmodified Symphonia crates, approved for the optional `audio` feature. Each is MPL-2.0, with the license text included at `LICENSE` in its crates.io source archive. These are package+version exceptions only; new versions require new approval.
+Unmodified Symphonia crates, approved for the optional `audio` feature. Each is
+MPL-2.0, with the license text included at `LICENSE` in its crates.io source
+archive. These are package+version exceptions only; new versions require new
+approval.
 
 - [symphonia 0.5.5](https://crates.io/crates/symphonia/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia/0.5.5/download).
 - [symphonia-bundle-flac 0.5.5](https://crates.io/crates/symphonia-bundle-flac/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-bundle-flac/0.5.5/download).
@@ -106,7 +109,7 @@ Unmodified Symphonia crates, approved for the optional `audio` feature. Each is 
 `audio-stt` uses the separate FP32 graphs from
 [Xenova/whisper-tiny at 5332fcc35e32a33b86612b9a57a89be7906102b1](https://huggingface.co/Xenova/whisper-tiny/tree/5332fcc35e32a33b86612b9a57a89be7906102b1).
 The [card at that exact revision](https://huggingface.co/Xenova/whisper-tiny/blob/5332fcc35e32a33b86612b9a57a89be7906102b1/README.md)
-explicitly declares `license: apache-2.0` and identifies Transformers.js. Its
+declares `license: apache-2.0` and identifies Transformers.js. Its
 1,160 bytes have SHA-256 `cdd395427d195f122aee69c00e34183f2fadd8bc217aef35ca7c43395b96d29d`.
 There is no separate LICENSE or NOTICE file in that revision's tree. Preserve
 the [exact card](crates/seyk-stt/assets/XENOVA-CARD.md) and
@@ -147,11 +150,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-RustFFT is MIT OR Apache-2.0; tokenizers is Apache-2.0. ONNX Runtime remains the
-MIT native runtime already used by the optional embedding backend. Cargo-deny
-checks the locked Rust graph; release packaging must also preserve the model,
-mel and native-runtime notices described here. These dependency additions do
-not introduce a copyleft exception.
+RustFFT is MIT OR Apache-2.0; tokenizers is Apache-2.0. ONNX Runtime is the MIT
+native runtime also used by the optional embedding backend. Cargo-deny checks the
+locked Rust graph; release packaging must also preserve the model, mel and
+native-runtime notices described here. The speech-to-text dependencies add no
+copyleft exception.
 
 ### Local speech test generation
 

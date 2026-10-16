@@ -115,9 +115,9 @@ seyk model info                # where they are, whether they are present
 This is the only command that uses the network. It fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
 standard Hugging Face cache. Searching never downloads anything: if the weights are
-missing, search returns keyword and filename matches with a `no_model` degradation marker.
-Successful degraded lexical results use CLI exit status 0.
-Run `model download` explicitly to enable semantic search. Indexing still requires weights.
+missing, search returns keyword and filename matches with a `no_model` degradation marker
+and CLI exit status 0. Run `model download` to enable semantic search. Indexing still
+requires weights.
 
 To use weights you already have, pass a directory with the same layout
 (`tokenizer.json`, `onnx/model_quantized.onnx` + `.onnx_data`, …):
@@ -215,26 +215,26 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
   seyk extract --from-json - --json
 ```
 
-For raw text, extract writes the exact bytes without an added newline; PDF text
-also needs no model. Audio STT is optional and clearly labelled (see below).
+For raw text, extract writes the exact bytes without an added newline. Text and PDF
+text extraction need no model. Audio speech-to-text (STT) is opt-in and labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
 at `schema_version: 2`, `3`, `4`, `5`, `6`, `7` or `8`, not a bare hit. The extraction document uses
 version 8 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
-The `--no-preview` option sets `preview` to
-null. This flag skips preview reads; indexing still reads source content.
+`--no-preview` skips preview reads and sets `preview` to null; indexing still reads
+source content.
 
-Raw text ranges and PDF page-text ranges are supported. Images, whole-resource and other locators return
-an unsupported-extraction error. MCP also exposes an explicit
-`extract` tool accepting a selected MCP hit; it verifies the hash and confines
-reads to the session roots. Search never transcribes.
+Raw text ranges and PDF page-text ranges are supported. Images, whole-resource and
+other locators return an unsupported-extraction error. MCP has an explicit `extract`
+tool that takes a selected MCP hit, verifies the hash and confines reads to the
+session roots. Search never transcribes.
 
 ### Audio (opt-in)
 
 Build with `cargo build --release --features audio`, then provision the extra
 q8 encoder with `seyk model download --audio` (about 325 MiB). This command only
 downloads the two pinned audio files; provision the ordinary model separately.
-Default release builds retain their existing feature set.
+Default release builds do not enable `audio`.
 
 `seyk search "repairing a bicycle" ./recordings` embeds sound directly, with no
 transcription. WAV, FLAC, MP3 and AAC-LC/ALAC in M4A are decoded locally into
@@ -245,10 +245,9 @@ Missing audio weights skip individual audio files; text, images and PDFs still
 work. Search never downloads weights.
 
 The default duration ceiling is two hours, configurable with
-`--max-audio-duration-secs`. Decoding/windowing uses bounded memory; it never
-holds whole-file PCM in RAM. Over-limit sources are skipped entirely.
-Complex MP4 edits,
-multiple tracks, HE-AAC/SBR and changing sample formats are rejected. MP4 edit
+`--max-audio-duration-secs`. Decoding and windowing use bounded memory and never
+hold whole-file PCM in RAM. Over-limit sources are skipped entirely. Complex MP4
+edits, multiple tracks, HE-AAC/SBR and changing sample formats are rejected. MP4 edit
 lists or iTunSMPB remove encoder priming/padding; files without timing metadata
 use their decoded-sample timeline. See the [audio report](docs/architecture.md#phase-5a-audio-retrieval)
 for timing, parity and retrieval measurements.
@@ -261,7 +260,7 @@ model (about 255 MiB). Inference stays offline. A local exact asset directory
 can be selected with `--stt-model-dir` or `SEYK_STT_MODEL_DIR`; it receives the
 same manifest check, including rejection of unexpected files.
 
-Select an audio hit using `seyk extract --from-json hits.json --hit 0 --json`.
+Extract an audio hit with `seyk extract --from-json hits.json --hit 0 --json`.
 Each half-open interval is capped at 30 seconds; longer intervals return a
 typed error. Language is detected from that hit, or set with `--stt-language en`.
 Human output says **Machine transcript (may contain errors)**. JSON includes
@@ -281,16 +280,16 @@ extracted page text, extraction version and page-text hash. These are not byte
 offsets in the PDF file. Explicit extraction checks the full PDF hash before
 decoding, then verifies the derived page hash before returning text.
 
-Scanned PDFs are found by meaning: pages without usable embedded text are
+Scanned PDFs are found by meaning. Pages without usable embedded text are
 rendered as whole-page images, respecting crop, rotation and a white background,
 then embedded at a maximum long edge of 2048 pixels. Hits use a 1-based `page`
-locator and have no text preview. Their text cannot be extracted yet: `extract`
+locator and have no text preview. Their text cannot be extracted yet; `extract`
 returns an explicit OCR-unavailable error. OCR is tracked as a follow-up; no OCR
 model is loaded or downloaded. Mixed PDFs keep their embedded-text hits and
 scanned-page hits. With `--text-only`, a text-only embedder or a build without
 `pdf-render`, image pages produce separate page diagnostics while supported text
-pages remain searchable. Scan indexing is much slower than text indexing:
-rendering measured about 34 ms/page in the compatibility spike, while image
+pages remain searchable. Scan indexing is much slower than text indexing.
+Rendering measured about 34 ms/page in the compatibility spike, while image
 embedding takes seconds per page on CPU. The synthetic end-to-end scan test
 measured about 6.7 s/page with one CPU thread. Use `--text-only` to skip image
 embedding when indexing or searching large PDF collections.
@@ -358,7 +357,7 @@ position (reciprocal rank fusion):
 - **words**: keyword relevance (BM25) over the text, heading, file name and path;
 - **name**: the query names the file (`father.md`, `father` or `notes/father.md`).
 
-The hybrid score only depends on **where a hit ranked in each list**, scaled so
+The hybrid score depends only on **where a hit ranked in each list**, scaled so
 1.000 means first everywhere something was found. It says nothing about how
 good the match is in absolute terms: with three unrelated notes, the third one
 still scores close to 1. **The tag shows the strength**: `meaning 0.70` is the
@@ -369,7 +368,7 @@ and one- or two-word queries. In a question written in prose they count less
 (0.3), so incidental shared words only break ties between passages of similar
 meaning.
 
-`--mode semantic` gives the old behaviour: the score is the cosine itself. Use
+With `--mode semantic`, the score is the cosine itself (the old behaviour). Use
 it to rank within one search; it is not a calibrated probability, and unrelated
 text rarely scores near zero, so pick a `--min-score` by looking at your own
 results. `--mode lexical` never embeds the query. The CLI still loads the model
@@ -386,8 +385,8 @@ keyword matches. Images, scanned PDF pages and audio require their normal models
 over stdio. Agents get one tool, `search`, that takes one to eight phrasings and
 returns ranked passages as path, line range, heading, score, preview and
 `matched` (`meaning`, `words`, `name`). An optional `mode` switches between
-`hybrid` (default), `semantic` and `lexical`. The agent
-then reads those lines itself and writes the answer. Seyk never generates text.
+`hybrid` (default), `semantic` and `lexical`. The agent then reads those lines
+and writes the answer. Seyk never generates text.
 
 ```bash
 # Claude Code: make your notes searchable in every session
@@ -406,10 +405,10 @@ claude mcp add seyk -- seyk mcp .
   second on a warm cache.
 - **Indexing runs in the background.** On start the server indexes its folders,
   then re-indexes on change. While the model loads or discovered files await
-  embedding, searches prepare keyword and filename matches from text and PDF text.
+  embedding, searches return keyword and filename matches from text and PDF text.
   They report `degraded.reason` as `model_loading` or `not_yet_embedded`; the marker
-  disappears once semantic indexing catches up. They also report `index.state` (`loading_model`, `indexing` with
-  progress, `ready`, `pass_failed` or `stopped`).
+  disappears once semantic indexing catches up. They also report `index.state`
+  (`loading_model`, `indexing` with progress, `ready`, `pass_failed` or `stopped`).
 - **Confined to its folders.** The tool refuses paths outside the folders the
   server was started with.
 - **For code, it complements grep.** Hybrid search finds `retryPayment` by name
@@ -421,7 +420,7 @@ seyk daemon stop      # connected sessions lose the tool until they restart
 seyk mcp --standalone ~/notes   # no daemon: one process per session
 ```
 
-Sessions only share a daemon when they use the same model options
+Sessions share a daemon only when they use the same model options
 (`--model`, `--dimension`, `--precision`, `--text-only`, `--cache-path`) and the
 same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
@@ -429,8 +428,8 @@ Windows `seyk mcp` always runs standalone.
 
 For automatic local-content collections on Unix, opt into a fixed narrower
 policy with `seyk mcp --local-content /absolute/real/folder`. It requires explicit
-directory roots and always runs in-process, bypassing the daemon. MCP initialize
-advertises `serverInfo.name: seyk-local-content-v1`; clients relying on this
+directory roots and always runs in-process, bypassing the daemon. The MCP
+initialize response advertises `serverInfo.name: seyk-local-content-v1`; clients relying on this
 policy must require that name and JSON schema 6 or later, and refuse an older helper
 instead of dropping the flag. Use `--no-watch` to disable background indexing.
 
@@ -611,16 +610,63 @@ See [standalone embedding usage and API migration](docs/embedding.md) for batch
 requests, offline model files, optional images, supported tasks, examples, and
 migration from the old `Embedder` and cache write APIs.
 
+## Result counts and indexing progress
+
+Opt in with `seyk search "query" ./folder --json --kind-counts`, MCP search
+`kind_counts: true`, or the Rust builder `.kind_counts(true)`. The optional
+`kind_counts` map counts **returned segment hits**, after filtering, ranking and
+limit. Keys are the existing locator kinds: `text`, `page_text` (PDF text),
+`page` (rendered/scanned PDF page), `time` (audio window), `whole_resource`
+(e.g. an image), and reserved `image_region`. Absent kinds have zero hits;
+an empty result has `{}`. These are not unique-file counts or corpus totals.
+Counting adds no candidate-total query and leaves ranking and candidate depth unchanged.
+
+Daemon status (including `--json`), MCP `index_status`, and MCP search expose
+`index_progress`: one entry per watched root, with `root` (a lossless file URI)
+and nullable `progress`.
+The `folders` and `index.state` fields are unchanged. Library callers get
+`ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
+`SyncStats::progress`. A library request spanning several roots gets one combined
+pass snapshot; daemon watchers each index one root. Before `Discovered`, a pass
+also sends `ProgressEvent::Walked` with the roots its listing actually walked,
+resolved once before the walk, when the provider reports them through
+`ResourceProvider::list_walked` (`FsProvider` does; the default reports none).
+MCP sessions see a watcher's counts only when that walked root lies inside the
+session's pinned root; a pass without one exposes no counts.
+
+`progress.by_kind` uses resource kinds `text`, `pdf`, `image`, and `audio`.
+Each entry counts resources `indexed`, `waiting`, and `skipped` in the current
+or last completed discovery pass, **not a persistent cache inventory**. All
+resources initially wait; successful cache reuse or a committed update moves
+them to indexed, and observed whole-resource failures move them to skipped.
+An empty/partially searchable PDF committed successfully counts as indexed;
+individual failed pages remain in page diagnostics. Counts reset on rediscovery,
+so removed files disappear. Skips describe this pass only; skipped-version counts
+are not stored and do not survive a process restart.
+
+`eta_seconds` is `ceil(waiting_resources * elapsed_pass_seconds /
+newly_indexed_resources)`, using this process's current pass only. It stays null
+until at least two newly indexed resources complete and at least 1 ms elapses,
+and returns to null when nothing waits. Cache reuse and skips do not train the
+rate. This rough resource-throughput estimate includes discovery-following
+preparation/embedding/commit time and assumes the remaining resource mix has
+similar cost; it is not a segment-based prediction or a countdown. Snapshots
+update at resource completions. A large first PDF/audio resource can therefore
+keep ETA null until later resources finish. Failed/stopped watchers invalidate
+the snapshot. Loading/unavailable progress is null. A session confined to a child
+of a watched root receives null progress for its own root rather than revealing
+the parent's inventory. Status never starts indexing or loads a model.
+
 ## How caching works
 
 The original files stay the source of truth. The cache holds file metadata,
 segment locations, vectors and a keyword index (see the privacy note below).
 
-There are three ways to search:
+There are four ways to search:
 
 1. **Lazy cache (default).** For each file: if size and modification time match
    the cache, its vectors are reused without reading it. Otherwise the file is read
-   and hashed. If the content hash is unchanged only its metadata and version are updated.
+   and hashed. If the content hash is unchanged, only its metadata and version are updated.
    Otherwise it is re-segmented, and only segments whose exact model input is new
    are sent to the model. Vectors are saved after every batch, so an interrupted
    first search keeps its progress.
@@ -636,7 +682,7 @@ Stale vectors cannot be reused. Every vector is stored under a *profile*: a hash
 the model id, exact weights revision, precision, dimension, normalisation, both
 prompt templates, maximum input length and segmenter version. Within a profile it
 is keyed by a hash of the exact text sent to the model. Change any of these and
-the old vectors are simply never looked up. `cache stats` lists the profiles.
+the old vectors are never looked up. `cache stats` lists the profiles.
 
 The `text-literals-v1` model variant treats Gemma special-token spellings in
 text and titles as ordinary text. Earlier versions could skip media-token
@@ -896,7 +942,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for measured numbers and how to rep
 
 ## CPU throughput controls
 
-Defaults remain one CPU session, ONNX Runtime's automatic intra-op thread count,
+Defaults are one CPU session, ONNX Runtime's automatic intra-op thread count,
 16 inputs per batch and q8 weights. For measured tuning, the CLI accepts:
 
 ```bash
@@ -908,11 +954,11 @@ seyk index --text-only --sessions 2 --threads 4 --batch-size 16 --embedding-wind
 to `sessions × batch-size`. A window no larger than one batch cannot use two
 sessions concurrently; use at least two full batches to keep both busy. Each
 additional text session has its own weights/allocator arena (several GiB each;
-measure memory use). Avoid automatic thread counts
-in a multi-session experiment: several full-machine thread teams can be slower.
+measure memory use). Avoid automatic thread counts in a multi-session experiment,
+because several full-machine thread teams can be slower.
 Larger windows also increase the work repeated after an interruption or batch
 failure; the engine still writes cache/progress updates serially.
-Image and audio requests remain serial. The same controls work with search and MCP,
+Image and audio requests stay serial. The same controls work with search and MCP,
 and nondefault controls select a separate daemon endpoint, not a new vector cache.
 
 Library callers use `EmbeddingGemma2::builder().sessions(n).threads(m).batch_size(b)`
@@ -939,7 +985,6 @@ it does not establish a faster default.
   5–6 segments per second on a busy machine, about 30 minutes for 10,000
   segments. After that, only changes are embedded. Run `index --watch` or the MCP
   server so this happens in the background.
-
 - **Audio transcription, video and scanned-page OCR are not implemented.** See
   [the multimodal status](docs/multimodal.md) for current support and remaining
   work, including [PDF extraction limits](docs/multimodal.md#pdf-retrieval-done-ocr-deferred).
@@ -990,50 +1035,3 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 ## License
 
 Apache-2.0. EmbeddingGemma 2 is released by Google under Apache 2.0.
-
-### Result counts and indexing progress
-
-Opt in with `seyk search "query" ./folder --json --kind-counts`, MCP search
-`kind_counts: true`, or the Rust builder `.kind_counts(true)`. The optional
-`kind_counts` map counts **returned segment hits**, after filtering, ranking and
-limit. Keys are the existing locator kinds: `text`, `page_text` (PDF text),
-`page` (rendered/scanned PDF page), `time` (audio window), `whole_resource`
-(e.g. an image), and reserved `image_region`. Absent kinds have zero hits;
-an empty result has `{}`. These are not unique-file counts or corpus totals.
-No candidate-total query is added, and ranking and candidate depth are unchanged.
-
-Daemon status (including `--json`), MCP `index_status`, and MCP search expose
-`index_progress`: one entry per watched root, with `root` (a lossless file URI)
-and nullable `progress`.
-Existing `folders` and `index.state` fields remain unchanged. Library callers get
-`ProgressEvent::IndexProgress` during an indexing pass and its final snapshot in
-`SyncStats::progress`. A library request spanning several roots gets one combined
-pass snapshot; daemon watchers each index one root. Before `Discovered`, a pass
-also sends `ProgressEvent::Walked` with the roots its listing actually walked,
-resolved once before the walk, when the provider reports them through
-`ResourceProvider::list_walked` (`FsProvider` does; the default reports none).
-MCP sessions see a watcher's counts only when that walked root lies inside the
-session's pinned root; a pass without one exposes no counts.
-
-`progress.by_kind` uses resource kinds `text`, `pdf`, `image`, and `audio`.
-Each entry counts resources `indexed`, `waiting`, and `skipped` in the current
-or last completed discovery pass, **not a persistent cache inventory**. All
-resources initially wait; successful cache reuse or a committed update moves
-them to indexed, and observed whole-resource failures move them to skipped.
-An empty/partially searchable PDF committed successfully counts as indexed;
-individual failed pages remain in page diagnostics. Counts reset on rediscovery,
-so removed files disappear. Skips describe this pass only; durable skipped-version
-counts across process restarts are unavailable. No skipped-version storage is added.
-
-`eta_seconds` is `ceil(waiting_resources * elapsed_pass_seconds /
-newly_indexed_resources)`, using this process's current pass only. It stays null
-until at least two newly indexed resources complete and at least 1 ms elapses,
-and returns to null when nothing waits. Cache reuse and skips do not train the
-rate. This rough resource-throughput estimate includes discovery-following
-preparation/embedding/commit time and assumes the remaining resource mix has
-similar cost; it is not a segment-based prediction or a countdown. Snapshots
-update at resource completions. A large first PDF/audio resource can therefore
-keep ETA null until later resources finish. Failed/stopped watchers invalidate
-the snapshot. Loading/unavailable progress is null. A session confined to a child
-of a watched root receives null progress for its own root rather than revealing
-the parent's inventory. Status never starts indexing or loads a model.
