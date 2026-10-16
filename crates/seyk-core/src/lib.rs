@@ -22,6 +22,7 @@ mod embedding;
 mod engine;
 mod error;
 pub mod extractor;
+mod lexical_engine;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 #[cfg(feature = "pdf")]
@@ -30,8 +31,12 @@ pub mod index;
 pub mod lexical;
 #[cfg(unix)]
 pub mod local_content;
+#[cfg(unix)]
+mod pinned_dir;
+mod progress;
 pub mod provider;
 mod resource;
+pub use progress::{IndexProgress, KindProgress};
 pub mod segment;
 #[cfg(feature = "watch")]
 pub mod watch;
@@ -43,16 +48,17 @@ pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};
 pub use embedding::{Dimension, Embedding};
 pub use engine::{
-    IndexReport, IndexRequest, MatchSignals, PageDiagnostic, ProgressEvent, ProgressFn,
-    SearchEngine, SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults,
-    SearchStats, SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
+    DegradedMode, DegradedReason, IndexReport, IndexRequest, MatchReason, MatchSignals,
+    PageDiagnostic, ProgressEvent, ProgressFn, SearchDegradation, SearchEngine,
+    SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults, SearchStats,
+    SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
 pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};
 pub use seyk_embed::{EmbeddingRequest, EmbeddingTask, Modality};
 
 pub use provider::{
-    FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion,
+    FsProvider, ProvidedResource, ResourceListing, ResourceProvider, ResourceScope, ResourceVersion,
 };
 
 pub use extractor::{ExtractedContent, Extractor, TextExtractor, extract_resource};

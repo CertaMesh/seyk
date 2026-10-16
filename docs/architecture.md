@@ -1,11 +1,14 @@
 # Architecture and roadmap notes
 
+This file records the architecture as audited before each development phase, so
+later phases can see what was deliberately left alone and why.
+
 ## Embedding crate split: pre-change audit (main @00c1038)
 ### Current embedding architecture
 - One package, `seyk`, owns the library and binary. `src/embedder/mod.rs` defines a synchronous, object-safe `Embedder: Send + Sync`, `ModelIdentity`, `ResourceInput`, and `VideoFrame`; `src/embedding.rs` supplies `Dimension`, normalized vectors, dot products and cache byte conversion.
-- `src/embedder/gemma.rs` implements text AND images using tokenizers + mutex-protected ONNX sessions. Text batches sort by token length, run padded sub-batches, then restore input order. Images currently run individually through vision + text models; audio/video return UnsupportedModality.
+- `src/embedder/gemma.rs` implements text and images using tokenizers + mutex-protected ONNX sessions. Text batches sort by token length, run padded sub-batches, then restore input order. Images currently run individually through vision + text models; audio/video return UnsupportedModality.
 - Loading is already offline: HF cache or local directory; explicit `download` uses hf-hub. Defaults: q8, 256 dimensions, 2048-token limit, batch 16, vision when image feature enabled. Local model fingerprinting and ONNX external-data hard-link/copy handling exist.
-- ONNX returns pooled 768-wide sentence embeddings. Existing code truncates to 128/256/512/768 and then L2-normalizes. Zero vectors remain zero; do not falsely label those normalized. There is no current general task API.
+- ONNX returns pooled 768-wide sentence embeddings. Existing code truncates to 128/256/512/768 and then L2-normalizes. Zero vectors remain zero and must not be labelled normalized. There is no current general task API.
 ### Existing coupling
 - The trait speaks only query/resources, uses search's Error/Result, and imports Modality from a module containing ResourceId/url. Even disabling CLI leaves SQLite, walkers and search in the package.
 - Gemma's missing-weight error prescribes the Seyk CLI. hf-hub brings ureq 2 -> url: confirmed by `rustup run 1.99.0 cargo tree --locked --offline -e normal -i url`. Moving gemma.rs unchanged would fail the binding dependency constraint.
@@ -15,14 +18,11 @@
 - Traits/input types/Modality/vector math/errors and model identity move to a lightweight crate. Runtime, prompt formatting, tokenizer, image preprocessing, model location/fingerprint and inference move to the backend.
 - Cache vector byte serialization remains in core. Segmentation, title selection, Markdown link-target stripping, providers, extraction, ranking and index/cache remain search concerns.
 ### Proposed crate boundaries
-- Four packages: `crates/seyk-embed`, `crates/seyk-embeddinggemma`, `crates/seyk-core`, and root `seyk`. Root is the compatibility facade PLUS existing thin CLI/MCP/daemon composition package (the seyk-cli role).
+- Four packages: `crates/seyk-embed`, `crates/seyk-embeddinggemma`, `crates/seyk-core`, and root `seyk`. Root is the compatibility facade plus the existing thin CLI/MCP/daemon composition package (the seyk-cli role).
 - Graph: `seyk -> seyk-core -> seyk-embed`; `seyk -> seyk-embeddinggemma -> seyk-embed`. Core has no backend dependency, including its mock-based tests. No fifth facade/CLI package solely to achieve a directory diagram.
 ### Migration impact
 - Keep `use seyk::SearchEngine`, existing public search module paths, CLI commands/binary name, and root release/install behavior. Root re-exports core and embedding types; optional `seyk::embedder::gemma` re-exports backend types with GemmaEmbedder alias.
 - Custom Embedder implementations migrate to task-aware batches and embedding-specific Result; cache implementors/struct literals migrate once to ResourceWrite/SegmentWrite. Document error matching changes, Dimension generalization and download ownership.
-
-This file records the architecture as audited before each development phase, so
-later phases can see what was deliberately left alone and why.
 
 ## Phase 0 audit (v0.1.0)
 
@@ -95,7 +95,8 @@ later phases can see what was deliberately left alone and why.
 - **Keyword search.** `src/lexical.rs` holds one tokenizer and query builder
   (FTS5's `unicode61 remove_diacritics 2`, with common
   function words removed from queries), used by both caches. An identifier such as
-  `Session::restore()` becomes a group of tokens that must occur in the same field, in any order. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
+  `Session::restore()` becomes a group of tokens that must occur in the same field,
+  in any order. `SqliteCache` keeps a contentless FTS5 table, `segments_fts`,
   with columns for file name, path, heading and body, ranked by BM25.
   `MemoryCache` runs the same BM25 in memory, so `--no-cache` behaves the same.
 - **Schema v3.** Opening a v1 or v2 cache marks resources stale so each file is
@@ -117,7 +118,8 @@ later phases can see what was deliberately left alone and why.
 
 ### Evaluation
 
-A real folder of book drafts, eight queries, each with one known target passage. Rank of the target (lower is better):
+A real folder of book drafts, eight queries, each with one known target passage.
+Rank of the target (lower is better):
 
 | Query | Semantic | Hybrid (prose weight 0.3) |
 |---|---:|---:|
@@ -142,8 +144,9 @@ A real folder of book drafts, eight queries, each with one known target passage.
 - **No learned or calibrated weights.** Eight queries are enough to reject bad
   settings, not to fit parameters. The constants are documented and overridable
   (`--lexical-weight`, hidden).
-- **No user-facing query syntax.** Identifiers become token conjunctions automatically, but
-  quotes, `AND`/`OR` and field filters (`name:`) are not supported.
+- **No user-facing query syntax.** Identifiers become token conjunctions
+  automatically, but quotes, `AND`/`OR` and field filters (`name:`) are not
+  supported.
 - **No change to segmentation or the embedding cache key.** Retrieval quality
   numbers above rely on both staying as they were.
 - **No query expansion or reranking model.** Both would add a second model.
@@ -156,8 +159,9 @@ A real folder of book drafts, eight queries, each with one known target passage.
 - **Rank fusion hides strength.** A hybrid score of 0.97 can be a weak match
   that happens to rank second of three. That is why hits carry their signals
   and the CLI shows the cosine.
-- **A keyword index is not content-free.** Contentless FTS5 stores word frequencies. The privacy
-  follow-up below removes source word order, but the cache remains sensitive.
+- **A keyword index is not content-free.** Contentless FTS5 stores word
+  frequencies. The privacy follow-up below removes source word order, but the
+  cache remains sensitive.
 - **Two regressions remain** ("grief as something physical" 1 → 7, "ink on the
   skin" 19 → 25): keyword hits on a common word push a purely thematic passage
   down. `--mode semantic` covers those cases for now.
@@ -185,7 +189,8 @@ this migration is not a forensic scrub of an existing cache file.
 Reproduced with bundled SQLite in automated tests: contentless `detail=none`
 and `detail=column` reject phrase queries and return zero from `bm25()`;
 `detail=none` also rejects column filters. `detail=full` with sorted input
-retains nonzero, field-weighted BM25. See [SQLite's FTS5 documentation](https://sqlite.org/fts5.html#the_detail_option)
+retains nonzero, field-weighted BM25. See
+[SQLite's FTS5 documentation](https://sqlite.org/fts5.html#the_detail_option)
 for detail modes and their restrictions.
 
 Queries quote each token, AND identifier tokens within a field, and OR the
@@ -270,14 +275,16 @@ and per-session candidates do not expand that scope.
 
 ### Cache v4
 
-The public cache API uses ResourceId, while file identities retain the existing
-BLOB path keys in SQLite, including canonical Windows drive prefixes. Non-file IDs use a NUL-prefixed UTF-8 URI key, which
-cannot collide with a valid local filename. Legacy SQL column names remain
-internal details. The v4 migration adds an opaque `version` and nullable `descriptor_hash`
-column. Legacy fingerprints are unknown, forcing preparation on the next sync. It retains resource keys, segment rowids, contentless FTS rows, input
-hashes, profiles and vector bytes. A v3 cache retains its keyword index until sync and reuses byte-identical
-model inputs without re-embedding. v1/v2 upgrades still perform the Phase 1 privacy invalidation,
-retaining vectors across partial-scope rebuilds.
+The public cache API uses ResourceId, while file identities keep the existing
+BLOB path keys in SQLite, including canonical Windows drive prefixes. Non-file IDs
+use a NUL-prefixed UTF-8 URI key, which cannot collide with a valid local
+filename. Legacy SQL column names remain internal details. The v4 migration adds
+an opaque `version` and nullable `descriptor_hash` column. Legacy fingerprints are
+unknown, forcing preparation on the next sync. The migration keeps resource keys,
+segment rowids, contentless FTS rows, input hashes, profiles and vector bytes. A
+v3 cache keeps its keyword index until sync and reuses byte-identical model inputs
+without re-embedding. v1/v2 upgrades still perform the Phase 1 privacy
+invalidation, keeping vectors across partial-scope rebuilds.
 
 This is a one-way schema upgrade. Old binaries treat unfamiliar cache versions
 as disposable and can clear v4; do not run old and new binaries against the
@@ -294,16 +301,14 @@ After a document schema is released, any field addition, removal or rename
 bumps its version, including additive fields, because consumers parse strictly.
 A new command may introduce a new document type at the current version without
 changing existing document schemas. Using an existing nullable field with null
-does not change its schema. The field
-corrections here finalize unreleased v2. Bare `null` for no daemon is the sole
-non-object exception.
+does not change its schema. The field corrections here finalize unreleased v2.
+Bare `null` for no daemon is the sole non-object exception.
 
 CLI search retains queries/mode/hits/stats. A hit now contains, for example,
 `"resource": "file:///notes/my%20note.md"` instead of a path string. MCP hits add
 that resource field and retain `"path": "/notes/my note.md"` for opening files.
 MCP paths and CLI skipped-record paths are omitted for non-file IDs. The URI is
-the lossless identity;
-JSON display paths replace invalid UTF-8 bytes. Skipped resources expose a URI
+the lossless identity; JSON display paths replace invalid UTF-8 bytes. Skipped resources expose a URI
 and optional local path. Parse `resource` as a URI and percent-decode its file
 path; never strip the `file://` prefix. Confinement checks must compare decoded,
 canonical filesystem paths, not URI strings. Human CLI output for existing files
@@ -316,8 +321,7 @@ Public Rust API breaks:
 - `ResourceId::path()` is removed. Replace it with `to_file_path() -> Option<PathBuf>`;
   use `Display` or `as_str()` when a URI is wanted.
 - `ResourceId::from_path` is fallible and requires an absolute local path
-  (remote UNC hosts are rejected); its serde
-  representation and parser use URIs, so legacy serialized path strings are
+  (remote UNC hosts are rejected); its serde representation and parser use URIs, so legacy serialized path strings are
   rejected. File URIs normalize aliases; ordering retains local Path ordering
   for file/file comparisons and uses URI order for non-file identities.
 - ResourceLocator adds ImageRegion; both ResourceLocator and Modality become
@@ -334,8 +338,7 @@ Public Rust API breaks:
   `LexicalHit.path` become `resource: ResourceId`.
 
 EmbeddingCache, CachedResourceState, ResourceProvider, ResourceScope,
-ProvidedResource and ResourceVersion are
-explicitly unstable: they may change before 1.0; filesystem is the only supported
+ProvidedResource and ResourceVersion are explicitly unstable: they may change before 1.0; filesystem is the only supported
 provider. They are not an authorization/ACL framework. Direct library
 SearchResults serialization includes URI hits but does not add the CLI envelope.
 
@@ -343,8 +346,8 @@ SearchResults serialization includes URI hits but does not add the CLI envelope.
 
 The required Rust 1.99 fmt and all-target Clippy checks pass. The default test
 suite passes with the 9 existing weight/reference-dependent tests ignored and
-two Windows-only follow-ups documented below; PR #9
-records the per-OS results for the final head.
+two Windows-only follow-ups documented below; PR #9 records the per-OS results
+for the final head.
 The updated library doctest compiles. Automated evidence includes:
 
 - A test-only memory provider driving indexing, semantic/lexical/hybrid retrieval,
@@ -359,8 +362,8 @@ The updated library doctest compiles. Automated evidence includes:
   symlink escape rejection, and daemon protocol separation.
 - URI round-trips for spaces, Unicode, reserved characters and non-UTF-8 Unix
   bytes. This Mac filesystem rejects creating non-UTF-8 filenames, so the output
-  test constructs that identity directly. Native Windows drive-path and legacy-key tests are
-  included; CI now runs fmt, Clippy and the default suite on Ubuntu, macOS and
+  test constructs that identity directly. Native Windows drive-path and
+  legacy-key tests are included; CI now runs fmt, Clippy and the default suite on Ubuntu, macOS and
   Windows. Native Windows outcomes are recorded on PR #9.
 
 A real local EmbeddingGemma 2 q8 run (128 dimensions, text-only, debug binary)
@@ -653,8 +656,8 @@ previous hook. Per-parse RAII guards change only thread-local suppression and
 record sanitized panic reasons; unrelated threads delegate to the captured hook.
 Guard drop restores thread-local state even during unwinding. First installation
 is deferred if a parse starts while unwinding, because Rust forbids set_hook
-then; the existing hook may print until the dispatcher is installed. A later external
-hook replaces the dispatcher: catch_unwind still catches parser panics, but they
+then; the existing hook may print until the dispatcher is installed. A later
+external hook replaces the dispatcher: catch_unwind still catches parser panics, but they
 may print. Seyk never removes or overwrites a hook installed after its own.
 This does not contain aborts, OOM or hangs. A non-UTF-8 Type-4 stream is rejected
 explicitly: without a logger, the upstream log argument's UTF-8 unwrap is never
@@ -669,10 +672,10 @@ model load 3347 ms, cold PDF index 982 ms, warm query p50/p95 443/486 ms. This i
 small synthetic regression gate, not a claim about arbitrary PDFs. The macOS
 ARM release executable is 40,919,520 bytes with PDF versus 39,427,232 without
 (+1,492,288 bytes, 3.8%). Linked libraries remain system libraries/frameworks;
-PDF adds no dynamic runtime. Unicode,
-ligature, malformed-page, stale-source, provider, limit and cache tests complement
-that evaluation. Existing model parity and profile goldens remain separate gates. Before the strict-validation review fix, a direct debug
-limit-test run (no compiler/model) used 55.8 MiB maximum RSS and 38.74 s for
+PDF adds no dynamic runtime. Unicode, ligature, malformed-page, stale-source,
+provider, limit and cache tests complement that evaluation. Existing model parity
+and profile goldens remain separate gates. Before the strict-validation review
+fix, a direct debug limit-test run (no compiler/model) used 55.8 MiB maximum RSS and 38.74 s for
 1 MiB/page rejection, 32 MiB/document rejection and 512 accepted pages. The
 full synthetic PDF/text evaluation process used 811.9 MiB maximum RSS, including
 the shared model and both engines; this is not incremental PDF memory. A second
@@ -773,8 +776,7 @@ These limits bound queued rasters, not hostile decoder allocation or CPU time.
 
 ### Deliberately not implemented
 
-OCR is tracked as a follow-up. The compatibility
-spike found that paddle-ocr-rs 0.6.1 does not compile with the pinned single
+OCR is tracked as a follow-up. The compatibility spike found that paddle-ocr-rs 0.6.1 does not compile with the pinned single
 ORT rc.13 runtime, and model conversion provenance was incomplete. No OCR code,
 weights, download command, fork, MSRV increase or alternate inference runtime is
 included. Search and extraction remain separate: a relevant page can be found
@@ -803,11 +805,11 @@ recall limitation, not an assertion of document fidelity.
 No logger is installed. Library applications with logging must filter
 `pdf_extract`, `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off because
 upstream diagnostics can contain source data. Renderer loading and rendering
-catch unwinding panics into sanitized errors under the same thread-local suppression guard
-as text parsing. The permanent dispatcher delegates unrelated panics to its captured
-hook; a later external hook replaces it and may print parser panics. Seyk never
-removes or overwrites that later hook. catch_unwind does not
-contain aborts, OOM or hangs. Tests exercise an unwind inside Hayro through a
+catch unwinding panics into sanitized errors under the same thread-local
+suppression guard as text parsing. The permanent dispatcher delegates unrelated
+panics to its captured hook; a later external hook replaces it and may print
+parser panics. Seyk never removes or overwrites that later hook. catch_unwind
+does not contain aborts, OOM or hangs. Tests exercise an unwind inside Hayro through a
 panicking font callback and real CLI output capture for hidden-marker render
 fixtures, in addition to the parser leak regressions.
 
@@ -836,9 +838,9 @@ benchmarks. The earlier compatibility spike measured rendering alone at roughly
 Complete the compatible single-ORT OCR adapter and model-provenance follow-up
 before adding scan text extraction. Process isolation remains separate.
 During the Actions billing block the full local macOS merge gate supplies
-implementation verification; Linux/Windows and all release targets must be
-rerun once Actions is restored; this is tracked as a follow-up. The earlier four-target
-compatibility spike established renderer build/hash/link feasibility, but does
+implementation verification. Linux/Windows and all release targets must be
+rerun once Actions is restored; this is tracked as a follow-up. The earlier
+four-target compatibility spike established renderer build/hash/link feasibility, but does
 not replace verification of this implementation. Platform-sensitive areas are
 floating-point raster/PNG determinism, filesystem behavior and dependency
 linking; production rendering adds no platform-specific branches. The optional
@@ -862,8 +864,8 @@ The core reads at most the existing 32 MiB encoded input limit. Symphonia emits
 bounded packets with gapless MP3 enabled. A bounded MP4 box reader applies one
 `elst` entry's `media_time` and `segment_duration`, converting the media/movie
 timescales, clamping to the `mdhd` media end so millisecond rounding cannot
-retain AAC block padding. Without an edit list it uses iTunSMPB delay/length; without either it
-uses the decoded-sample timeline. Empty, multi-entry, non-unit-rate edits and
+retain AAC block padding. Without an edit list it uses iTunSMPB delay/length;
+without either it uses the decoded-sample timeline. Empty, multi-entry, non-unit-rate edits and
 multiple tracks are rejected rather than assigned speculative offsets. AAC-LC
 AudioSpecificConfig is checked before decoding: Symphonia can otherwise ignore
 SBR while decoding the LC core of HE-AAC.
@@ -873,8 +875,8 @@ windowed-sinc filter (0.94 Nyquist guard, zero-extended edges) produces mono
 16 kHz f32. Decoding never retains a full PCM file. The packet buffer, resampler
 history and 10-second rolling window are bounded independently of duration.
 Window starts advance by 8 seconds; the first short window ends the sequence,
-without emitting further windows contained in that tail. Tails
-shorter than 320 samples are zero-padded only for embedding. Time locators use
+without emitting further windows contained in that tail. Tails shorter than 320
+samples are zero-padded only for embedding. Time locators use
 floor(start sample × 1000 / 16000), ceil(end sample × 1000 / 16000), with the real
 post-trim end, never the padded end. Intervals are half-open and non-empty.
 
@@ -882,8 +884,8 @@ The decoded cap is **16,777,216 samples at 16 kHz = 1,048.576 seconds**, derived
 from 32 MiB of 16-bit mono PCM. Known exact lengths can fail before decoding;
 the streaming counter also enforces it. Recordings over about 17.5 minutes are
 skipped entirely, even if windows were processed before the limit was detected.
-This bounds work for highly compressed
-inputs while retaining the existing encoded-file policy. Supported source rates
+This bounds work for highly compressed inputs while keeping the existing
+encoded-file policy. Supported source rates
 are 8–192 kHz, with up to eight channels (AAC-LC is mono/stereo); format changes,
 corrupt frames and unsupported profiles return `UnsupportedAudio`.
 
@@ -988,9 +990,9 @@ No additional source audio is committed.
 Ten generated timing fixtures have zero cross-correlation lag and exact output
 lengths at 16 kHz: WAV, FLAC, ALAC, FFmpeg AAC (1024 priming samples), Apple AAC
 (2112), MP3/LAME, a nonzero-media-time trimmed AAC, MP3 without LAME metadata and
-AAC without `edts`, plus an AAC file ending between whole milliseconds. The two metadata-absent cases compare to their decoded-timeline WAV
-reference,
-so no hidden constant is used to guess missing encoder delay. HE-AAC and
+AAC without `edts`, plus an AAC file ending between whole milliseconds. The two
+metadata-absent cases compare to their decoded-timeline WAV reference, so no
+hidden constant is used to guess missing encoder delay. HE-AAC and
 multiple-track fixtures produce typed rejections.
 
 The largest allowed WAV is exactly **33,554,432 bytes**, representing
@@ -998,7 +1000,10 @@ The largest allowed WAV is exactly **33,554,432 bytes**, representing
 (**17.292 s/audio-minute**); `/usr/bin/time -l` measured peak RSS
 **1,257,816,064 bytes (1.171 GiB)** for the process, including ONNX Runtime.
 
-Stripped (`-x`) Rust 1.99.0 release binaries: default **34,908,632 bytes**, `--features audio` **36,368,200 bytes**; delta **1,459,568 bytes (1.392 MiB, 4.18%)**. No probe harness is included. Default dependency-tree verification contains no Symphonia.
+Stripped (`-x`) Rust 1.99.0 release binaries: default **34,908,632 bytes**,
+`--features audio` **36,368,200 bytes**; delta **1,459,568 bytes (1.392 MiB,
+4.18%)**. No probe harness is included. Default dependency-tree verification
+contains no Symphonia.
 
 The local merge gate passed: default/audio workspace tests and clippy, core
 feature matrix, ignored cache/PDF/audio goldens, timing fixtures, standalone
@@ -1006,8 +1011,8 @@ checks, Rust 1.89 checks and builds with/without audio, release smoke, licenses
 (default/all features) and dependency boundaries. The fractional-duration fix
 was followed by the affected audio gates again. The ALAC/panic-containment
 and tail-window fixes passed the full local gate, including the expanded
-feature/embedding goldens and the ten timing fixtures. Linux and Windows validation
-remains for the CI matrix; this report covers macOS ARM64 only.
+feature/embedding goldens and the ten timing fixtures. Linux and Windows
+validation remains for the CI matrix; this report covers macOS ARM64 only.
 
 Reproduce (local weights only; ignored tests never provision models):
 
@@ -1152,8 +1157,8 @@ and Windows execution still requires CI when GitHub Actions billing is restored.
 The optional `audio` feature now admits a canonical 16 kHz presentation of up to
 7,200 seconds by default. `SearchEngineBuilder::max_audio_duration_secs` and CLI
 `--max-audio-duration-secs` set one positive, inclusive, whole-second limit.
-Daemon startup arguments always include the value (including the default), so its endpoint and engine
-use the same policy; request discovery options cannot override the engine.
+Daemon startup arguments always include the value (including the default), so
+its endpoint and engine use the same policy; request discovery options cannot override the engine.
 Audio discovery derives its byte ceiling as
 `192000 * 8 * 4 * seconds + 64 MiB`; other kinds retain their 32 MiB default.
 This does not add codecs or container variants. Manual edit/priming skip is
@@ -1182,8 +1187,8 @@ constructed isomp4 reader both start at byte zero; the non-MP4 probes never
 register isomp4, including the second pass after a duration scan. Prefixed MP4
 is rejected. MP3 ID3 prefixes are skipped by checked extents without allocating
 or interpreting their payload, so embedded tag bytes cannot select a probe origin.
-Inspection traverses checked, parent-bounded ranges, skips `mdat`,
-and handles `moov` after media and extended sizes. Size-zero is accepted for
+Inspection traverses checked, parent-bounded ranges, skips `mdat`, and handles
+`moov` after media and extended sizes. Size-zero is accepted for
 opaque media/padding only; parsed metadata with that encoding is rejected
 because Symphonia gives it a zero data length. Original edit-list conversion,
 mdhd-end clamping and iTunSMPB precedence are retained.
@@ -1211,8 +1216,8 @@ four pending windows. The chunk hash table costs 32 bytes per MiB (64 KiB for
 The first pass hashes the full admitted byte extent **before** checking duration;
 a source near that byte ceiling is fully read even if its duration is then
 rejected. The small measured over-cap fixtures do not represent that worst-case
-rejection cost. Compact locators grow with the configured duration: exactly two hours
-produce 899 full windows and one 8 s tail, 900 windows total. Source hashing and
+rejection cost. Compact locators grow with the configured duration: exactly two
+hours produce 899 full windows and one 8 s tail, 900 windows total. Source hashing and
 verification add I/O; unknown-length files additionally require demux traversal.
 No PCM, readable content or chunk commitments are persisted in the cache.
 
@@ -1361,10 +1366,11 @@ Indexing, search (including previews) and model info never load Whisper.
 CLI extraction uses `seyk extract --from-json hits.json --hit 0`, optionally
 `--stt-model-dir DIR` (or `SEYK_STT_MODEL_DIR`) and `--stt-language en`.
 Omitting the language requests detection from that interval alone. Both STT
-options are rejected on `model download`; they configure extraction, not provisioning. The same
-settings configure audio transcription in the explicitly invoked MCP `extract`
-tool. Text/PDF extraction is available in MCP without STT. MCP hits now carry locator and metadata; extraction confines the
-local path to the session roots independently of the caller's supplied hash.
+options are rejected on `model download`; they configure extraction, not
+provisioning. The same settings configure audio transcription in the explicitly
+invoked MCP `extract` tool. Text/PDF extraction is available in MCP without STT.
+MCP hits now carry locator and metadata; extraction confines the local path to
+the session roots independently of the caller's supplied hash.
 CLI/MCP JSON output advances to schema 4; CLI input accepts search schemas
 2, 3 and 4. Raw text and PDF extraction retain their existing behavior.
 
@@ -1433,8 +1439,8 @@ the padded tail. Its regeneration command and source hashes are in
 `scripts/audio/stt_fixture.py` and the fixture provenance JSON.
 
 The encoder returns only `last_hidden_state [1,1500,384]`. An initial SOT
-`50258` pass requests only raw logits (no returned KV tensors); `p_no_speech = softmax(raw)[50362]` before
-suppression (`50362` is `<|nocaptions|>` in this export). Automatic language
+`50258` pass requests only raw logits (no returned KV tensors);
+`p_no_speech = softmax(raw)[50362]` before suppression (`50362` is `<|nocaptions|>` in this export). Automatic language
 selection takes the largest language-token logit (lowest ID wins ties), or
 uses the validated explicit language. A fresh initial decoder pass uses
 `[50258, language, 50359, 50363]` (transcribe, no timestamps). Greedy decoding
@@ -1507,8 +1513,8 @@ model load. Cold means fresh sessions/process, not a purged OS file cache.
 
 Measured on 2026-10-09 with Rust 1.99.0 release, native ORT 1.28.0,
 macOS 26.5, Apple M5 Max (18 logical CPUs, 64 GiB RAM), CPU provider with
-one intra/inter thread. Each short duration ran in a fresh process, followed by one
-first extraction and 20 measured warm requests. The first extraction is excluded
+one intra/inter thread. Each short duration ran in a fresh process, followed by
+one first extraction and 20 measured warm requests. The first extraction is excluded
 from warm percentiles. This was a busy shared host; every measured value below
 carries its load range and is an observation, not a quiet-host capacity claim.
 

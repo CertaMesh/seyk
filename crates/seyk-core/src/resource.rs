@@ -13,8 +13,8 @@ pub struct ResourceId(String);
 
 impl ResourceId {
     /// Convert an absolute local path without accessing the filesystem.
-    /// URI dot segments are normalized. Request `.paths(...)` resolves actual
-    /// filesystem paths (including symlinks) before converting them to IDs.
+    /// URI dot segments are normalized. Request `.paths(...)` retains logical
+    /// root names for policy checks; discovery emits resolved resource IDs.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let url = url::Url::from_file_path(path.as_ref())
             .map_err(|_| Error::Config("resource path must be absolute".into()))?;
@@ -175,6 +175,20 @@ pub enum ResourceLocator {
     WholeResource,
 }
 
+impl ResourceLocator {
+    /// Stable wire kind used for returned-hit counts.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::PageText { .. } => "page_text",
+            Self::Page { .. } => "page",
+            Self::Time { .. } => "time",
+            Self::ImageRegion { .. } => "image_region",
+            Self::WholeResource => "whole_resource",
+        }
+    }
+}
+
 /// Facts about a resource at the time it was embedded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceMetadata {
@@ -297,5 +311,46 @@ mod tests {
             serde_json::from_value::<ResourceLocator>(json).unwrap(),
             region
         );
+    }
+}
+
+#[cfg(test)]
+mod kind_count_tests {
+    use super::*;
+    #[test]
+    fn count_keys_match_every_locator_wire_kind() {
+        let locators = [
+            ResourceLocator::Text {
+                byte_start: 0,
+                byte_end: 1,
+                line_start: None,
+                line_end: None,
+            },
+            ResourceLocator::PageText {
+                page: 1,
+                byte_start: 0,
+                byte_end: 1,
+                text_version: "v1".into(),
+                page_text_hash: "hash".into(),
+            },
+            ResourceLocator::Page { page: 2 },
+            ResourceLocator::Time {
+                start_ms: 0,
+                end_ms: 1,
+            },
+            ResourceLocator::ImageRegion {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            ResourceLocator::WholeResource,
+        ];
+        for locator in locators {
+            assert_eq!(
+                serde_json::to_value(&locator).unwrap()["kind"],
+                locator.kind()
+            );
+        }
     }
 }

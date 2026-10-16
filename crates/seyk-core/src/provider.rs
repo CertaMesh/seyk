@@ -1,6 +1,10 @@
 //! Resource access. Filesystem is the only supported production provider.
 
-use crate::discovery::{DiscoveryOptions, ResourceKind, discover, modified_ns};
+#[cfg(not(unix))]
+use crate::discovery::modified_ns;
+use crate::discovery::{
+    DiscoveryOptions, PolicyRoot, ResourceKind, discover_with_policy, ensure_allowed_path,
+};
 use crate::{Error, ResourceId, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, Metadata};
@@ -66,9 +70,16 @@ impl ResourceScope {
         mut roots: Vec<ResourceId>,
         discovery: DiscoveryOptions,
     ) -> Result<Self> {
+        for root in &roots {
+            if let Some(path) = root.to_file_path() {
+                ensure_allowed_path(&path)?;
+            }
+        }
         for p in paths {
-            let absolute = p.canonicalize().map_err(|e| Error::io(p, e))?;
-            roots.push(ResourceId::from_path(absolute)?);
+            // Retain the caller's directory names (e.g. a .docker symlink).
+            // Discovery checks logical children before emitting canonical IDs.
+            let root = PolicyRoot::new(p)?;
+            roots.push(ResourceId::from_path(root.uri_path())?);
         }
         Ok(Self { roots, discovery })
     }
@@ -115,6 +126,14 @@ pub trait ResourceProvider: Send + Sync {
     }
     /// Return resources in deterministic order, without duplicate identities.
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>>;
+    /// `list`, plus the resolved root identity each scope root was walked under
+    /// when the provider can prove it. The default proves nothing.
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
+        Ok(ResourceListing {
+            resources: self.list(scope)?,
+            walked_roots: None,
+        })
+    }
     /// Opt in to authorizing indexed identities without discovering uncached descendants.
     /// Other providers retain their normal listing behavior in cached-only searches.
     fn supports_cached_listing(&self) -> bool {
@@ -146,7 +165,25 @@ pub trait ResourceProvider: Send + Sync {
     }
 }
 
+/// A provider listing and, when known, the roots that listing actually walked.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceListing {
+    pub resources: Vec<ProvidedResource>,
+    /// Resolved once per walked scope root, before its walk, in scope order.
+    /// `None` when the provider cannot attribute its listing to resolved roots.
+    pub walked_roots: Option<Vec<ResourceId>>,
+}
+
 /// Local files, using the same discovery filters and no-follow walk as `discover`.
+///
+/// On Unix, `read`, `open` and `version` reach a resource from "/" one
+/// component at a time without following any symbolic link, so swapping an
+/// ancestor for a link cannot redirect them outside the tree that discovery
+/// walked. Resource ids must therefore be canonical paths, as discovery and
+/// `SearchEngine` produce. An id with a link component (an explicit symlink,
+/// or an alias such as /tmp or /var on macOS) fails closed with an error that
+/// says so; canonicalize such a path before building its id. On Windows these
+/// methods remain path-based and are not pinned.
 #[derive(Debug, Default)]
 pub struct FsProvider;
 
@@ -161,15 +198,22 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
 
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
-        Ok(Box::new(open_local_content(&file_path(id)?)?))
+        let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
+        Ok(Box::new(open_local_content(&path)?))
     }
     fn list(&self, scope: &ResourceScope) -> Result<Vec<ProvidedResource>> {
+        Ok(self.list_walked(scope)?.resources)
+    }
+    fn list_walked(&self, scope: &ResourceScope) -> Result<ResourceListing> {
         let paths = scope
             .roots
             .iter()
             .map(file_path)
             .collect::<Result<Vec<_>>>()?;
-        discover(&paths, &scope.discovery)?
+        let walked = discover_with_policy(&paths, &scope.discovery, |_| true)?;
+        let resources = walked
+            .resources
             .into_iter()
             .map(|r| {
                 Ok(ProvidedResource {
@@ -181,10 +225,21 @@ impl ResourceProvider for FsProvider {
                     title: r.path.file_stem().map(|s| s.to_string_lossy().into_owned()),
                 })
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(ResourceListing {
+            resources,
+            walked_roots: Some(
+                walked
+                    .walked_roots
+                    .iter()
+                    .map(ResourceId::from_path)
+                    .collect::<Result<_>>()?,
+            ),
+        })
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>> {
         let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
         let mut file = open_local_content(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
@@ -193,8 +248,8 @@ impl ResourceProvider for FsProvider {
     }
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion> {
         let path = file_path(id)?;
-        let meta = std::fs::metadata(&path).map_err(|e| Error::io(path, e))?;
-        Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
+        ensure_allowed_path(&path)?;
+        local_version(&path)
     }
     fn deletion_scope(&self, scope: &ResourceScope) -> Result<ResourceScope> {
         let roots = scope
@@ -268,10 +323,71 @@ fn ensure_content_metadata(metadata: &Metadata) -> io::Result<()> {
     Ok(())
 }
 
+/// Same token as discovery: size and modification time of the file itself.
+#[cfg(unix)]
+fn local_version(path: &Path) -> Result<ResourceVersion> {
+    use crate::pinned_dir::{EntryType, PinnedDir, entry_type, link_component, modified_ns};
+    let stat = PinnedDir::open_parent(path)
+        .and_then(|(parent, name)| parent.stat(name))
+        .map_err(|e| Error::io(path, e))?;
+    if entry_type(&stat) == EntryType::Symlink {
+        return Err(Error::io(path, link_component()));
+    }
+    Ok(ResourceVersion::file(
+        stat.st_size as u64,
+        modified_ns(&stat),
+    ))
+}
+
+#[cfg(not(unix))]
+fn local_version(path: &Path) -> Result<ResourceVersion> {
+    let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
+    Ok(ResourceVersion::file(meta.len(), modified_ns(&meta)))
+}
+
 /// Check again for each content open; discovery/version metadata is never permission to read.
 /// This rejects observed placeholders before open and checks the actual descriptor afterward.
 /// A provider can still change materialization between check and open: this is not atomic
-/// protection against every hydration race. Ordinary explicit filesystem symlinks remain supported.
+/// protection against every hydration race. The path is opened from "/" without following
+/// any link (see [`FsProvider`]), so it cannot leave the canonical tree it names.
+#[cfg(unix)]
+fn open_local_content(path: &Path) -> Result<File> {
+    use crate::pinned_dir::{EntryType, PinnedDir, entry_type, identity, link_component};
+    use std::os::unix::fs::MetadataExt;
+    if placeholder_marker(path) {
+        return Err(Error::io(path, unavailable_content()));
+    }
+    let (parent, name) = PinnedDir::open_parent(path).map_err(|e| Error::io(path, e))?;
+    let before = parent.stat(name).map_err(|e| Error::io(path, e))?;
+    match entry_type(&before) {
+        EntryType::File => {
+            crate::pinned_dir::materialized(&before).map_err(|e| Error::io(path, e))?
+        }
+        EntryType::Symlink => return Err(Error::io(path, link_component())),
+        _ => {
+            return Err(Error::io(
+                path,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "content source is not a regular file",
+                ),
+            ));
+        }
+    }
+    // O_NONBLOCK: a substitution with a FIFO must not block before validation.
+    let file = parent.open_file(name).map_err(|e| Error::io(path, e))?;
+    let actual = file.metadata().map_err(|e| Error::io(path, e))?;
+    ensure_content_metadata(&actual).map_err(|e| Error::io(path, e))?;
+    if identity(&before) != (actual.dev(), actual.ino()) {
+        return Err(Error::ChangedWhileReading {
+            resource: ResourceId::from_path(path)?,
+        });
+    }
+    Ok(file)
+}
+
+/// Path-based on Windows: ordinary explicit symlinks are followed.
+#[cfg(not(unix))]
 fn open_local_content(path: &Path) -> Result<File> {
     if placeholder_marker(path) {
         return Err(Error::io(path, unavailable_content()));
@@ -282,26 +398,9 @@ fn open_local_content(path: &Path) -> Result<File> {
     }
     let before = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
     ensure_content_metadata(&before).map_err(|e| Error::io(path, e))?;
-    let mut options = File::options();
-    options.read(true);
-    // A substitution with a FIFO must not block before descriptor validation.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = options.open(path).map_err(|e| Error::io(path, e))?;
+    let file = File::open(path).map_err(|e| Error::io(path, e))?;
     let actual = file.metadata().map_err(|e| Error::io(path, e))?;
     ensure_content_metadata(&actual).map_err(|e| Error::io(path, e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if before.dev() != actual.dev() || before.ino() != actual.ino() {
-            return Err(Error::ChangedWhileReading {
-                resource: ResourceId::from_path(path)?,
-            });
-        }
-    }
     Ok(file)
 }
 

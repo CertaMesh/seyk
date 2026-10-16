@@ -1,0 +1,74 @@
+# Published nDCG@10 on the 0–1 scale. Context, not head-to-head measurements.
+# Model-card percentages are divided by 100. Retrieved 2026-10-14.
+
+[[comparison]]
+dataset = "scifact"
+system = "bge-base-en-v1.5"
+ndcg_at_10 = 0.74039
+source_url = "https://huggingface.co/BAAI/bge-base-en-v1.5/blob/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md"
+source_title = "BAAI/bge-base-en-v1.5 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "nfcorpus"
+system = "bge-base-en-v1.5"
+ndcg_at_10 = 0.37389
+source_url = "https://huggingface.co/BAAI/bge-base-en-v1.5/blob/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md"
+source_title = "BAAI/bge-base-en-v1.5 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "scifact"
+system = "e5-base-v2"
+ndcg_at_10 = 0.71944
+source_url = "https://huggingface.co/intfloat/e5-base-v2/blob/f52bf8ec8c7124536f0efb74aca902b2995e5bcd/README.md"
+source_title = "intfloat/e5-base-v2 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "nfcorpus"
+system = "e5-base-v2"
+ndcg_at_10 = 0.35389
+source_url = "https://huggingface.co/intfloat/e5-base-v2/blob/f52bf8ec8c7124536f0efb74aca902b2995e5bcd/README.md"
+source_title = "intfloat/e5-base-v2 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "scifact"
+system = "BM25 (BEIR)"
+ndcg_at_10 = 0.665
+source_url = "https://arxiv.org/html/2104.08663v4#S5.T2"
+source_title = "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models, Table 2"
+protocol = "BEIR test; whole documents, no chunking; Anserini/Lucene BM25 k=0.9, b=0.4; separate title and passage fields"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "nfcorpus"
+system = "BM25 (BEIR)"
+ndcg_at_10 = 0.325
+source_url = "https://arxiv.org/html/2104.08663v4#S5.T2"
+source_title = "BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models, Table 2"
+protocol = "BEIR test; whole documents, no chunking; Anserini/Lucene BM25 k=0.9, b=0.4; separate title and passage fields"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "scifact"
+system = "bge-large-en-v1.5"
+ndcg_at_10 = 0.74607
+source_url = "https://huggingface.co/BAAI/bge-large-en-v1.5/blob/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md"
+source_title = "BAAI/bge-large-en-v1.5 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 1024 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"
+
+[[comparison]]
+dataset = "nfcorpus"
+system = "bge-large-en-v1.5"
+ndcg_at_10 = 0.38129
+source_url = "https://huggingface.co/BAAI/bge-large-en-v1.5/blob/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md"
+source_title = "BAAI/bge-large-en-v1.5 model card, MTEB test results"
+protocol = "MTEB/BEIR test; whole documents, no chunking; 1024 dimensions; model-specific prompts; inputs truncated at model context limit"
+retrieved = "2026-10-14"

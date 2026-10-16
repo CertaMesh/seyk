@@ -113,7 +113,7 @@ fn top(r: &SearchResults) -> String {
         .into_owned()
 }
 
-fn both_caches(test: impl Fn(SearchEngine, Arc<Counting>, &Path)) {
+fn both_caches(mut test: impl FnMut(SearchEngine, Arc<Counting>, &Path)) {
     let temp = corpus();
     let (e, c) = engine(MemoryCache::new());
     test(e, c, temp.path());
@@ -677,6 +677,7 @@ mod hydration {
         count: AtomicUsize,
         readback: Mutex<Readback>,
         partial_vectors: AtomicBool,
+        term_batches: Mutex<Vec<Vec<(ResourceId, usize)>>>,
     }
     impl Reads {
         fn next_readback(&self) -> Readback {
@@ -767,6 +768,15 @@ mod hydration {
         ) -> Result<Vec<LexicalHit>> {
             self.inner.lexical_search(p, q, r, n)
         }
+        fn lexical_matched_terms(
+            &self,
+            p: &str,
+            q: &LexicalQuery,
+            keys: &[(ResourceId, usize)],
+        ) -> Result<Vec<Vec<String>>> {
+            self.reads.term_batches.lock().unwrap().push(keys.to_vec());
+            self.inner.lexical_matched_terms(p, q, keys)
+        }
         fn prune_orphans(&mut self, p: &str) -> Result<u64> {
             self.inner.prune_orphans(p)
         }
@@ -837,6 +847,76 @@ mod hydration {
             .previews(None)
             .sync(false)
             .execute()
+    }
+
+    #[test]
+    fn terms_are_requested_only_for_final_contributing_hits() {
+        for sqlite in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("garden.md");
+            fs::write(
+                &path,
+                (0..80)
+                    .map(|i| format!("# Section {i}\n\nbasil garden {i}\n\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            let (e, reads) = counted(sqlite, &dir.path().join("cache.db"), true, false);
+            e.index().paths([&path]).execute().unwrap();
+            for (mode, weight, query) in [
+                (SearchMode::Hybrid, 1.0, "basil"),
+                (SearchMode::Lexical, 1.0, "basil"),
+                (SearchMode::Hybrid, 0.0, "basil"),
+                (SearchMode::Semantic, 1.0, "basil"),
+                (SearchMode::Hybrid, 1.0, "absent"),
+            ] {
+                reads.term_batches.lock().unwrap().clear();
+                let result = e
+                    .search(query)
+                    .paths([&path])
+                    .mode(mode)
+                    .lexical_weight(weight)
+                    .limit(2)
+                    .sync(false)
+                    .previews(None)
+                    .execute()
+                    .unwrap();
+                let batches = reads.term_batches.lock().unwrap();
+                let expected = result
+                    .hits
+                    .iter()
+                    .filter(|h| h.signals.lexical.is_some())
+                    .count();
+                if expected == 0 {
+                    assert!(batches.is_empty());
+                } else {
+                    assert_eq!(batches.len(), 1);
+                    assert_eq!(batches[0].len(), expected);
+                    for (resource, ordinal) in &batches[0] {
+                        let cached = e
+                            .with_cache(|c| c.resource(e.profile_id(), resource))
+                            .unwrap()
+                            .unwrap();
+                        assert!(result.hits.iter().any(|h| h.resource == *resource
+                            && h.locator == cached.segments[*ordinal].locator));
+                    }
+                }
+            }
+            // Hits discarded during final hydration never request term metadata.
+            reads.term_batches.lock().unwrap().clear();
+            *reads.readback.lock().unwrap() = Readback::MissingResource;
+            assert!(
+                e.search("basil")
+                    .paths([&path])
+                    .mode(SearchMode::Lexical)
+                    .sync(false)
+                    .execute()
+                    .unwrap()
+                    .hits
+                    .is_empty()
+            );
+            assert!(reads.term_batches.lock().unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -1111,4 +1191,509 @@ mod hydration {
         }
         // TempDir removes the generated PDFs and SQLite cache on return.
     }
+}
+
+#[test]
+fn lexical_fallback_finds_unembedded_files_without_touching_semantic_cache() {
+    let root = corpus();
+    let (engine, counter) = engine(MemoryCache::new());
+    let before = engine.with_cache(|c| c.stats()).unwrap();
+    let results = engine
+        .search("INC-18372")
+        .query("father.md")
+        .paths([root.path()])
+        .sync(false)
+        .lexical_fallback(true)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        results.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NotYetEmbedded
+    );
+    assert!(results.hits.iter().any(|h| h.signals.lexical.is_some()));
+    assert!(results.hits.iter().any(|h| h.signals.filename));
+    assert!(results.hits.iter().all(|h| h.signals.semantic.is_none()));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+    assert_eq!(counter.queries.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(engine.with_cache(|c| c.stats()).unwrap()).unwrap()
+    );
+    for hit in &results.hits {
+        engine.extract(hit).unwrap();
+    }
+}
+
+#[test]
+fn ready_results_match_with_lexical_fallback_opt_in() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    engine.index().paths([root.path()]).execute().unwrap();
+    for mode in [
+        SearchMode::Hybrid,
+        SearchMode::Lexical,
+        SearchMode::Semantic,
+    ] {
+        let request = |fallback| {
+            engine
+                .search("father")
+                .query("INC-18372")
+                .paths([root.path()])
+                .mode(mode)
+                .sync(false)
+                .lexical_fallback(fallback)
+                .execute()
+                .unwrap()
+        };
+        let mut baseline = request(false);
+        let mut candidate = request(true);
+        // Elapsed wall time is deliberately nondeterministic; every other byte,
+        // including hits, scores, signals, locators, previews and stats, must match.
+        baseline.stats.total_ms = 0;
+        candidate.stats.total_ms = 0;
+        assert!(candidate.degraded.is_none());
+        assert_eq!(
+            serde_json::to_vec(&baseline).unwrap(),
+            serde_json::to_vec(&candidate).unwrap()
+        );
+    }
+}
+
+#[test]
+fn model_free_lexical_search_refreshes_changes_and_honors_filters() {
+    let root = corpus();
+    let engine = SearchEngine::lexical().unwrap();
+    let request = || {
+        engine
+            .search("INC-18372")
+            .paths([root.path()])
+            .sync(false)
+            .execute()
+            .unwrap()
+    };
+    let first = request();
+    assert_eq!(
+        first.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NoModel
+    );
+    assert_eq!(first.hits.len(), 1);
+    fs::write(root.path().join("new.md"), "INC-18372 new evidence").unwrap();
+    assert_eq!(request().hits.len(), 2);
+    let filtered = engine
+        .search("INC-18372")
+        .paths([root.path()])
+        .exclude("new.md")
+        .execute()
+        .unwrap();
+    assert_eq!(filtered.hits.len(), 1);
+    assert_eq!(
+        engine.with_cache(|c| c.stats()).unwrap().profiles[0].embeddings,
+        0
+    );
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn model_free_pdf_words_and_names_have_extractable_page_locators() {
+    #[path = "support/pdf_fixture.rs"]
+    mod fixture;
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("quartz.pdf"),
+        fixture::pdf(&["quartz lighthouse keeper"], fixture::Kind::Plain),
+    )
+    .unwrap();
+    let engine = SearchEngine::lexical().unwrap();
+    let results = engine
+        .search("quartz")
+        .paths([root.path()])
+        .execute()
+        .unwrap();
+    assert_eq!(results.hits.len(), 1);
+    let hit = &results.hits[0];
+    assert!(hit.signals.lexical.is_some() && hit.signals.filename);
+    assert!(matches!(
+        hit.locator,
+        seyk_core::ResourceLocator::PageText { page: 1, .. }
+    ));
+    assert!(engine.extract(hit).unwrap().text.contains("quartz"));
+    assert_eq!(results.stats.sync.segments_embedded, 0);
+}
+
+#[test]
+fn fallback_search_in_embedding_callback_does_not_wait_for_indexing_lease() {
+    let root = corpus();
+    let (engine, _) = engine(MemoryCache::new());
+    let checked = AtomicUsize::new(0);
+    let progress = |event| {
+        if matches!(event, seyk_core::ProgressEvent::Embedding { done: 0, total } if total > 0) {
+            let results = engine
+                .search("INC-18372")
+                .query("father.md")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap();
+            assert_eq!(
+                results.degraded.unwrap().reason,
+                seyk_core::DegradedReason::NotYetEmbedded
+            );
+            assert!(results.hits.iter().any(|hit| hit.signals.filename));
+            assert!(results.hits.iter().any(|hit| hit.signals.lexical.is_some()));
+            checked.fetch_add(1, Ordering::SeqCst);
+        }
+    };
+    engine
+        .index()
+        .paths([root.path()])
+        .progress(&progress)
+        .execute()
+        .unwrap();
+    assert_eq!(checked.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn skipped_current_versions_do_not_disable_ready_semantic_results() {
+    for invalid in [vec![0xff, 0xfe], b"quartz\0invalid".to_vec()] {
+        let root = corpus();
+        let bad = root.path().join("invalid.txt");
+        fs::write(&bad, invalid).unwrap();
+        let bad = bad.canonicalize().unwrap();
+        let (engine, _) = engine(MemoryCache::new());
+        let report = engine.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let ready = || {
+            engine
+                .search("father")
+                .paths([root.path()])
+                .sync(false)
+                .lexical_fallback(true)
+                .execute()
+                .unwrap()
+        };
+        let results = ready();
+        assert!(results.degraded.is_none());
+        assert!(results.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            results
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != bad)
+        );
+        // A changed version is pending again, and a later successful attempt
+        // clears the skip without keeping the collection in lexical mode.
+        fs::write(&bad, "father quartz repaired document").unwrap();
+        assert_eq!(
+            ready().degraded.unwrap().reason,
+            seyk_core::DegradedReason::NotYetEmbedded
+        );
+        engine.index().paths([root.path()]).execute().unwrap();
+        assert!(ready().degraded.is_none());
+        assert!(
+            ready()
+                .hits
+                .iter()
+                .any(|h| h.resource.to_file_path().unwrap() == bad)
+        );
+    }
+}
+
+#[test]
+fn failed_refresh_excludes_old_evidence_with_or_without_previews() {
+    for lexical_only in [false, true] {
+        for previews in [None, Some(160)] {
+            for invalid in [vec![0xff, 0xfe], b"invalid\0bytes".to_vec()] {
+                let root = TempDir::new().unwrap();
+                let path = root.path().join("quartz.txt");
+                fs::write(&path, "quartz lighthouse keeper").unwrap();
+                let engine = if lexical_only {
+                    SearchEngine::lexical().unwrap()
+                } else {
+                    engine(MemoryCache::new()).0
+                };
+                let search = |sync, fallback| {
+                    engine
+                        .search("quartz")
+                        .paths([root.path()])
+                        .sync(sync)
+                        .lexical_fallback(fallback)
+                        .previews(previews)
+                        .execute()
+                        .unwrap()
+                };
+                assert!(!search(true, false).hits.is_empty());
+                fs::write(&path, invalid).unwrap();
+                // Background-indexed callers must not serve the old version
+                // even before the new version has been attempted.
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(true, false).hits.is_empty());
+                assert!(search(false, true).hits.is_empty());
+                assert!(search(false, false).hits.is_empty());
+                fs::write(&path, "quartz restored evidence").unwrap();
+                assert!(!search(true, false).hits.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
+    let root = corpus();
+    let db = TempDir::new().unwrap();
+    let cache_file = db.path().join("cache.sqlite3");
+    let path = root.path().join("father.md").canonicalize().unwrap();
+    let open = || engine(SqliteCache::open(&cache_file).unwrap()).0;
+    let first = open();
+    first.index().paths([root.path()]).execute().unwrap();
+    drop(first);
+    fs::write(&path, [0xff, 0xfe]).unwrap();
+    for _ in 0..2 {
+        let reopened = open();
+        // Daemon/MCP lifetimes run an initial index before reporting ready.
+        let report = reopened.index().paths([root.path()]).execute().unwrap();
+        assert_eq!(report.sync.skipped.len(), 1);
+        let result = reopened
+            .search("father")
+            .paths([root.path()])
+            .sync(false)
+            .lexical_fallback(true)
+            .previews(None)
+            .execute()
+            .unwrap();
+        assert!(result.degraded.is_none());
+        assert!(result.hits.iter().any(|h| h.signals.semantic.is_some()));
+        assert!(
+            result
+                .hits
+                .iter()
+                .all(|h| h.resource.to_file_path().unwrap() != path)
+        );
+    }
+}
+
+// Captured on main 71f9a184 before match provenance was implemented. Compare
+// f32 bits (not rounded scores), order, locators and existing signal fields.
+#[test]
+fn ranking_matches_pre_match_golden() {
+    let mut cases = Vec::new();
+    both_caches(|engine, _, root| {
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+        ] {
+            for queries in [
+                vec!["father"],
+                vec!["FATHER.MD"],
+                vec!["where did the restore path fail"],
+                vec!["INC-18372"],
+                vec!["garden.md", "father"],
+                vec!["where is the"],
+                vec!["absent"],
+            ] {
+                for limit in [1, 10] {
+                    for weight in [None, Some(0.0)] {
+                        let mut request = engine
+                            .search(queries[0])
+                            .mode(mode)
+                            .paths([root])
+                            .limit(limit);
+                        for q in &queries[1..] {
+                            request = request.query(*q);
+                        }
+                        if let Some(w) = weight {
+                            request = request.lexical_weight(w);
+                        }
+                        let r = request.execute().unwrap();
+                        cases.push(serde_json::json!({
+                            "mode": mode, "queries": queries, "limit": limit, "weight": weight,
+                            "hits": r.hits.iter().map(|h| serde_json::json!({
+                                "file": h.resource.to_file_path().unwrap().file_name().unwrap().to_str().unwrap(),
+                                "locator": h.locator, "score_bits": h.score.to_bits(),
+                                "semantic_bits": h.signals.semantic.map(f32::to_bits),
+                                "lexical_bits": h.signals.lexical.map(f32::to_bits),
+                                "filename": h.signals.filename, "query_index": h.query_index,
+                            })).collect::<Vec<_>>()
+                        }));
+                    }
+                }
+            }
+        }
+    });
+    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-main.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(cases, expected);
+}
+
+#[test]
+fn match_reasons_report_contributing_ranks_and_query_terms() {
+    both_caches(|engine, _, root| {
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Semantic,
+            SearchMode::Lexical,
+        ] {
+            let r = engine
+                .search("father.md")
+                .mode(mode)
+                .paths([root])
+                .limit(1)
+                .execute()
+                .unwrap();
+            let h = &r.hits[0];
+            assert_eq!(
+                h.r#match.semantic_rank.is_some(),
+                h.signals.semantic.is_some()
+            );
+            assert_eq!(
+                h.r#match.keyword_rank.is_some(),
+                h.signals.lexical.is_some()
+            );
+            assert_eq!(h.r#match.filename_rank.is_some(), h.signals.filename);
+            if mode == SearchMode::Semantic {
+                assert_eq!(h.r#match.semantic_rank, Some(1));
+                assert!(h.r#match.matched_terms.is_empty());
+            } else {
+                assert_eq!(h.r#match.keyword_rank, Some(1));
+                assert_eq!(h.r#match.filename_rank, Some(1));
+                assert_eq!(h.r#match.matched_terms, ["father", "md"]);
+            }
+        }
+        let disabled = engine
+            .search("father.md")
+            .paths([root])
+            .lexical_weight(0.0)
+            .execute()
+            .unwrap();
+        for h in &disabled.hits {
+            assert_eq!(h.r#match.keyword_rank, None);
+            assert!(h.r#match.matched_terms.is_empty());
+        }
+        let r = engine
+            .search("INC-18372 absent")
+            .query("RESTORE inc-18372")
+            .mode(SearchMode::Lexical)
+            .paths([root])
+            .execute()
+            .unwrap();
+        assert_eq!(r.hits[0].r#match.matched_terms, ["inc", "18372", "restore"]);
+        // An incomplete identifier group must not report its partial match.
+        let r = search(&engine, root, "INC-missing restore", SearchMode::Lexical);
+        assert_eq!(r.hits[0].r#match.matched_terms, ["restore"]);
+        // Old envelopes still deserialize with empty provenance.
+        let mut old = serde_json::to_value(&r.hits[0]).unwrap();
+        old.as_object_mut().unwrap().remove("match");
+        let restored: seyk_core::SearchHit = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.r#match, seyk_core::MatchReason::default());
+    });
+}
+
+#[test]
+fn match_terms_use_cached_index_without_reading_source_text() {
+    for sqlite in [false, true] {
+        let root = TempDir::new().unwrap();
+        let file = root.path().join("notes.md");
+        fs::write(&file, "Café privatecanary RESTORE").unwrap();
+        let db = TempDir::new().unwrap();
+        let e = if sqlite {
+            engine(SqliteCache::open(db.path().join("index.sqlite")).unwrap()).0
+        } else {
+            engine(MemoryCache::new()).0
+        };
+        e.index().paths([root.path()]).execute().unwrap();
+        let e = if sqlite {
+            drop(e);
+            engine(SqliteCache::open(db.path().join("index.sqlite")).unwrap()).0
+        } else {
+            e
+        };
+        fs::write(&file, "unrelated replacement").unwrap();
+        let r = e
+            .search("the CAFÉ restore CAFÉ absent")
+            .mode(SearchMode::Lexical)
+            .paths([root.path()])
+            .sync(false)
+            .previews(None)
+            .execute()
+            .unwrap();
+        assert_eq!(r.hits[0].r#match.matched_terms, ["cafe", "restore"]);
+        assert!(r.hits[0].preview.is_none());
+    }
+}
+
+#[test]
+fn filename_ranks_preserve_discovery_positions_after_fusion() {
+    for sqlite in [false, true] {
+        let dir = TempDir::new().unwrap();
+        for name in ["a", "b", "c"] {
+            fs::create_dir(dir.path().join(name)).unwrap();
+            fs::write(dir.path().join(name).join("note.md"), "shared content").unwrap();
+        }
+        let db = TempDir::new().unwrap();
+        let (e, _) = if sqlite {
+            engine(SqliteCache::open(db.path().join("cache.db")).unwrap())
+        } else {
+            engine(MemoryCache::new())
+        };
+        for mode in [
+            SearchMode::Hybrid,
+            SearchMode::Lexical,
+            SearchMode::Semantic,
+        ] {
+            let result = e
+                .search("note.md")
+                .paths([dir.path()])
+                .mode(mode)
+                .limit(10)
+                .execute()
+                .unwrap();
+            assert_eq!(result.hits.len(), 3);
+            for hit in result.hits {
+                let path = hit.resource.to_file_path().unwrap();
+                let parent = path
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                let expected = match parent {
+                    "a" => 1,
+                    "b" => 2,
+                    "c" => 3,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    hit.r#match.filename_rank,
+                    (mode != SearchMode::Semantic).then_some(expected)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn model_free_search_reports_kind_counts_and_completed_progress() {
+    let root = corpus();
+    fs::write(root.path().join("invalid.txt"), [0xff, 0xfe]).unwrap();
+    let engine = SearchEngine::lexical().unwrap();
+    let results = engine
+        .search("father")
+        .paths([root.path()])
+        .kind_counts(true)
+        .execute()
+        .unwrap();
+    assert_eq!(
+        results.degraded.unwrap().reason,
+        seyk_core::DegradedReason::NoModel
+    );
+    assert_eq!(results.kind_counts.unwrap()["text"], results.hits.len());
+    let progress = results.stats.sync.progress.unwrap();
+    assert_eq!(progress.by_kind["text"].indexed, 4);
+    assert_eq!(progress.by_kind["text"].skipped, 1);
+    assert_eq!(progress.by_kind["text"].waiting, 0);
+    assert_eq!(progress.eta_seconds, None);
 }

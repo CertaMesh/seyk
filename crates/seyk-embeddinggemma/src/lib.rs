@@ -30,6 +30,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 mod materialize;
+#[cfg(test)]
+mod session_tests;
 
 use rayon::prelude::*;
 
@@ -37,6 +39,8 @@ use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
+
+mod text_tokenization;
 
 pub use seyk_embed::{
     Dimension, Embedder, Embedding, EmbeddingRequest, EmbeddingTask, Error, Modality,
@@ -258,7 +262,9 @@ impl ResolvedModel {
         Ok(ModelIdentity {
             model_id: MODEL_ID.into(),
             revision,
-            variant: format!("onnx-{}", config.precision.name()),
+            // A literal control token could previously embed successfully. Those
+            // cached vectors must not be reused under the new text policy.
+            variant: format!("onnx-{};text-literals-v1", config.precision.name()),
             dimension: config.dimension,
             normalization: "mean-pool;truncate;l2".into(),
             query_prompt: QUERY_PROMPT.into(),
@@ -305,6 +311,7 @@ fn elapsed(start: Option<Instant>) -> Duration {
 /// EmbeddingGemma 2 embedder.
 pub struct EmbeddingGemma2 {
     tokenizer: Tokenizer,
+    text_tokenizer: Tokenizer,
     text: Vec<Mutex<Session>>,
     text_workers: Option<rayon::ThreadPool>,
     vision: Option<Mutex<Session>>,
@@ -428,6 +435,7 @@ impl EmbeddingGemma2 {
             }))
             .map_err(ort_err)?;
         tokenizer.with_padding(None);
+        let text_tokenizer = text_tokenization::plain_text_tokenizer(&tokenizer);
         let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
 
         let text = (0..config.sessions)
@@ -460,6 +468,7 @@ impl EmbeddingGemma2 {
             #[cfg(feature = "audio")]
             audio: config.audio.then(|| audio::AudioEncoder::new(dir)),
             tokenizer,
+            text_tokenizer,
             text,
             text_workers,
             vision,
@@ -525,10 +534,27 @@ impl EmbeddingGemma2 {
         Ok(format!("{prefix}{text}"))
     }
 
-    /// Token ids exactly as the model sees them (for verification against the reference).
-    pub fn token_ids(&self, input: &str) -> Result<Vec<u32>> {
+    /// Raw processor token ids, including literal special-token recognition.
+    ///
+    /// For verifying trusted image/audio templates against the reference only.
+    /// Text embedding uses a separate plain-text tokenizer, so user-controlled
+    /// text and titles cannot insert special tokens. Ordinary text ids agree.
+    pub fn template_token_ids(&self, input: &str) -> Result<Vec<u32>> {
         Ok(self
             .tokenizer
+            .encode(input, true)
+            .map_err(ort_err)?
+            .get_ids()
+            .to_vec())
+    }
+
+    /// Token ids for an already-formatted text prompt, using the same tokenizer
+    /// and truncation as text embedding. Literal special-token spellings remain
+    /// ordinary text; the postprocessor still adds the template's BOS/EOS.
+    /// Use `document_input`, `query_input`, or `text_input` to format the prompt.
+    pub fn text_token_ids(&self, input: &str) -> Result<Vec<u32>> {
+        Ok(self
+            .text_tokenizer
             .encode(input, true)
             .map_err(ort_err)?
             .get_ids()
@@ -572,7 +598,7 @@ impl EmbeddingGemma2 {
         // Tokenize before entering our inference pool: tokenizers may use its own
         // Rayon work, which must never recursively schedule while a session is locked.
         let encodings = self
-            .tokenizer
+            .text_tokenizer
             .encode_batch(inputs.iter().map(String::as_str).collect::<Vec<_>>(), true)
             .map_err(ort_err)?;
         let ids: Vec<Vec<i64>> = encodings
@@ -701,7 +727,11 @@ impl EmbeddingGemma2 {
         // The processor expands `<|image|>` to <|image> + N x <|image|> + <image|>,
         // and images get no task prefix (model card, "Task Instruction Prefixes").
         let text = format!("<|image>{}<image|>", "<|image|>".repeat(pre.soft_tokens));
-        let ids: Vec<i64> = self.token_ids(&text)?.into_iter().map(i64::from).collect();
+        let ids: Vec<i64> = self
+            .template_token_ids(&text)?
+            .into_iter()
+            .map(i64::from)
+            .collect();
         let mut out = self.run_text(&[&ids], Some((features, pre.soft_tokens)), None)?;
         Ok(out.pop().expect("one input"))
     }
@@ -824,6 +854,17 @@ fn session(path: &Path, threads: Option<usize>) -> Result<Session> {
     if let Some(t) = threads {
         b = b.with_intra_threads(t).map_err(ort_err)?;
     }
+    // ORT 1.28's GetDirNameFromFilePath uses dirname(), whose result is shared
+    // static storage on Apple platforms. Concurrent loads from different model
+    // directories can tear external-weight paths. Keep file-backed initialization
+    // serialized across text/vision/audio sessions until upstream fixes that use.
+    // The guard ends before returning the session; inference remains concurrent.
+    #[cfg(target_vendor = "apple")]
+    let _init = {
+        static SESSION_INIT: Mutex<()> = Mutex::new(());
+        // The lock guards no data, so a panic in another load must not poison it.
+        SESSION_INIT.lock().unwrap_or_else(|e| e.into_inner())
+    };
     b.commit_from_file(path)
         .map_err(|e| Error::Embedding(format!("loading {}: {e}", path.display())))
 }
@@ -1291,7 +1332,7 @@ mod resolution_tests {
                 revision:
                     "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0"
                         .into(),
-                variant: "onnx-q8".into(),
+                variant: "onnx-q8;text-literals-v1".into(),
                 dimension: config.dimension,
                 normalization: "mean-pool;truncate;l2".into(),
                 query_prompt: "task: search result | query: ".into(),

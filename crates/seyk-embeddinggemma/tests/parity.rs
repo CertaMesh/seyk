@@ -55,14 +55,24 @@ fn prompts_and_token_ids_match_reference() {
     let r = reference();
     for q in &r.queries {
         assert_eq!(GemmaEmbedder::query_input(&q.text), q.input);
-        assert_eq!(e.token_ids(&q.input).unwrap(), q.ids, "query {:?}", q.text);
+        assert_eq!(
+            e.text_token_ids(&q.input).unwrap(),
+            q.ids,
+            "query {:?}",
+            q.text
+        );
     }
     for d in &r.docs {
         assert_eq!(
             GemmaEmbedder::document_input(d.title.as_deref(), &d.text),
             d.input
         );
-        assert_eq!(e.token_ids(&d.input).unwrap(), d.ids, "doc {:?}", d.text);
+        assert_eq!(
+            e.text_token_ids(&d.input).unwrap(),
+            d.ids,
+            "doc {:?}",
+            d.text
+        );
     }
 }
 

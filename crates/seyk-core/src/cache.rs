@@ -219,6 +219,17 @@ pub trait EmbeddingCache: Send {
         limit: usize,
     ) -> Result<Vec<LexicalHit>>;
 
+    /// Query tokens confirmed by the cached index for the requested segments.
+    /// Called only for final hits ranked by the keyword leg, after fusion and
+    /// eligibility checks. Return one term list per key, in the same order.
+    /// Never recover source text; report only complete matching query groups.
+    fn lexical_matched_terms(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        keys: &[(ResourceId, usize)],
+    ) -> Result<Vec<Vec<String>>>;
+
     /// Drop vectors no segment refers to any more.
     fn prune_orphans(&mut self, profile: &str) -> Result<u64>;
 
@@ -416,6 +427,25 @@ impl EmbeddingCache for MemoryCache {
                 resource: path.clone(),
                 ordinal,
                 score: score as f32,
+            })
+            .collect())
+    }
+
+    fn lexical_matched_terms(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        keys: &[(ResourceId, usize)],
+    ) -> Result<Vec<Vec<String>>> {
+        Ok(keys
+            .iter()
+            .map(|(path, ordinal)| {
+                self.lexical
+                    .get(profile)
+                    .and_then(|bucket| bucket.get(path))
+                    .and_then(|docs| docs.get(*ordinal))
+                    .map(|doc| doc.matched_terms(query))
+                    .unwrap_or_default()
             })
             .collect())
     }
@@ -1500,6 +1530,81 @@ impl EmbeddingCache for SqliteCache {
             }
         }
         Ok(out)
+    }
+
+    fn lexical_matched_terms(
+        &self,
+        profile: &str,
+        query: &LexicalQuery,
+        keys: &[(ResourceId, usize)],
+    ) -> Result<Vec<Vec<String>>> {
+        let mut terms = vec![Vec::new(); keys.len()];
+        if keys.is_empty() || query.groups.is_empty() {
+            return Ok(terms);
+        }
+        // Resolve final keys in batches, keeping arbitrary path bytes intact.
+        // Bound placeholders below SQLite's variable limit even for large limits.
+        // CROSS JOIN keeps the small requested set outermost: reordering can
+        // scan the whole profile and join every sibling of a large resource.
+        let mut positions = HashMap::new();
+        for (batch, chunk) in keys.chunks(400).enumerate() {
+            let values = (0..chunk.len())
+                .map(|i| format!("(?, ?, {})", batch * 400 + i))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "WITH requested(path, ordinal, position) AS (VALUES {values})
+                SELECT s.rowid, r.position FROM requested r
+                CROSS JOIN segments s ON s.path = r.path AND s.ordinal = r.ordinal
+                WHERE s.profile = ?"
+            );
+            let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
+            for (path, ordinal) in chunk {
+                params.push(rusqlite::types::Value::Blob(resource_key(path)));
+                params.push(rusqlite::types::Value::Integer(*ordinal as i64));
+            }
+            params.push(rusqlite::types::Value::Text(profile.to_owned()));
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query(rusqlite::params_from_iter(params))?;
+            while let Some(row) = rows.next()? {
+                positions
+                    .entry(row.get::<_, i64>(0)?)
+                    .or_insert_with(Vec::new)
+                    .push(row.get::<_, i64>(1)? as usize);
+            }
+        }
+        if positions.is_empty() {
+            return Ok(terms);
+        }
+        let rowids = serde_json::to_string(&positions.keys().collect::<Vec<_>>())
+            .expect("integer rowids serialize to JSON");
+        let table = fts_table(profile);
+        // One contentless-index membership statement per query group, over only
+        // the returned keyword hits. JSON avoids a variable-count limit here.
+        // Unary + keeps SQLite from restarting FTS MATCH for each rowid.
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT rowid FROM {table} WHERE {table} MATCH ?1
+             AND +rowid IN (SELECT value FROM json_each(?2))"
+        ))?;
+        for group in &query.groups {
+            let expr = LexicalQuery {
+                groups: vec![group.clone()],
+            }
+            .fts5()
+            .unwrap();
+            let mut rows = stmt.query(params![expr, rowids])?;
+            while let Some(row) = rows.next()? {
+                for &position in &positions[&row.get::<_, i64>(0)?] {
+                    let matched = &mut terms[position];
+                    for term in group {
+                        if !matched.contains(term) {
+                            matched.push(term.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(terms)
     }
 
     fn prune_orphans(&mut self, profile: &str) -> Result<u64> {

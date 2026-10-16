@@ -61,7 +61,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 6);
+    assert_eq!(stats["schema_version"], 8);
     assert_eq!(stats["profiles"], serde_json::json!([]));
     assert_eq!(stats["in_synced_folder"], false);
     #[cfg(target_os = "macos")]
@@ -193,15 +193,40 @@ fn cache_scrub_preserves_live_records_and_stats_json_shape_without_a_model() {
 }
 
 #[test]
-fn missing_model_is_a_helpful_failure_and_invalid_dimensions_are_rejected() {
+fn missing_model_search_is_lexical_and_invalid_dimensions_are_rejected() {
     let temp = TempDir::new().unwrap();
-    binary()
-        .env("HF_HOME", temp.path())
-        .env("HF_HUB_OFFLINE", "1")
-        .args(["search", "alpha", "--no-cache"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("model").and(predicate::str::contains("download")));
+    std::fs::write(temp.path().join("alpha.txt"), "quartz alpha").unwrap();
+    for mode in ["hybrid", "lexical", "semantic"] {
+        let output = binary()
+            .env("HF_HOME", temp.path())
+            .env("HF_HUB_OFFLINE", "1")
+            .args([
+                "search",
+                "quartz",
+                "--also",
+                "alpha.txt",
+                "--no-cache",
+                "--json",
+                "--mode",
+                mode,
+            ])
+            .arg(temp.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            response["degraded"],
+            serde_json::json!({"mode":"lexical_only","reason":"no_model"})
+        );
+        assert_eq!(response["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(response["hits"][0]["signals"]["filename"], true);
+        assert!(response["hits"][0]["signals"]["lexical"].is_number());
+        assert!(response["hits"][0]["signals"]["semantic"].is_null());
+        assert_eq!(response["stats"]["sync"]["segments_embedded"], 0);
+    }
 
     binary()
         .args(["search", "alpha", "--dimension", "300", "--no-cache"])
@@ -315,6 +340,13 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
     let responses = mcp_handshake(&mut command);
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "seyk");
     let tools = &responses[1]["result"]["tools"];
+    assert!(
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "index_status")
+    );
     let search = tools
         .as_array()
         .unwrap()
@@ -395,6 +427,24 @@ fn local_content_refuses_missing_scope_and_symlink_root_before_model_load() {
         .stderr(predicate::str::contains("unsupported type"));
 }
 
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn local_content_refuses_secret_root_before_model_load() {
+    let temp = tempfile::Builder::new()
+        .prefix("local-secret-cli-")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().canonicalize().unwrap().join("vault.OPVAULT");
+    std::fs::create_dir(&root).unwrap();
+    binary()
+        .args(["mcp", "--local-content", "--no-watch"])
+        .arg(&root)
+        .env("SEYK_MODEL", temp.path().join("no-model"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing secret file"));
+}
+
 /// `seyk mcp` starts the shared daemon on first use and relays through it; the
 /// daemon reports its folders and stops on request. No model weights needed.
 #[cfg(all(feature = "mcp", unix))]
@@ -460,6 +510,56 @@ fn mcp_relays_through_a_daemon_it_starts() {
         .stdout(predicate::str::contains("Stopped."));
 }
 
+#[cfg(unix)]
+#[test]
+fn extract_reads_a_hit_found_through_a_symlinked_root() {
+    use seyk::{Dimension, ResourceId, SearchEngine};
+    let temp = TempDir::new().unwrap();
+    // Uncanonicalized: on macOS the root also passes through the /var alias.
+    std::fs::create_dir(temp.path().join("real")).unwrap();
+    let text = "quartz garden note behind a linked root\n";
+    std::fs::write(temp.path().join("real/note.md"), text).unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(temp.path().join("real"), &link).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "cli-link"))
+        .build()
+        .unwrap();
+    let results = engine
+        .search("quartz")
+        .paths([&link])
+        .previews(None)
+        .execute()
+        .unwrap();
+    let real = temp.path().join("real/note.md").canonicalize().unwrap();
+    assert_eq!(
+        results.hits[0].resource,
+        ResourceId::from_path(&real).unwrap()
+    );
+    let output = binary()
+        .args(["extract", "--from-json", "-", "--json"])
+        .env("SEYK_MODEL", temp.path().join("no-model"))
+        .env("HF_HUB_OFFLINE", "1")
+        .write_stdin({
+            let mut value = serde_json::to_value(&results).unwrap();
+            value["schema_version"] = 8.into();
+            value.to_string()
+        })
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let extracted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(text.contains(extracted["text"].as_str().unwrap()));
+    assert_eq!(
+        extracted["source"],
+        serde_json::to_value(&results.hits[0].resource).unwrap()
+    );
+}
+
 #[test]
 fn extract_round_trip_without_a_model() {
     use seyk::{Dimension, ResourceLocator, SearchEngine};
@@ -499,7 +599,7 @@ fn extract_round_trip_without_a_model() {
             .output()
             .unwrap()
     };
-    for version in 2..=6 {
+    for version in 2..=8 {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let data = document.to_string();
@@ -515,7 +615,7 @@ fn extract_round_trip_without_a_model() {
         let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
         assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     }
-    for version in [1, 7] {
+    for version in [1, 9] {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let bad = run(&["extract", "--from-json", "-"], &document.to_string());
@@ -532,7 +632,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 6);
+    assert_eq!(extracted["schema_version"], 8);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);
@@ -588,4 +688,77 @@ fn synced_cache_warns_on_stderr_and_still_returns_json() {
     assert_eq!(stats["in_synced_folder"], true);
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.matches("inside a known synced folder").count(), 1);
+}
+
+#[test]
+fn explicit_secret_paths_are_refused_even_without_a_model() {
+    let temp = TempDir::new().unwrap();
+    let secret = temp.path().join("private.pem");
+    std::fs::write(&secret, "synthetic secret sentinel").unwrap();
+    for command in ["index", "search"] {
+        let mut cmd = binary();
+        cmd.arg(command);
+        if command == "search" {
+            cmd.arg("sentinel");
+        }
+        cmd.arg(&secret)
+            .args(["--include", "*", "--hidden"])
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("refusing secret file"))
+            .stdout(predicate::str::contains("synthetic secret sentinel").not());
+    }
+}
+
+#[test]
+#[ignore = "requires local Gemma weights; no downloads"]
+fn secret_include_globs_cannot_bypass_cli_policy() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    for name in ["id_rsa.txt", ".env.local.toml", "vault.opvault/notes.md"] {
+        let path = notes.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "synthetic secret sentinel").unwrap();
+    }
+    for command in ["index", "search"] {
+        let mut cmd = binary();
+        cmd.arg(command);
+        if command == "search" {
+            cmd.arg("sentinel");
+        }
+        let output = cmd
+            .arg(&notes)
+            .args([
+                "--include",
+                "*",
+                "--include",
+                "**/*",
+                "--hidden",
+                "--text-only",
+                "--threads",
+                "1",
+                "--json",
+                "--cache-path",
+            ])
+            .arg(temp.path().join("cache.db"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let sync = if command == "index" {
+            &json["sync"]
+        } else {
+            &json["stats"]["sync"]
+        };
+        assert_eq!(sync["resources_discovered"], 0);
+        if command == "search" {
+            assert_eq!(json["hits"], serde_json::json!([]));
+        }
+    }
 }

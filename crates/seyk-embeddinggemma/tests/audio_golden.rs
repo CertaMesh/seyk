@@ -83,7 +83,7 @@ fn reference_embedding_and_text_cache_identity() {
             .filter(|v| **v)
             .count();
         let ids = model
-            .token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(count)))
+            .template_token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(count)))
             .unwrap();
         assert_eq!(
             ids,

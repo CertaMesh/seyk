@@ -158,6 +158,21 @@ impl LexicalDoc {
         }
     }
 
+    /// Return only query tokens whose complete group matches a single field.
+    pub fn matched_terms(&self, query: &LexicalQuery) -> Vec<String> {
+        let mut terms = Vec::new();
+        for group in &query.groups {
+            if (0..FIELDS.len()).any(|field| self.matches_group(field, group)) {
+                for term in group {
+                    if !terms.contains(term) {
+                        terms.push(term.clone());
+                    }
+                }
+            }
+        }
+        terms
+    }
+
     fn term_count(&self, field: usize, term: &str) -> usize {
         self.fields[field].iter().filter(|t| *t == term).count()
     }
