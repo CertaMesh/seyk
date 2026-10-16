@@ -76,6 +76,7 @@ impl ResourceScope {
             }
         }
         for p in paths {
+            // Retain the caller's directory names (e.g. a .docker symlink).
             // Discovery checks logical children before emitting canonical IDs.
             let root = PolicyRoot::new(p)?;
             roots.push(ResourceId::from_path(root.uri_path())?);
