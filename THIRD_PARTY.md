@@ -162,3 +162,34 @@ macOS System Voice (`say`) output is for local testing only and must never be
 committed or redistributed. Speech gates require `SEYK_STT_SPEECH_WAV`, generated
 under ignored `tmp/` by `scripts/audio/stt_fixture.py`. Only public text/token
 goldens and mathematical chirp/mel fixtures are bundled.
+
+## Photo Anchor tables
+
+Photo Anchor for EmbeddingGemma 2, by Pastel-Cloud OÜ (Pastel Labs).
+Source: https://huggingface.co/pastel-labs/embeddinggemma-2-photo-anchor/tree/be9e066984345c92424c86bfcce3b17f3e3e8484
+License: Creative Commons Attribution 4.0 International (CC BY 4.0),
+https://creativecommons.org/licenses/by/4.0/ .
+
+The manifest and 256/768-dimensional anchor and calibration files are bundled
+byte-for-byte, unmodified. No images or model weights are included. These
+assets remain CC BY 4.0; Seyk's source code is Apache-2.0. Retain this attribution
+in packages and binary distributions containing the tables.
+
+The tables derive from 18,232 COCO 2017 train Flickr photos (CC BY 2.0 or
+no known copyright restrictions). Individual credits are in the upstream
+`data/photo_credits.csv` at the revision above. COCO annotations are CC BY 4.0;
+see Lin et al., *Microsoft COCO: Common Objects in Context*, ECCV 2014.
+The source embeddings used google/embeddinggemma-2 at
+914f7f89142e33e77833254d9c9b90c3cef7303b (float16, Sentence Transformers).
+
+Files live in `crates/seyk-embed/assets/photo-anchor/`.
+
+| Bundled file | Bytes | SHA-256 |
+|---|---:|---|
+| `manifest.json` | 6241 | `4dbde655fdd44a1feb4b010685fe065ffbe9c1f996331b4f4a40c9a5b2580c1e` |
+| `photo_anchor_256.f32.bin` | 1024 | `4e30ed052129ee745bb810fc1673e360857557e4a97daffdb2734e2b8dc5dc28` |
+| `quant4_256.f32.bin` | 2048 | `fe029c4cf510f6a628a24bcdc3db097ce8c387e948080d5065ef81ff904a2353` |
+| `photo_anchor_768.f32.bin` | 3072 | `a3978221be716a22f0d738efdc93df0de90fb8c490339011422ab15c2e8a3bb6` |
+| `quant4_768.f32.bin` | 6144 | `5088d57dbb8ae53da9f45f94ce20aa9177160fcbc499d41a8ecb755270ba5560` |
+
+EmbeddingGemma 2 use is also subject to the [Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy).
