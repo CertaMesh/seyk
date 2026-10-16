@@ -34,7 +34,7 @@ and the engine's generated profile together; this test needs local weights and
 is ignored in ordinary CI. Core keeps no backend dependency.
 
 The self-made `support/pdf_fixture.rs::malformed_cmap` generator reproduces both
-CMap panics from Solo #4476: an overlapping ToUnicode mapping with an unknown
+CMap panics seen on real PDFs: an overlapping ToUnicode mapping with an unknown
 FontAwesome glyph (`unexpected entry in unicode map`), and a three-byte
 bfrange destination (`bad length of hexstring`). No IRPAPERS PDF bytes are used
 or committed. Tests assert both original panic messages locally, typed failure
@@ -52,7 +52,7 @@ locators, hashes, previews and deterministic stats remain intact. The later
 additive `match` field is excluded from this historical fixture;
 `counts_ranking_golden.rs` checks complete hits including that field.
 
-To reproduce, create an isolated checkout of that main commit with `anvil`, copy
+To reproduce, create an isolated checkout of that main commit (for example `git worktree add`), copy
 `ready_main_golden.rs` into its core tests, remove `.lexical_fallback(true)`
 (the API did not exist on main), and replace the final `assert_eq!` with:
 

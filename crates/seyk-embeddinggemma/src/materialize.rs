@@ -9,7 +9,7 @@
 //! receipts or corruption preserving those stats. User-owned 0700 model/cache
 //! directories and 0600 receipts are the trust boundary. Anyone able to forge a
 //! receipt there can also replace the weights. Same-user malware is outside
-//! Seyk's threat model (todo 4334); the receipt detects accidental stale/partial
+//! Seyk's threat model; the receipt detects accidental stale/partial
 //! publications and stat-changing corruption, not that attacker.
 use super::{Result, io_error};
 use serde::{Deserialize, Serialize};

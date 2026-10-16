@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Model-independent embedding interfaces and values"
+repository.workspace = true
+readme.workspace = true
+keywords = ["embeddings", "vectors", "semantic-search", "local-first"]
+categories = ["science", "text-processing"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

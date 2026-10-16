@@ -8,6 +8,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
+repository = "https://github.com/CertaMesh/seyk"
+readme = "README.md"
 
 [package]
 name = "seyk"
@@ -16,7 +18,8 @@ edition.workspace = true
 rust-version.workspace = true
 description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"
 license.workspace = true
-readme = "README.md"
+repository.workspace = true
+readme.workspace = true
 keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "search"]
 categories = ["command-line-utilities", "text-processing"]
 

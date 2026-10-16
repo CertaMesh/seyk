@@ -2,8 +2,8 @@
 
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
 space. This crate implements text, images, PDF retrieval and opt-in audio retrieval.
-This note records current support and what audio transcription, video and
-scanned-page text extraction still need, based on the model's processor configuration
+This note records current support (including opt-in speech-to-text extraction)
+and what video and scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
 `Gemma4AudioFeatureExtractor`).
@@ -74,8 +74,10 @@ features, audio tokens or transcript are written to the cache.
 
 The encoded limit remains 32 MiB; the derived decoded-duration limit is
 1,048.576 seconds. HE-AAC/SBR, multiple tracks and complex edit lists are typed
-unsupported inputs. No STT, previews, VAD or diarization ship in 5a. Explicit
-extraction returns the existing `UnsupportedExtraction` with a Phase 5b message.
+unsupported inputs. Search never transcribes. Explicit extraction of a `time`
+hit transcribes that range with the opt-in `audio-stt` feature (Phase 5b-2);
+without it, extraction returns `UnsupportedExtraction`. Previews, VAD and
+diarization are not implemented.
 See the [implementation report](architecture.md#phase-5a-audio-retrieval) for
 reproducible synthetic evaluations and limitations.
 

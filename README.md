@@ -51,7 +51,7 @@ rather than a controlled comparison with Seyk's segmented-document retrieval.
 
 Seyk 0.1.0 at `28814a851ded` · EmbeddingGemma 2 · q8 · 256 dimensions · CPU ·
 Apple M5 Max (18 cores, 64 GiB), macOS 26.5 · 2 inference threads.
-Hybrid trails semantic-only on SciFact; fusion tuning is tracked in todo 4542.
+Hybrid trails semantic-only on SciFact; fusion tuning is a planned follow-up.
 See [full results, sources and reproduction steps](docs/benchmarks.md#published-retrieval-comparison).
 
 ## Why EmbeddingGemma 2
@@ -72,8 +72,9 @@ See [full results, sources and reproduction steps](docs/benchmarks.md#published-
 
 Prebuilt binaries for macOS (Apple Silicon), Linux (x86_64 and ARM64) and
 Windows (x86_64) are attached to each
-[release](https://github.com/CertaMesh/seyk/releases). While the repository is
-private, install with the GitHub CLI:
+[release](https://github.com/CertaMesh/seyk/releases). Download the archive for
+your platform and its `.sha256` file from there, or use the install script with
+the GitHub CLI (run `gh auth login` first):
 
 ```bash
 gh api repos/CertaMesh/seyk/contents/scripts/install.sh \
@@ -224,8 +225,10 @@ version 8 and contains `text`, `source`, `locator`, `metadata`, and optional ext
 `--no-preview` skips preview reads and sets `preview` to null; indexing still reads
 source content.
 
-Raw text ranges and PDF page-text ranges are supported. Images, whole-resource and
-other locators return an unsupported-extraction error. MCP has an explicit `extract`
+Raw text ranges and PDF page-text ranges are supported. Audio `time` ranges are
+supported in builds with `audio-stt` (see
+[Speech-to-text extraction](#speech-to-text-extraction-opt-in)). Images,
+whole-resource and other locators return an unsupported-extraction error. MCP has an explicit `extract`
 tool that takes a selected MCP hit, verifies the hash and confines reads to the
 session roots. Search never transcribes.
 
@@ -308,10 +311,11 @@ MiB total extracted text are rejected explicitly; other resources continue
 indexing. These output limits do not bound upstream decompression, CPU time or
 memory use.
 
-CLI/MCP output now uses JSON schema 4. `seyk extract` accepts schema 2, 3 and 4
-search envelopes. Cache schema 5 adds nullable media type and preserves existing
-vectors, profiles and keyword indexes. Older binaries may reset a schema-5
-cache, so keep a copy if downgrading.
+CLI/MCP output uses JSON schema 8. `seyk extract` accepts search envelopes with
+schema 2 through 8. The cache is at schema 6; upgrades migrate older caches and
+preserve existing vectors, profiles and keyword indexes. A binary refuses a
+cache schema newer than it supports, so keep a copy or use a separate
+`--cache-path` if downgrading.
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
 `hayro_interpret`, `hayro_syntax` and `hayro_font` to Off**: upstream
@@ -346,7 +350,7 @@ a new parse.
 Raw lopdf text fallback is deferred: lopdf 0.42 prefers Encoding over ToUnicode
 and silently substitutes standard encoding after some font errors. That can
 produce incorrect evidence. Page isolation recovers unaffected pages without
-guessing glyph mappings. Subprocess isolation remains tracked in Solo #4374.
+guessing glyph mappings. Subprocess isolation is a planned follow-up.
 
 ### Scores and tags
 
@@ -576,8 +580,10 @@ pub trait Embedder: Send + Sync {
 embedder declares what it supports, and the engine skips the rest with a reason
 instead of guessing.
 
-Cargo features: `onnx` (EmbeddingGemma 2 backend), `image` (image resources) and
-`cli` (the binary) are on by default. A library user who only wants the engine with
+Cargo features on by default: `onnx` (EmbeddingGemma 2 backend), `image` (image
+resources), `cli` (the binary), `mcp` (the MCP server), `watch` (background
+re-indexing) and `pdf-render` (PDF text and page rendering). `audio` and
+`audio-stt` are opt-in. A library user who only wants the engine with
 their own embedder can use `default-features = false`.
 
 ## Use only the EmbeddingGemma 2 backend
@@ -800,7 +806,7 @@ by stats and MCP daemon status's `cache_status` (`null` until the daemon opens
 its cache, or if stats fail). Search responses do not include cache status.
 These snapshots do not reflect subsequent directory changes until reopen and
 are distinct from inherited Time Machine exclusions. Protocol version 5 adds
-these fields; extraction still accepts search documents from versions 2–6.
+these fields; extraction accepts search documents from versions 2–8.
 
 ## Supported resources
 
@@ -810,7 +816,7 @@ these fields; extraction still accepts search documents from versions 2–6.
 | Plain text | `.txt` `.text` `.rst` `.org` `.adoc` `.tex` | ✅ paragraph segments |
 | Source code | `.rs` `.py` `.js` `.ts` `.go` `.java` `.c` `.cpp` `.rb` `.php` `.sh` `.sql` `.toml` `.yaml` and more | ✅ blank-line blocks |
 | Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.tiff` | ✅ one vector per image (`WholeResource`) |
-| Audio | `.wav` `.flac` `.mp3` `.m4a` | Opt-in `audio` feature; 10 s windows, `Time` evidence; no transcription |
+| Audio | `.wav` `.flac` `.mp3` `.m4a` | Opt-in `audio` feature; 10 s windows, `Time` evidence; search never transcribes, `audio-stt` extracts a transcript on request |
 | Video | — | ❌ not implemented |
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 
@@ -910,8 +916,7 @@ implementation than torchvision's). It changes individual pixels by at most 0.06
 
 To reproduce cold CLI startup failures under load, use
 [`scripts/test/flaky_tests.py`](scripts/test/flaky_tests.py) with `--cold-cli`.
-Build commands, measured rates, and the investigation are in the
-[flaky-test handoff](docs/handoffs/2026-10-10-flaky-tests-4425-4461.md).
+Build commands and options are in the script's `--help`.
 
 ```bash
 cargo test --workspace             # no model needed: segmentation, cache, CLI, ranking
@@ -977,15 +982,16 @@ it does not establish a faster default.
   (a story whose details keep shifting, for "memory becoming unreliable") can rank
   below an unrelated note that shares a word ("memory card … unreliable"). See
   [docs/benchmarks.md](docs/benchmarks.md#retrieval-smoke-test).
-- **Hybrid can push a good meaning match down.** On a real folder of book drafts,
-  hybrid search moved 7 of 8 target passages into the top 10 (semantic
-  alone: 6 of 8), but one poetic query fell from 19th to 25th because keyword
+- **Hybrid can push a good meaning match down.** On a private eight-query test
+  folder, hybrid search moved 7 of 8 target passages into the top 10 (semantic
+  alone: 6 of 8), but one purely thematic query fell from 19th to 25th because keyword
   hits crowded it out. `--mode semantic` is there for those cases.
 - **First search of a large folder is slow.** Embedding on the CPU managed roughly
   5–6 segments per second on a busy machine, about 30 minutes for 10,000
   segments. After that, only changes are embedded. Run `index --watch` or the MCP
   server so this happens in the background.
-- **Audio transcription, video and scanned-page OCR are not implemented.** See
+- **Video and scanned-page OCR are not implemented.** Audio transcription exists
+  only as opt-in, on-demand extraction (`audio-stt`). See
   [the multimodal status](docs/multimodal.md) for current support and remaining
   work, including [PDF extraction limits](docs/multimodal.md#pdf-retrieval-done-ocr-deferred).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is

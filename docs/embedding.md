@@ -125,14 +125,14 @@ preparation can be retried after installing or repairing the files; a successful
 identity stays fixed until model reload. The digest recipe and existing cache
 keys are unchanged. Filename-based session loading still rechecks the digest
 before the first inference; binding loading to an owned byte snapshot is a
-separate follow-up (Solo todo #4423).
+separate follow-up.
 For images, opt into preprocessing and provision the vision weights:
 
 ```toml
 seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk", features = ["image"] }
 ```
 
-`image` is the backend's only optional feature. Without it the default is text
+The backend has two optional features, `image` and `audio` (see below). Without `image` the default is text
 only; with it the default config enables vision, which can be disabled with
 `.vision(false)`. Images use `SearchDocument` and the existing unprefixed media
 path. Other image tasks return `UnsupportedTask`. Text/image matching uses
@@ -235,7 +235,7 @@ borrowed body for the existing order-free keyword index and retains only evidenc
 MemoryCache continues to permit writes before profile registration; SQLite
 continues to reject them atomically through its foreign key constraint.
 
-This split keeps schema v4, profile JSON/hash, model identity values, input hashes,
+This split kept the cache at schema v4 at the time (it is now schema 6), and kept the profile JSON/hash, model identity values, input hashes,
 vector bytes, tokenization, field weights, ranking and extraction behavior.
 Existing valid vectors require no migration or re-embedding. Older Seyk binaries
 reset caches whose schema they do not recognize; use separate `--cache-path`

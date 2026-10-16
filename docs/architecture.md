@@ -118,23 +118,24 @@ later phases can see what was deliberately left alone and why.
 
 ### Evaluation
 
-A real folder of book drafts, eight queries, each with one known target passage.
-Rank of the target (lower is better):
+A private local folder of long-form prose (not published), eight queries, each
+with one known target passage. Queries and text stay local; only anonymized
+ranks are reported. Rank of the target (lower is better):
 
 | Query | Semantic | Hybrid (prose weight 0.3) |
 |---|---:|---:|
-| detached from reality | 9 | 1 |
-| grief as something physical | 1 | 7 |
-| toy / wet roof | 1 | 1 |
-| fanatics | 1 | 2 (a duplicated passage took 1st) |
-| tattoos | 1 | 1 |
-| loss you can't feel | 18 | 2 |
-| ink on the skin | 19 | 25 |
-| dream city | 7 | 7 |
+| Q1 | 9 | 1 |
+| Q2 | 1 | 7 |
+| Q3 | 1 | 1 |
+| Q4 | 1 | 2 (a duplicated passage took 1st) |
+| Q5 | 1 | 1 |
+| Q6 | 18 | 2 |
+| Q7 | 19 | 25 |
+| Q8 | 7 | 7 |
 
 - Targets in the top 10 went from **6 of 8 to 7 of 8**.
-- Two character files that semantic search did not put in the top 3 for their
-  own names now rank **first**.
+- Two files that semantic search did not put in the top 3 when queried by
+  their own names now rank **first**.
 - Prose keyword weights of **1.0 and 0.15 were both worse overall** than 0.3.
   At 1.0, common words in long questions dominate; at 0.15, keywords barely
   break ties.
@@ -154,7 +155,8 @@ Rank of the target (lower is better):
 ### What we learned
 
 - **The weight has to depend on the query.** One global keyword weight cannot
-  serve both `INC-18372` and "where did I write about loss you can't feel":
+  serve both `INC-18372` and "where did I write about someone becoming like
+  their father":
   the first is all keyword, the second is all meaning.
 - **Rank fusion hides strength.** A hybrid score of 0.97 can be a weak match
   that happens to rank second of three. That is why hits carry their signals
@@ -162,8 +164,7 @@ Rank of the target (lower is better):
 - **A keyword index is not content-free.** Contentless FTS5 stores word
   frequencies. The privacy follow-up below removes source word order, but the
   cache remains sensitive.
-- **Two regressions remain** ("grief as something physical" 1 → 7, "ink on the
-  skin" 19 → 25): keyword hits on a common word push a purely thematic passage
+- **Two regressions remain** (Q2 1 → 7, Q7 19 → 25): keyword hits on a common word push a purely thematic passage
   down. `--mode semantic` covers those cases for now.
 
 ### What should happen next
@@ -394,8 +395,8 @@ Filesystem is the only real provider; the memory provider exists only in tests.
 Native Windows testing passed all nine provider tests, including actual deletion
 and vector pruning. Additional CLI/MCP, lexical-tie and failure-isolation URI
 fixtures now compare portable absolute paths or canonicalize decoded paths.
-Two unrelated pre-existing tests are ignored only on Windows pending Solo
-#4348 (discovery fixture separators) and #4349 (read-only timestamp handle).
+Two unrelated pre-existing tests are ignored only on Windows pending follow-ups
+(discovery fixture separators and read-only timestamp handle).
 Provider/deletion regressions remain enabled on Windows.
 
 The first Windows CI run exposed two previously uncompiled lint paths: a cache
@@ -837,9 +838,9 @@ benchmarks. The earlier compatibility spike measured rendering alone at roughly
 
 Complete the compatible single-ORT OCR adapter and model-provenance follow-up
 before adding scan text extraction. Process isolation remains separate.
-During the Actions billing block the full local macOS merge gate supplies
+While GitHub Actions was unavailable, the full local macOS merge gate supplied
 implementation verification. Linux/Windows and all release targets must be
-rerun once Actions is restored; this is tracked as a follow-up. The earlier
+rerun in CI; this is tracked as a follow-up. The earlier
 four-target compatibility spike established renderer build/hash/link feasibility, but does
 not replace verification of this implementation. Platform-sensitive areas are
 floating-point raster/PNG determinism, filesystem behavior and dependency
@@ -1150,7 +1151,7 @@ The local merge gate passed: pinned Rust 1.99 formatting and workspace Clippy
 with warnings denied; workspace, core minimal, PDF and PDF-render tests; both
 model-backed cache-profile and PDF CLI goldens; Rust 1.89 all-target checks;
 release CLI smoke; license checks; and embedding dependency boundaries. Linux
-and Windows execution still requires CI when GitHub Actions billing is restored.
+and Windows execution still requires a CI run.
 
 ## Phase 5b-1: verified streaming audio and duration policy
 

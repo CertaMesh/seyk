@@ -3,7 +3,7 @@
 
 This script intentionally keeps the complete padded pixel tensor and position
 tensor in JSON so the Rust preprocessing path can be compared independently of
-the Python model. Run it with the scratchpad virtualenv and HF_HUB_OFFLINE=1.
+the Python model. Run it in a local virtualenv with HF_HUB_OFFLINE=1.
 """
 
 from __future__ import annotations

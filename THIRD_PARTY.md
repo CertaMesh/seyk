@@ -19,6 +19,9 @@ The operator provisions them locally or uses the explicit model download
 command. The pinned export declares Apache-2.0 in its
 [model card](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/blob/daa72c51243991dfcaf9f9137d2c573d8f7790c0/README.md).
 Preserve that licence and upstream notices when distributing the model assets.
+The same card states that deployments must adhere to the
+[Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy);
+anyone deploying Seyk with these weights is bound by it.
 
 ONNX Runtime (MIT) is the native inference dependency; SQLite is bundled by
 rusqlite (SQLite is public domain). Their upstream distributions include notices

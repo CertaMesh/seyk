@@ -18,7 +18,7 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-# Approved: Solo project 73 pad 11511, E1 decision (2026-10-08); existing dirs dependency.
+# Approved 2026-10-08: existing transitive dependency of dirs (see THIRD_PARTY.md).
 [[licenses.exceptions]]
 name = "option-ext"
 version = "=0.2.0"

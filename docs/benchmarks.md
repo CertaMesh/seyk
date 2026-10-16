@@ -41,8 +41,8 @@ quiet-machine performance claim.
 | IRPAPERS text | semantic | 0.58941 | 0.51834 | 0.81111 |
 | IRPAPERS text | lexical | 0.62941 | 0.56413 | 0.83333 |
 
-Hybrid trails semantic-only on SciFact. This known fusion limitation is tracked
-in Solo todo 4542.
+Hybrid trails semantic-only on SciFact. This known fusion limitation is a
+planned follow-up.
 nDCG@10 rewards relevant documents near the top of the first ten results, with
 linear graded relevance and a 0–1 scale (higher is better).
 
@@ -82,13 +82,13 @@ URL, retrieval date, protocol and numeric source score. The small
 no dataset text, document maps, per-query rows or per-document hash lists are
 committed. This run's per-query rows and uv environments were deleted after scoring.
 When datasets are shared with concurrent runs, retain the raw inputs and
-materialized corpora until every consumer finishes; coordinate cleanup with the
-orchestrator. Preserve provisioned model files.
+materialized corpora until every consumer finishes. Preserve provisioned model
+files.
 
 Run the public retrieval pipeline below for `scifact`, `nfcorpus` and `irpapers`,
 with `--dimension 256 --precision q8 --threads 2 --depth 200
---modes hybrid,semantic,lexical`. Hold the project's shared local-gate lock during
-runs. Score the three files for each dataset together. The chart command defaults
+--modes hybrid,semantic,lexical`. Avoid running other heavy jobs on the machine
+at the same time. Score the three files for each dataset together. The chart command defaults
 to `~/.cache/seyk-bench/results`; it picks the newest matching aggregate per
 dataset by modification time, with filename as the tie-breaker, for an explicit
 full commit SHA. It ignores other dimensions, precisions and ranking/depth
@@ -228,7 +228,7 @@ The concurrent-document interval includes joining the query/document workload.
 `cold_index` times a first search including indexing and query embedding;
 `cached_search` repeats it with the same in-memory cache.
 
-A quiet sweep must be coordinated with the user. Compile before the window, use
+A quiet sweep needs a reserved window on an otherwise idle machine. Compile before the window, use
 stable AC/power settings, record hardware/core topology, OS, Rust and ONNX Runtime
 versions, model revision, memory pressure and swap before/after, then wait for idle
 CPU and a stable low load (for example 1-minute load below 2 for two minutes on the
@@ -473,13 +473,13 @@ uv run --locked scripts/bench/bench.py determinism ORIGINAL.jsonl WARM.jsonl
 This compares ranked keys, ranks and locators, excluding timing/environment noise.
 Run paths must remain inside the benchmark root.
 
-After full runs are authorized, use `scifact`, `nfcorpus`, `irpapers`, or
+For full runs, use `scifact`, `nfcorpus`, `irpapers`, or
 `irpapers-pdf` in the same pipeline. Run 768 dimensions on SciFact separately.
 `--lexical-weight FLOAT` is an explicit diagnostic override recorded in provenance,
 not a proposed default. On full SciFact scoring, lexical nDCG@10 outside [.60,.68]
 is an error requiring investigation before any ranking conclusion. This band is
-not applied to NanoSciFact. Full SciFact execution is deferred when only smoke
-runs are authorized; the checked band is not a claim that Seyk meets it yet.
+not applied to NanoSciFact. The published full SciFact run scores lexical
+nDCG@10 0.64764, inside the band.
 The pinned full IRPAPERS CSV contains four empty-transcription pages among its
 3,230 raw rows. Materialization retains the 180 queries and writes 3,226 text
 documents. One qrel targets a skipped page and remains a miss; the manifest and
