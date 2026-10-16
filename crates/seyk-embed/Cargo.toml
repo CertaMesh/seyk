@@ -3,7 +3,8 @@ name = "seyk-embed"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# Overrides the workspace licence: the bundled Photo Anchor tables are CC BY 4.0.
+license = "Apache-2.0 AND CC-BY-4.0"
 description = "Model-independent embedding interfaces and values"
 repository.workspace = true
 readme.workspace = true

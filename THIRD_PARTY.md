@@ -185,7 +185,8 @@ see Lin et al., *Microsoft COCO: Common Objects in Context*, ECCV 2014.
 The source embeddings used google/embeddinggemma-2 at
 914f7f89142e33e77833254d9c9b90c3cef7303b (float16, Sentence Transformers).
 
-Files live in `crates/seyk-embed/assets/photo-anchor/`.
+Files live in `crates/seyk-embed/assets/photo-anchor/`. Because the `seyk-embed`
+package bundles them, its declared licence is `Apache-2.0 AND CC-BY-4.0`.
 
 | Bundled file | Bytes | SHA-256 |
 |---|---:|---|
