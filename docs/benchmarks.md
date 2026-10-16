@@ -640,6 +640,31 @@ The aggregate/provenance file is `docs/benchmarks/head-to-head.toml`; only compl
 scored runs belong there as **measured on Seyk's harness**. Published vendor or
 model scores are a separate comparison.
 
+#### Measured results
+
+Measured on 2026-10-14–16 with clean adapter commit
+`b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7`. The table compares complete tool
+configurations, including their different models and native chunking. All use
+the same materialized corpora, query sets and scoring. Each configuration has
+one evaluation pass; QMD's stochastic expansion can vary on another pass.
+
+| Tool / mode | SciFact nDCG@10 | NFCorpus nDCG@10 | IRPAPERS text nDCG@10 |
+|---|---:|---:|---:|
+| QMD vector | 0.718541 | 0.376507 | 0.447891 |
+| QMD hybrid | 0.679850 | 0.368419 | 0.445633 |
+| QMD full (reranker) | 0.695797 | 0.380972 | 0.465203 |
+| DigUp hybrid | 0.800734 | 0.370653 | 0.682180 |
+| LEANN Contriever | 0.651517 | 0.318308 | 0.570307 |
+
+QMD's native lexical run is reported separately as a diagnostic footnote.[^qmd-native-and]
+
+The [aggregate manifest](benchmarks/head-to-head.toml) records all 18 completed
+configurations, query/result-depth counts, model and install hashes, dataset
+pins, hardware paths and timings. Timings are operational context from single
+passes and bounded restarts, not replicated speed comparisons. Comparative speed
+is inconclusive. No dataset text, query text, ranked rows or document maps are
+included.
+
 The adapter currently requires macOS. Every indexer and query worker, including
 children, runs under `sandbox-exec` with `scripts/bench/offline.sb`. External
 network access is denied; localhost is allowed for LEANN's local ZMQ embedding
@@ -727,7 +752,10 @@ Unexpected paths, unknown document keys, invalid scores or incomplete indexing
 fail the run. The scoring formula is unchanged. The Seyk-specific SciFact BM25
 sanity interval does not apply to another engine's lexical score.
 
-After scoring and recording only aggregates/provenance, delete the generated raw
-downloads, corpora, document maps, query rows, run rows, competitor indexes and
-harness uv cache. Keep the removable tool/model installs for explicitly requested
-reruns. Do not delete another worker's active artifacts.
+After scoring and preserving aggregates/provenance, delete your generated query
+rows, run rows, competitor indexes and harness uv cache. When datasets are shared,
+retain raw downloads, corpora and document maps until the orchestrator confirms
+all consumers are finished. Keep removable tool/model installs until their removal
+is authorized. Do not delete another worker's artifacts.
+
+[^qmd-native-and]: **Native AND lexical diagnostic:** scifact: 0.045448, nfcorpus: 0.202307, irpapers: 0.011111. Empty rankings: 283/300, 136/323, 175/180 queries, respectively. Pinned QMD 2.8.3 joins positive query terms with `AND`; these scores are not a headline comparison of lexical quality. Its [documented lexical grammar](https://github.com/tobi/qmd/blob/facd35e01359e59d938bc9418e93fb9318addee3/docs/SYNTAX.md) has no any-term option. The documented natural-query pipeline combines expansion with lexical/vector retrieval and is represented by hybrid/full above. Query terms were not rewritten or removed.
