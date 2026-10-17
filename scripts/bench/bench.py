@@ -22,6 +22,7 @@ import tomllib
 import unittest
 from unittest import mock
 import urllib.request
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -32,6 +33,11 @@ ROOT = Path.home() / ".cache/seyk-bench"
 CONFIG = Path(__file__).with_name("datasets.toml")
 MODES = ("hybrid", "semantic", "lexical")
 METRICS = [ir.nDCG @ 10, ir.RR @ 10, *(ir.R @ k for k in (1, 5, 10, 20, 100))]
+PDF_PROOF = "pdf-policy-miss-v1"
+PDF_LIMIT = 33_554_432
+PDF_NO_TEXT = {"no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)",
+               "no usable embedded text; image embedding is disabled"}
+METADATA = {"docmap.tsv", "queries.jsonl", "qrels.tsv"}
 
 
 def require(condition, message):
@@ -224,13 +230,99 @@ def materialize(ds):
 def gold(ds):
     meta = confined(ROOT / "meta" / ds)
     manifest = json.loads(confined(meta / "manifest.json").read_text())
+    if ds == "irpapers-pdf":
+        require(manifest["dataset"] == ds and manifest["source"] == config(ds), "PDF source config mismatch")
+        require(set(manifest["metadata_blake3"]) == METADATA, "PDF metadata identities mismatch")
     for name, digest in manifest["metadata_blake3"].items():
         require(blake3.blake3(confined(meta / name).read_bytes()).hexdigest() == digest, "metadata changed since materialization")
     with confined(meta / "docmap.tsv").open() as f:
-        docmap = {r["key"]: r["docid"] for r in csv.DictReader(f, delimiter="\t")}
+        mapping = list(csv.DictReader(f, delimiter="\t"))
+        docmap = {r["key"]: r["docid"] for r in mapping}
     with confined(meta / "qrels.tsv").open() as f:
         qrels = [ir.Qrel(r["query-id"], r["corpus-id"], int(r["score"])) for r in csv.DictReader(f, delimiter="\t")]
+    if ds == "irpapers-pdf":
+        require(len(mapping) == len(docmap) == config(ds)["documents"]
+                and len(set(docmap.values())) == len(docmap), "PDF duplicate/missing document identity")
+        require(all(doc.isascii() and doc.isdecimal() and int(doc) > 0 and str(int(doc)) == doc
+                    and blake3.blake3(doc.encode()).hexdigest()[:16] == key for key, doc in docmap.items()), "invalid PDF identity")
+        require(set(manifest["files"]) == {k+".pdf" for k in docmap}, "PDF manifest/docmap mismatch")
+        queries = jsonlines(confined(meta / "queries.jsonl").read_text().splitlines())
+        qids = {q["qid"] for q in queries}
+        require(len(qids) == len(queries) == config(ds)["queries"], "PDF question count/identity mismatch")
+        require(len(qrels) == len({(q.query_id, q.doc_id) for q in qrels}) == len(queries)
+                and {q.query_id for q in qrels} == qids, "PDF original qrels mismatch")
+        for q in qrels:
+            paper, page = q.doc_id.split("#")
+            require(paper in docmap.values() and page_id(paper, page) == q.doc_id and q.relevance == 1,
+                    "invalid original PDF qrel")
     return manifest, docmap, qrels
+
+
+def pdf_coverage(env, manifest, docmap, qrels):
+    """Check runner-observed evidence; the scorer does not remeasure source sizes."""
+    proof = env.get("pdf_coverage")
+    require(isinstance(proof, dict) and proof.get("proof") == PDF_PROOF
+            and proof.get("limit") == PDF_LIMIT, "missing/unknown PDF policy proof or default limit")
+    require(set(proof) == {"proof", "limit", "full_resources", "eligible_keys", "exclusions", "omitted_text_pages"},
+            "unknown PDF proof fields/counts")
+    session = env.get("pdf_cache_session")
+    require(isinstance(session, str) and 1 <= len(session) <= 96
+            and all(c.isascii() and (c.isalnum() or c == '-') for c in session), "invalid PDF cache session")
+    require(proof.get("full_resources") == len(docmap), "PDF full resource count mismatch")
+    exclusions = proof.get("exclusions")
+    require(isinstance(exclusions, list), "missing PDF exclusions")
+    excluded = set()
+    for item in exclusions:
+        require(set(item) == {"key", "blake3", "size_bytes", "reason"}, "unknown exclusion fields")
+        key = item["key"]
+        require(key in docmap and key not in excluded, "unknown/duplicate PDF exclusion")
+        require(item.get("reason") == "encoded_size_exceeds_default"
+                and type(item.get("size_bytes")) is int and item["size_bytes"] > PDF_LIMIT
+                and item.get("blake3") == manifest["files"][key+".pdf"]
+                and isinstance(item["blake3"], str) and len(item["blake3"]) == 64
+                and all(c in "0123456789abcdef" for c in item["blake3"]), "invalid PDF exclusion evidence")
+        excluded.add(key)
+    require([e["key"] for e in exclusions] == sorted(excluded), "unsorted PDF exclusions")
+    eligible = set(docmap) - excluded
+    require(proof.get("eligible_keys") == sorted(eligible), "PDF eligible identity mismatch")
+    omitted = proof.get("omitted_text_pages")
+    require(isinstance(omitted, list), "missing omitted text pages")
+    pages = set()
+    for item in omitted:
+        require(set(item) == {"key", "page", "reason"}, "unknown omitted-page fields")
+        key, page = item["key"], item["page"]
+        require(key in eligible and type(page) is int and page > 0
+                and item.get("reason") == "no_usable_embedded_text"
+                and (key, page) not in pages, "invalid omitted PDF page")
+        pages.add((key, page))
+    require([(p["key"], p["page"]) for p in omitted] == sorted(pages), "unsorted PDF pages")
+    index = env.get("index", {})
+    sync = index.get("sync", {})
+    require(index.get("resources_removed") == 0 and sync.get("resources_discovered") == len(eligible)
+            and sync.get("resources_updated") == len(eligible) and sync.get("resources_unchanged") == 0
+            and sync.get("skipped") == [] and sync.get("skipped_counts") == [], "PDF preparation was not fresh/complete")
+    diagnostics = []
+    for item in sync.get("page_diagnostics", []):
+        uri = urllib.parse.urlsplit(item["resource"])
+        path = Path(urllib.parse.unquote(uri.path))
+        require(uri.scheme == "file" and path.suffix == ".pdf"
+                and item.get("code") == "other" and item.get("reason") in PDF_NO_TEXT,
+                "fatal PDF diagnostic")
+        diagnostics.append((path.stem, item["page"]))
+    require(len(diagnostics) == len(pages) and set(diagnostics) == pages, "PDF diagnostic evidence mismatch")
+    excluded_papers = {docmap[k] for k in excluded}
+    affected = [q for q in qrels if q.relevance > 0 and q.doc_id.split("#")[0] in excluded_papers]
+    omitted_ids = {page_id(docmap[k], p) for k, p in pages}
+    omitted_qrels = [q for q in qrels if q.relevance > 0 and q.doc_id in omitted_ids]
+    return {"proof":PDF_PROOF, "size_evidence":"runner-observed length and BLAKE3; scorer consistency-checked",
+            "original_queries":len({q.query_id for q in qrels}), "original_qrels":len(qrels),
+            "full_resources":len(docmap), "eligible_resources":len(eligible), "excluded_resources":len(excluded),
+            "exclusions":exclusions, "excluded_physical_pages":None,
+            "positive_qrels_targeting_exclusions":len(affected),
+            "questions_targeting_exclusions":len({q.query_id for q in affected}),
+            "omitted_text_pages":omitted,
+            "positive_qrels_targeting_omitted_pages":len(omitted_qrels),
+            "questions_targeting_omitted_pages":len({q.query_id for q in omitted_qrels})}, eligible
 
 
 def read_run(path):
@@ -277,10 +369,23 @@ def score(ds, paths):
     manifest, docmap, qrels = gold(ds)
     per_mode, envs, completions, rows_by_mode = {}, {}, {}, {}
     reference = None
+    coverage = None
     for path in paths:
         env, rows, completion = read_run(path)
         require(env["dataset"] == ds and env["dataset_manifest"] == manifest, "dataset provenance mismatch")
         identity = {k:env[k] for k in ("git_sha", "profile_id", "depth", "lexical_weight", "manifest_blake3", "run_id", "threads", "dirty")}
+        if ds == "irpapers-pdf":
+            checked, eligible = pdf_coverage(env, manifest, docmap, qrels)
+            if coverage is None:
+                coverage = checked
+            require(coverage == checked, "different PDF coverage")
+            identity.update({k:env[k] for k in ("pdf_coverage", "pdf_cache_session", "profile", "precision", "dimension")})
+            expected_manifest = blake3.blake3(confined(ROOT / "meta" / ds / "manifest.json").read_bytes()).hexdigest()
+            require(env["manifest_blake3"] == expected_manifest, "PDF manifest digest mismatch")
+            for row in rows.values():
+                for view in ("ranked", "ranked_pages"):
+                    require(isinstance(row.get(view), list) and all(h["key"] in eligible for h in row[view]),
+                            "excluded/unknown PDF hit")
         if reference is None:
             reference = identity
         require(identity == reference, "cannot combine different runs/profiles/settings")
@@ -297,6 +402,7 @@ def score(ds, paths):
             per_mode[mode] = {"page":per_mode[mode], "resource":paper_metrics}
         envs[mode], completions[mode], rows_by_mode[mode] = env, completion, rows
     require(per_mode, "no run files")
+    require(ds != "irpapers-pdf" or set(per_mode) == set(MODES), "PDF aggregate requires all three modes")
     positive = {}
     for q in qrels:
         if q.relevance > 0:
@@ -320,6 +426,9 @@ def score(ds, paths):
     result = {"dataset":ds, "smoke":ds=="nanoscifact", "metrics":per_mode, "diagnostics":diagnostics,
               "environment":envs, "completion":completions, "scoring":f"ir_measures=={version('ir-measures')}; pytrec_eval (pytrec-eval-terrier)=={version('pytrec-eval-terrier')}; graded linear nDCG; relevance >= 1"}
     result["empty_transcriptions"] = manifest.get("empty_transcriptions", {"skipped_pages":0, "qrels_targeting_skipped_pages":0})
+    if ds == "irpapers-pdf":
+        result["pdf_coverage"] = coverage
+        result["diagnostic_view"] = "physical-page; top1_nonrelevant is page-based"
     write_json(out, result)
     log = confined(out.with_suffix(".queries.jsonl"))
     log.write_text("".join(json.dumps(row, sort_keys=True)+"\n" for row in join))
@@ -352,6 +461,16 @@ def report(paths):
         if r["dataset"] == "irpapers":
             skipped = r["empty_transcriptions"]
             skip_notes.append(f"IRPAPERS skipped pages: {skipped['skipped_pages']}; qrels targeting skipped pages: {skipped['qrels_targeting_skipped_pages']}")
+        elif r["dataset"] == "irpapers-pdf":
+            coverage = r["pdf_coverage"]
+            skip_notes.append(f"IRPAPERS PDF original queries: {coverage['original_queries']}; original qrels: {coverage['original_qrels']}; "
+                              f"resources: full {coverage['full_resources']}, eligible {coverage['eligible_resources']}, excluded {coverage['excluded_resources']}; "
+                              f"known omitted text pages: {len(coverage['omitted_text_pages'])}; "
+                              f"positive qrels targeting exclusions: {coverage['positive_qrels_targeting_exclusions']}; "
+                              f"distinct questions targeting exclusions: {coverage['questions_targeting_exclusions']}; "
+                              f"positive qrels targeting omitted pages: {coverage['positive_qrels_targeting_omitted_pages']}; "
+                              f"distinct questions targeting omitted pages: {coverage['questions_targeting_omitted_pages']}; "
+                              "excluded physical pages: unknown")
         for mode, metrics_ in r["metrics"].items():
             env = r["environment"][mode]
             profile = f"{env.get('precision', '?')}/{env.get('dimension', '?')}"
@@ -365,6 +484,188 @@ def report(paths):
 
 
 class Tests(unittest.TestCase):
+    def pdf_fixture(self):
+        docmap = {blake3.blake3(d.encode()).hexdigest()[:16]:d for d in ("1", "2", "3")}
+        a, b, c = [next(k for k, v in docmap.items() if v == d) for d in ("1", "2", "3")]
+        manifest = {"files":{k+".pdf":"a"*64 for k in docmap}}
+        qrels = [ir.Qrel("q1", "1#3", 1), ir.Qrel("q2", "2#1", 1), ir.Qrel("q3", "2#1", 1)]
+        proof = {"proof":PDF_PROOF, "limit":PDF_LIMIT, "full_resources":3, "eligible_keys":sorted([a,c]),
+                 "exclusions":[{"key":b, "blake3":"a"*64, "size_bytes":PDF_LIMIT+1, "reason":"encoded_size_exceeds_default"}],
+                 "omitted_text_pages":[{"key":a, "page":2, "reason":"no_usable_embedded_text"}]}
+        env = {"type":"env", "schema":1, "dataset":"irpapers-pdf", "dataset_manifest":manifest,
+               "git_sha":"test", "profile_id":"test", "profile":{}, "precision":"q8", "dimension":256,
+               "depth":200, "lexical_weight":None, "manifest_blake3":"test", "run_id":"test", "threads":1,
+               "dirty":False, "pdf_cache_session":"synthetic", "pdf_coverage":proof,
+               "index":{"resources_removed":0, "sync":{"resources_discovered":2, "resources_updated":2,
+                   "resources_unchanged":0, "skipped":[], "skipped_counts":[], "segments_embedded":0,
+                   "page_diagnostics":[{"resource":f"file:///public/{a}.pdf", "page":2, "code":"other",
+                                        "reason":sorted(PDF_NO_TEXT)[0]}]}}}
+        return env, manifest, docmap, qrels, (a,b,c)
+
+    def test_pdf_evidence_refusals_and_affected_original_qrels(self):
+        import copy
+        env, manifest, docmap, qrels, (a,b,c) = self.pdf_fixture()
+        report_, eligible = pdf_coverage(env, manifest, docmap, qrels)
+        self.assertEqual(eligible, {a,c})
+        self.assertEqual(report_["positive_qrels_targeting_exclusions"], 2)
+        self.assertEqual(report_["questions_targeting_exclusions"], 2)
+        self.assertEqual(report_["original_queries"], 3)
+        self.assertEqual(report_["original_qrels"], 3)
+        self.assertEqual(report_["questions_targeting_omitted_pages"], 0)
+        self.assertIsNone(report_["excluded_physical_pages"])
+        mutations = [
+            lambda e:e["pdf_coverage"].update(limit=PDF_LIMIT+1),
+            lambda e:e["pdf_coverage"].update(proof="unknown"),
+            lambda e:e["pdf_coverage"].update(full_resources=2),
+            lambda e:e["pdf_coverage"].update(questions_targeting_exclusions=0),
+            lambda e:e["pdf_coverage"].update(eligible_keys=sorted([a,b])),
+            lambda e:e["pdf_coverage"]["exclusions"][0].update(blake3="b"*64),
+            lambda e:e["pdf_coverage"]["exclusions"][0].update(size_bytes=PDF_LIMIT),
+            lambda e:e["pdf_coverage"]["exclusions"][0].update(reason="other"),
+            lambda e:e["pdf_coverage"]["exclusions"].append(e["pdf_coverage"]["exclusions"][0]),
+            lambda e:e["pdf_coverage"]["exclusions"][0].update(key="unknown"),
+            lambda e:e["pdf_coverage"]["omitted_text_pages"][0].update(page=0),
+            lambda e:e["pdf_coverage"]["omitted_text_pages"][0].update(key=b),
+            lambda e:e["index"]["sync"].update(resources_updated=0, resources_unchanged=2),
+            lambda e:e["index"]["sync"].update(skipped=[{}]),
+            lambda e:e["index"]["sync"]["page_diagnostics"][0].update(code="pdf_parse_failed"),
+            lambda e:e["index"]["sync"]["page_diagnostics"][0].update(reason="embedded text is not supported by this embedder"),
+            lambda e:e["index"]["sync"].update(page_diagnostics=[]),
+        ]
+        for mutate in mutations:
+            broken = copy.deepcopy(env)
+            mutate(broken)
+            with self.subTest(broken=broken), self.assertRaises(ValueError):
+                pdf_coverage(broken, manifest, docmap, qrels)
+
+    def test_pdf_all_modes_excluded_targets_and_empty_denominators(self):
+        import copy
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            env, manifest, docmap, qrels, (a,b,c) = self.pdf_fixture()
+            meta = root/"meta/irpapers-pdf"
+            meta.mkdir(parents=True)
+            data = json.dumps(manifest).encode()
+            (meta/"manifest.json").write_bytes(data)
+            env["manifest_blake3"] = blake3.blake3(data).hexdigest()
+            paths = [root/(mode+".jsonl") for mode in MODES]
+            def write_runs(empty=False, change=None):
+                for path, mode in zip(paths, MODES):
+                    rows = [{"type":"query", "mode":mode, "qid":q.query_id,
+                             "ranked":[], "ranked_pages":[]} for q in qrels]
+                    if not empty:
+                        hit = {"key":a, "rank":1, "locator":{"kind":"page_text", "page":3}}
+                        rows[0].update(ranked=[hit], ranked_pages=[hit])
+                    local = copy.deepcopy(env)
+                    if change: change(local, rows, mode)
+                    path.write_text("".join(json.dumps(r)+"\n" for r in [local, *rows, {"type":"complete", "queries":3}]))
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=(manifest,docmap,qrels)), mock.patch("sys.stdout", new_callable=io.StringIO):
+                for empty in (False, True):
+                    write_runs(empty)
+                    score("irpapers-pdf", paths)
+                    result = json.loads((root/"results/irpapers-pdf/test.json").read_text())
+                    for mode in MODES:
+                        for view in ("page", "resource"):
+                            self.assertTrue(all(abs(value - (0 if empty else 1/3)) < 1e-9 for value in result["metrics"][mode][view].values()))
+                    self.assertEqual(result["pdf_coverage"]["questions_targeting_exclusions"], 2)
+                    self.assertEqual(result["pdf_coverage"]["original_queries"], 3)
+                    self.assertEqual(result["pdf_coverage"]["original_qrels"], 3)
+                    self.assertEqual(result["pdf_coverage"]["questions_targeting_omitted_pages"], 0)
+                with self.assertRaisesRegex(ValueError, "all three modes"):
+                    score("irpapers-pdf", paths[:-1])
+                changes = [
+                    lambda e,r,m:r[0].update(qid="forged"),
+                    lambda e,r,m:r[0].update(qid=r[1]["qid"]),
+                    lambda e,r,m:e["pdf_coverage"].update(full_resources=4) if m == "semantic" else None,
+                    lambda e,r,m:r[0].update(ranked=[{"key":b, "rank":1}]),
+                    lambda e,r,m:r[0].update(ranked_pages=[{"key":b, "rank":1}]),
+                ]
+                for change in changes:
+                    write_runs(change=change)
+                    with self.assertRaises(ValueError): score("irpapers-pdf", paths)
+                write_runs()
+                paths[0].write_text("\n".join(paths[0].read_text().splitlines()[:-1])+"\n")
+                with self.assertRaisesRegex(ValueError, "incomplete run"): score("irpapers-pdf", paths)
+
+    def test_pdf_report_shows_exclusions_and_textless_gold_targets(self):
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            env, manifest, docmap, qrels, _ = self.pdf_fixture()
+            qrels[0] = ir.Qrel("q1", "1#2", 1)  # Known textless page; keep it in gold.
+            meta = root/"meta/irpapers-pdf"
+            meta.mkdir(parents=True)
+            data = json.dumps(manifest).encode()
+            (meta/"manifest.json").write_bytes(data)
+            env["manifest_blake3"] = blake3.blake3(data).hexdigest()
+            runs = [(env, {q.query_id:{"mode":mode, "ranked":[], "ranked_pages":[]} for q in qrels}, {}) for mode in MODES]
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=(manifest,docmap,qrels)), mock.patch(__name__+".read_run", side_effect=runs):
+                with mock.patch("sys.stdout", new_callable=io.StringIO):
+                    score("irpapers-pdf", [root/(m+".jsonl") for m in MODES])
+                path = root/"results/irpapers-pdf/test.json"
+                result = json.loads(path.read_text())
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    report([path])
+                self.assertIn("IRPAPERS PDF original queries: 3; original qrels: 3; resources: full 3, eligible 2, excluded 1; "
+                              "known omitted text pages: 1; positive qrels targeting exclusions: 2; distinct questions targeting exclusions: 2; "
+                              "positive qrels targeting omitted pages: 1; distinct questions targeting omitted pages: 1; "
+                              "excluded physical pages: unknown", stdout.getvalue())
+                self.assertEqual(result["pdf_coverage"]["questions_targeting_omitted_pages"], 1)
+                self.assertEqual(result["pdf_coverage"]["original_queries"], 3)
+                self.assertEqual(result["pdf_coverage"]["original_qrels"], 3)
+                for mode in MODES:
+                    for view in ("page", "resource"):
+                        self.assertTrue(all(value == 0 for value in result["metrics"][mode][view].values()))
+
+    def test_pdf_asymmetric_paper_and_physical_page(self):
+        gold = [ir.Qrel("q", "7#3", 1)]
+        papers = [ir.Qrel("q", "7", 1)]
+        for returned, expected in [("7#2", (1,0)), ("8#3", (0,0)), ("7#3", (1,1))]:
+            self.assertEqual(metrics(papers,{"q":[returned.split('#')[0]]})["R@1"], expected[0])
+            self.assertEqual(metrics(gold,{"q":[returned]})["R@1"], expected[1])
+        # Textless physical page 2 remains gold; returning page 3 cannot satisfy it.
+        self.assertEqual(metrics([ir.Qrel("q","7#2",1)], {"q":["7#3"]})["R@1"], 0)
+
+    def test_pdf_gold_original_metadata_and_identity_contract(self):
+        import copy
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            _, manifest, docmap, qrels, _ = self.pdf_fixture()
+            cfg = dict(config("irpapers-pdf"), documents=3, queries=3)
+            manifest.update(dataset="irpapers-pdf", source=cfg)
+            meta = root/"meta/irpapers-pdf"
+            meta.mkdir(parents=True)
+            original = {"docmap.tsv":"key\tdocid\n"+"".join(f"{k}\t{d}\n" for k,d in docmap.items()),
+                        "queries.jsonl":"".join(json.dumps({"qid":q.query_id,"text":"public synthetic question"})+"\n" for q in qrels),
+                        "qrels.tsv":"query-id\tcorpus-id\tscore\n"+"".join(f"{q.query_id}\t{q.doc_id}\t1\n" for q in qrels)}
+            def write_metadata(changes=None, missing=None):
+                contents = dict(original)
+                if changes: contents.update(changes)
+                local = copy.deepcopy(manifest)
+                local["metadata_blake3"] = {n:blake3.blake3(b.encode()).hexdigest() for n,b in contents.items()}
+                if missing: del local["metadata_blake3"][missing]
+                for name, data in contents.items(): (meta/name).write_text(data)
+                (meta/"manifest.json").write_text(json.dumps(local))
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".config", return_value=cfg):
+                write_metadata()
+                self.assertEqual(len(gold("irpapers-pdf")[2]), 3)
+                write_metadata(missing="qrels.tsv")
+                with self.assertRaisesRegex(ValueError, "metadata identities"): gold("irpapers-pdf")
+                duplicate = original["docmap.tsv"]+original["docmap.tsv"].splitlines()[1]+"\n"
+                write_metadata({"docmap.tsv":duplicate})
+                with self.assertRaisesRegex(ValueError, "document identity"): gold("irpapers-pdf")
+                write_metadata({"docmap.tsv":original["docmap.tsv"].replace(next(iter(docmap)),"f"*16)})
+                with self.assertRaisesRegex(ValueError, "invalid PDF identity"): gold("irpapers-pdf")
+                write_metadata()
+                (meta/"queries.jsonl").write_text("tampered")
+                with self.assertRaisesRegex(ValueError, "metadata changed"): gold("irpapers-pdf")
+                write_metadata({"qrels.tsv":"query-id\tcorpus-id\tscore\nq1\t1#3\t1\n"})
+                with self.assertRaisesRegex(ValueError, "original qrels"): gold("irpapers-pdf")
+                write_metadata({"queries.jsonl":""})
+                with self.assertRaisesRegex(ValueError, "question count"): gold("irpapers-pdf")
+
     def test_hand_computed_metrics_with_miss(self):
         # q1: grade-1 b at 1, nonrelevant x at 2, grade-2 a at 3.
         # trec_eval nDCG uses linear gains: DCG=1+2/log2(4)=2.
@@ -521,15 +822,21 @@ class Tests(unittest.TestCase):
         ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = Path(directory)
-            env = {"dataset":"irpapers-pdf", "dataset_manifest":{}, "git_sha":"test", "profile_id":"test", "depth":200, "lexical_weight":None, "manifest_blake3":"test", "run_id":"test", "threads":1, "dirty":False}
-            row = {"mode":"hybrid", "ranked":[{"key":"nonpage", "rank":1}, {"key":"page", "rank":2}],
-                   "ranked_pages":[{"key":"page", "rank":1, "locator":{"kind":"page_text", "page":2}}]}
-            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=({}, {"nonpage":"1", "page":"2"}, [ir.Qrel("q", "2#2", 1)])), mock.patch(__name__+".read_run", return_value=(env, {"q":row}, {})), mock.patch("sys.stdout", new_callable=io.StringIO):
-                score("irpapers-pdf", [root/"run.jsonl"])
+            env, manifest, docmap, _, (a,b,c) = self.pdf_fixture()
+            meta = root/"meta/irpapers-pdf"
+            meta.mkdir(parents=True)
+            data = json.dumps(manifest).encode()
+            (meta/"manifest.json").write_bytes(data)
+            env["manifest_blake3"] = blake3.blake3(data).hexdigest()
+            row = {"ranked":[{"key":c, "rank":1}, {"key":a, "rank":2}],
+                   "ranked_pages":[{"key":a, "rank":1, "locator":{"kind":"page_text", "page":3}}]}
+            runs = [(env, {"q":dict(row, mode=mode)}, {}) for mode in MODES]
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=(manifest, docmap, [ir.Qrel("q", "1#3", 1)])), mock.patch(__name__+".read_run", side_effect=runs), mock.patch("sys.stdout", new_callable=io.StringIO):
+                score("irpapers-pdf", [root/(m+".jsonl") for m in MODES])
                 result = json.loads((root/"results/irpapers-pdf/test.json").read_text())
                 joined = json.loads((root/"results/irpapers-pdf/test.queries.jsonl").read_text())
-                self.assertEqual(joined["top1_key"], {"hybrid":"page"})
-                self.assertEqual(joined["top1_nonrelevant"], {"hybrid":False})
+                self.assertEqual(joined["top1_key"], dict.fromkeys(MODES, a))
+                self.assertEqual(joined["top1_nonrelevant"], dict.fromkeys(MODES, False))
                 self.assertEqual(result["metrics"]["hybrid"]["page"]["R@1"], 1.0)
                 self.assertEqual(result["metrics"]["hybrid"]["resource"]["R@1"], 0.0)
                 self.assertIn(f"pytrec_eval (pytrec-eval-terrier)=={version('pytrec-eval-terrier')}", result["scoring"])
