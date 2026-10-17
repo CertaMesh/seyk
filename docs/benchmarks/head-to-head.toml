@@ -1,0 +1,823 @@
+# Aggregate measurements only; no dataset text, queries or ranked rows.
+schema = 1
+measured_on = "Seyk public retrieval harness"
+date = "2026-10-16"
+measurement_started_utc_date = "2026-10-14"
+evaluation_passes = 1
+timing_comparison = "Single evaluation pass per configuration; timings are operational context, not replicated speed comparisons. Comparative speed is inconclusive."
+requested_depth = 200
+collapse = "first document occurrence; no score resorting or refill"
+offline = "sandbox-exec denies external network; loopback IPC allowed"
+qmd_bm25_query_semantics = "Native QMD searchLex joins positive query terms with AND; retained only as a labelled diagnostic footnote, not a headline lexical-quality comparison. No documented any-term lexical option exists in pinned 2.8.3."
+qmd_full_cache = "Full mode follows hybrid on the same index and reuses cached stochastic query expansions."
+leann_runtime = "Contriever explicitly selected; MPS FP16 embeddings, HNSW CPU with one thread."
+query_time_scope = "Wall time per worker request, including model startup on the first query of each bounded invocation; process restart counts recorded per run."
+
+[[runs]]
+tool = "digup"
+version = "f509c329e0032fbee4d945e1edbdbca7d94af50f"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T20:50:30.638847+00:00"
+ndcg_at_10 = 0.6821801032159481
+queries = 180
+query_invocations = 1
+documents = 3226
+index_seconds = 309.7040786250145
+query_mean_ms = 389.89736621733755
+query_median_ms = 383.4616045060102
+query_max_ms = 999.253541987855
+queries_without_results = 0
+queries_below_requested_depth = 173
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "digup-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "6e4e06d88b0837072783b4f6c7311ade54375d7a229ac690a8c260a998a0e7b1"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [7.93115234375, 7.80322265625, 9.33251953125]
+index_load_after = [10.146484375, 11.0166015625, 10.5966796875]
+query_load_before = [10.93505859375, 11.16552734375, 10.6513671875]
+query_load_after = [11.6328125, 11.28515625, 10.73388671875]
+
+[[runs]]
+tool = "leann"
+version = "0.3.8"
+mode = "contriever"
+comparison_role = "headline"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T21:19:30.412093+00:00"
+ndcg_at_10 = 0.5703073503561306
+queries = 180
+query_invocations = 3
+documents = 3226
+index_seconds = 343.6387570420047
+query_mean_ms = 7669.0348591920665
+query_median_ms = 7703.61641648924
+query_max_ms = 13081.290624977555
+queries_without_results = 0
+queries_below_requested_depth = 180
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "leann-contriever-h2h-20261014"
+hardware_path = "Metal (PyTorch MPS; CPU HNSW)"
+thread_settings = "LEANN_CPU_THREADS=1; OMP/MKL/OPENBLAS=1; index num_threads=1"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "d74bb8b34e536971e4cff5b83974a691bfc97474daba7d8212a0c46f3d1d8b33"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [11.6328125, 11.28515625, 10.73388671875]
+index_load_after = [10.38330078125, 11.39990234375, 10.9931640625]
+query_load_before = [10.38330078125, 11.39990234375, 10.9931640625]
+query_load_after = [7.00048828125, 7.97802734375, 9.17822265625]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "bm25"
+comparison_role = "diagnostic-footnote"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T17:45:52.532719+00:00"
+ndcg_at_10 = 0.011111111111111112
+queries = 180
+query_invocations = 1
+documents = 3226
+index_seconds = 6.468971583002713
+query_mean_ms = 15.76594814347724
+query_median_ms = 12.370416487101465
+query_max_ms = 202.41087500471622
+queries_without_results = 175
+queries_below_requested_depth = 180
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-bm25-h2h-bm25-20261014"
+hardware_path = "CPU"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [18.73876953125, 20.8896484375, 19.09814453125]
+index_load_after = [19.697265625, 21.03759765625, 19.171875]
+query_load_before = [19.697265625, 21.03759765625, 19.171875]
+query_load_after = [19.16064453125, 20.90380859375, 19.13525390625]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "full"
+comparison_role = "headline"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T19:42:50.684875+00:00"
+ndcg_at_10 = 0.4652026784592061
+queries = 180
+query_invocations = 7
+documents = 3226
+index_seconds = 226.4541286250169
+query_mean_ms = 14622.875217816423
+query_median_ms = 13899.776979000308
+query_max_ms = 37284.20954098692
+queries_without_results = 0
+queries_below_requested_depth = 180
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-full-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [19.16064453125, 20.90380859375, 19.13525390625]
+index_load_after = [18.6650390625, 21.09716796875, 19.73681640625]
+query_load_before = [16.12744140625, 17.1416015625, 17.74267578125]
+query_load_after = [13.47705078125, 13.37841796875, 13.140625]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T18:02:02.814130+00:00"
+ndcg_at_10 = 0.4456325528292936
+queries = 180
+query_invocations = 2
+documents = 3226
+index_seconds = 226.4541286250169
+query_mean_ms = 3730.4534032376573
+query_median_ms = 2662.3538540152367
+query_max_ms = 19399.049416999333
+queries_without_results = 0
+queries_below_requested_depth = 180
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [19.16064453125, 20.90380859375, 19.13525390625]
+index_load_after = [18.6650390625, 21.09716796875, 19.73681640625]
+query_load_before = [15.39599609375, 19.6689453125, 19.306640625]
+query_load_after = [16.12744140625, 17.1416015625, 17.74267578125]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "vector"
+comparison_role = "headline"
+dataset = "irpapers"
+run_completed_at_utc = "2026-10-16T17:50:46.705233+00:00"
+ndcg_at_10 = 0.4478908256233201
+queries = 180
+query_invocations = 1
+documents = 3226
+index_seconds = 226.4541286250169
+query_mean_ms = 350.50750831610964
+query_median_ms = 334.0635204949649
+query_max_ms = 2703.4997080045287
+queries_without_results = 0
+queries_below_requested_depth = 0
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-vector-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [19.16064453125, 20.90380859375, 19.13525390625]
+index_load_after = [18.6650390625, 21.09716796875, 19.73681640625]
+query_load_before = [18.37109375, 20.99560546875, 19.708984375]
+query_load_after = [15.39599609375, 19.6689453125, 19.306640625]
+
+[[runs]]
+tool = "digup"
+version = "f509c329e0032fbee4d945e1edbdbca7d94af50f"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-16T13:22:35.984808+00:00"
+ndcg_at_10 = 0.37065293322780873
+queries = 323
+query_invocations = 1
+documents = 3633
+index_seconds = 176.98499291701592
+query_mean_ms = 71.4737182874492
+query_median_ms = 52.73404100444168
+query_max_ms = 1148.309167008847
+queries_without_results = 0
+queries_below_requested_depth = 307
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "digup-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "6e4e06d88b0837072783b4f6c7311ade54375d7a229ac690a8c260a998a0e7b1"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [32.89990234375, 31.27099609375, 26.3388671875]
+index_load_after = [29.90625, 31.53466796875, 27.40869140625]
+query_load_before = [17.4609375, 16.775390625, 16.63818359375]
+query_load_after = [15.92041015625, 16.47021484375, 16.53125]
+
+[[runs]]
+tool = "leann"
+version = "0.3.8"
+mode = "contriever"
+comparison_role = "headline"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-16T17:45:35.278126+00:00"
+ndcg_at_10 = 0.31830835153167997
+queries = 323
+query_invocations = 8
+documents = 3633
+index_seconds = 134.67988791700918
+query_mean_ms = 10404.51116669035
+query_median_ms = 9279.193041002145
+query_max_ms = 26864.610124990577
+queries_without_results = 0
+queries_below_requested_depth = 323
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "leann-contriever-h2h-20261014"
+hardware_path = "Metal (PyTorch MPS; CPU HNSW)"
+thread_settings = "LEANN_CPU_THREADS=1; OMP/MKL/OPENBLAS=1; index num_threads=1"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "d74bb8b34e536971e4cff5b83974a691bfc97474daba7d8212a0c46f3d1d8b33"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [15.92041015625, 16.47021484375, 16.53125]
+index_load_after = [25.71484375, 21.82861328125, 18.7587890625]
+query_load_before = [25.5771484375, 21.8642578125, 18.7890625]
+query_load_after = [19.1513671875, 21.00634765625, 19.12841796875]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "bm25"
+comparison_role = "diagnostic-footnote"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-14T22:03:40.003179+00:00"
+ndcg_at_10 = 0.2023065322482256
+queries = 323
+query_invocations = 1
+documents = 3633
+index_seconds = 2.5637608750039362
+query_mean_ms = 3.089529520366341
+query_median_ms = 1.7903749976539984
+query_max_ms = 130.12016699940432
+queries_without_results = 136
+queries_below_requested_depth = 320
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-bm25-h2h-bm25-20261014"
+hardware_path = "CPU"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [5.8896484375, 7.78173828125, 9.20654296875]
+index_load_after = [5.8896484375, 7.78173828125, 9.20654296875]
+query_load_before = [5.8896484375, 7.78173828125, 9.20654296875]
+query_load_after = [5.658203125, 7.7021484375, 9.169921875]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "full"
+comparison_role = "headline"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-16T11:41:13.651974+00:00"
+ndcg_at_10 = 0.3809715984487918
+queries = 323
+query_invocations = 5
+documents = 3633
+index_seconds = 71.97015675000148
+query_mean_ms = 6572.784016773978
+query_median_ms = 5468.5184999980265
+query_max_ms = 23008.93129200267
+queries_without_results = 0
+queries_below_requested_depth = 323
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-full-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [5.658203125, 7.7021484375, 9.169921875]
+index_load_after = [5.947265625, 7.3466796875, 8.91650390625]
+query_load_before = [7.2744140625, 10.2939453125, 10.23974609375]
+query_load_after = [34.806640625, 31.61328125, 26.4296875]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-14T22:44:33.529008+00:00"
+ndcg_at_10 = 0.36841928840646787
+queries = 323
+query_invocations = 2
+documents = 3633
+index_seconds = 71.97015675000148
+query_mean_ms = 1707.4753163066505
+query_median_ms = 1050.7790409974405
+query_max_ms = 11469.98504200019
+queries_without_results = 0
+queries_below_requested_depth = 323
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [5.658203125, 7.7021484375, 9.169921875]
+index_load_after = [5.947265625, 7.3466796875, 8.91650390625]
+query_load_before = [4.9248046875, 6.8759765625, 8.6611328125]
+query_load_after = [7.2744140625, 10.2939453125, 10.23974609375]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "vector"
+comparison_role = "headline"
+dataset = "nfcorpus"
+run_completed_at_utc = "2026-10-14T22:05:33.215714+00:00"
+ndcg_at_10 = 0.37650666586408144
+queries = 323
+query_invocations = 1
+documents = 3633
+index_seconds = 71.97015675000148
+query_mean_ms = 116.92810793192902
+query_median_ms = 111.97829099546652
+query_max_ms = 1723.6999170054332
+queries_without_results = 0
+queries_below_requested_depth = 0
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-vector-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [5.658203125, 7.7021484375, 9.169921875]
+index_load_after = [5.947265625, 7.3466796875, 8.91650390625]
+query_load_before = [5.7109375, 7.2744140625, 8.8818359375]
+query_load_after = [4.83154296875, 6.89111328125, 8.67724609375]
+
+[[runs]]
+tool = "digup"
+version = "f509c329e0032fbee4d945e1edbdbca7d94af50f"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T20:18:32.730217+00:00"
+ndcg_at_10 = 0.8007340354694622
+queries = 300
+query_invocations = 1
+documents = 5183
+index_seconds = 150.42251854100323
+query_mean_ms = 111.14322393354087
+query_median_ms = 105.77283350357902
+query_max_ms = 566.5749999971013
+queries_without_results = 0
+queries_below_requested_depth = 228
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "digup-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "6e4e06d88b0837072783b4f6c7311ade54375d7a229ac690a8c260a998a0e7b1"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [6.5625, 16.19677734375, 16.861328125]
+index_load_after = [6.6474609375, 12.40625, 15.19677734375]
+query_load_before = [6.6474609375, 12.40625, 15.19677734375]
+query_load_after = [6.34423828125, 11.6953125, 14.82470703125]
+
+[[runs]]
+tool = "leann"
+version = "0.3.8"
+mode = "contriever"
+comparison_role = "headline"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T22:03:30.920221+00:00"
+ndcg_at_10 = 0.6515171593416127
+queries = 300
+query_invocations = 6
+documents = 5183
+index_seconds = 155.91210666699772
+query_mean_ms = 8995.28405348979
+query_median_ms = 8700.074645999848
+query_max_ms = 21496.119625000574
+queries_without_results = 0
+queries_below_requested_depth = 300
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "leann-contriever-h2h-20261014"
+hardware_path = "Metal (PyTorch MPS; CPU HNSW)"
+thread_settings = "LEANN_CPU_THREADS=1; OMP/MKL/OPENBLAS=1; index num_threads=1"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "d74bb8b34e536971e4cff5b83974a691bfc97474daba7d8212a0c46f3d1d8b33"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [6.34423828125, 11.6953125, 14.82470703125]
+index_load_after = [10.33642578125, 13.3271484375, 15.1171875]
+query_load_before = [9.98876953125, 13.205078125, 15.0634765625]
+query_load_after = [5.88037109375, 7.81201171875, 9.2255859375]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "bm25"
+comparison_role = "diagnostic-footnote"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T16:22:22.345948+00:00"
+ndcg_at_10 = 0.04544818998776339
+queries = 300
+query_invocations = 1
+documents = 5183
+index_seconds = 18.543132415998116
+query_mean_ms = 19.754701683402043
+query_median_ms = 12.77187500090804
+query_max_ms = 399.5046249983716
+queries_without_results = 283
+queries_below_requested_depth = 300
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-bm25-h2h-bm25-20261014"
+hardware_path = "CPU"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [27.6259765625, 29.54345703125, 30.2060546875]
+index_load_after = [28.5361328125, 29.6474609375, 30.228515625]
+query_load_before = [28.5361328125, 29.6474609375, 30.228515625]
+query_load_after = [30.25341796875, 29.98583984375, 30.34228515625]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "full"
+comparison_role = "headline"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T20:15:26.582884+00:00"
+ndcg_at_10 = 0.6957967888036876
+queries = 300
+query_invocations = 5
+documents = 5183
+index_seconds = 165.62265845799993
+query_mean_ms = 8106.662343453609
+query_median_ms = 6965.331999501359
+query_max_ms = 28144.038292004552
+queries_without_results = 0
+queries_below_requested_depth = 300
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-full-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [32.95556640625, 30.55029296875, 30.5390625]
+index_load_after = [42.80712890625, 34.60205078125, 32.09423828125]
+query_load_before = [23.7451171875, 20.6484375, 22.81201171875]
+query_load_after = [6.5625, 16.19677734375, 16.861328125]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "hybrid"
+comparison_role = "headline"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T16:46:48.443650+00:00"
+ndcg_at_10 = 0.6798497039640651
+queries = 300
+query_invocations = 1
+documents = 5183
+index_seconds = 165.62265845799993
+query_mean_ms = 4026.0610624933906
+query_median_ms = 2483.305895499143
+query_max_ms = 21546.55391599954
+queries_without_results = 0
+queries_below_requested_depth = 300
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-hybrid-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [32.95556640625, 30.55029296875, 30.5390625]
+index_load_after = [42.80712890625, 34.60205078125, 32.09423828125]
+query_load_before = [19.83544921875, 29.19677734375, 30.26025390625]
+query_load_after = [24.85498046875, 20.8115234375, 22.8818359375]
+
+[[runs]]
+tool = "qmd"
+version = "2.8.3"
+mode = "vector"
+comparison_role = "headline"
+dataset = "scifact"
+run_completed_at_utc = "2026-10-14T16:26:37.557758+00:00"
+ndcg_at_10 = 0.7185408394966405
+queries = 300
+query_invocations = 1
+documents = 5183
+index_seconds = 165.62265845799993
+query_mean_ms = 272.3429408400868
+query_median_ms = 257.9369580016646
+query_max_ms = 3481.367500000488
+queries_without_results = 0
+queries_below_requested_depth = 0
+git_sha = "b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7"
+run_id = "qmd-vector-h2h-20261014"
+hardware_path = "Metal"
+thread_settings = "QMD embedding parallelism=2; native runtime defaults"
+cpu = "Apple M5 Max"
+platform = "macOS-26.5-arm64-arm-64bit"
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+install_sha256 = "950b3c1469f95f4fed65756d61c19d5f62fb8a914d0e288831284b53a2b343c5"
+scoring = "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1"
+index_load_before = [32.95556640625, 30.55029296875, 30.5390625]
+index_load_after = [42.80712890625, 34.60205078125, 32.09423828125]
+query_load_before = [42.80712890625, 34.60205078125, 32.09423828125]
+query_load_after = [19.83544921875, 29.19677734375, 30.26025390625]
+
+[[datasets]]
+name = "irpapers"
+revision = "7d8ca2f6dd9efded3e27013d15782d584f93e9da"
+license = "MIT dataset; source paper rights retained"
+documents = 3226
+queries = 180
+manifest_blake3 = "640efb929f5a4f2afeb38e00136915483e57b423341ac9234151c6e2301ee8f1"
+raw_documents = 3230
+skipped_empty_pages = 4
+qrels_targeting_skipped_pages = 1
+
+[[dataset_sources]]
+dataset = "irpapers"
+name = "docs.csv"
+sha256 = "8fe316290b55c71bd1641603b5feb02117672028f7d1af45bcad1c111c53611b"
+url = "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-docs.csv"
+
+[[dataset_sources]]
+dataset = "irpapers"
+name = "queries.csv"
+sha256 = "a87d8263d8b498cdaceb6cb719abcd0a584ded3993910aad41edab1db8fa6ed3"
+url = "https://huggingface.co/datasets/weaviate/IRPAPERS/resolve/7d8ca2f6dd9efded3e27013d15782d584f93e9da/irpapers-queries.csv"
+
+[[datasets]]
+name = "nfcorpus"
+revision = "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+license = "CC-BY-SA-4.0"
+documents = 3633
+queries = 323
+manifest_blake3 = "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8"
+raw_documents = 3633
+skipped_empty_pages = 0
+qrels_targeting_skipped_pages = 0
+
+[[dataset_sources]]
+dataset = "nfcorpus"
+name = "nfcorpus.zip"
+sha256 = "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+
+[[datasets]]
+name = "scifact"
+revision = "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+license = "Upstream claims CC-BY-4.0; abstracts ODC-By-1.0; HF cards differ"
+documents = 5183
+queries = 300
+manifest_blake3 = "c54e7e654ef37a979b3400d51d1effe19e6afca356331d85a422df3e3faca2ab"
+raw_documents = 5183
+skipped_empty_pages = 0
+qrels_targeting_skipped_pages = 0
+
+[[dataset_sources]]
+dataset = "scifact"
+name = "scifact.zip"
+sha256 = "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165"
+url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+
+[[runtime]]
+name = "python"
+value = "3.12.13"
+
+[[runtime_packages]]
+name = "leann"
+version = "0.3.8"
+
+[[runtime_packages]]
+name = "leann-core"
+version = "0.3.8"
+
+[[runtime_packages]]
+name = "leann-backend-hnsw"
+version = "0.3.8"
+
+[[runtime_packages]]
+name = "torch"
+version = "2.14.1"
+
+[[runtime_packages]]
+name = "transformers"
+version = "4.57.6"
+
+[[runtime_packages]]
+name = "sentence-transformers"
+version = "5.7.0"
+
+[[runtime_packages]]
+name = "faiss-cpu"
+version = "1.15.1"
+
+[[runtime_packages]]
+name = "numpy"
+version = "2.5.4"
+
+[[runtime_packages]]
+name = "llama-index-core"
+version = "0.14.25"
+
+[[runtime]]
+name = "node"
+value = "v26.3.0"
+
+[[runtime]]
+name = "swift"
+value = "Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0"
+
+[[runtime]]
+name = "cpu"
+value = "Apple M5 Max"
+
+[[runtime]]
+name = "memory_bytes"
+value = 68719476736
+
+[[runtime]]
+name = "platform"
+value = "macOS-26.5-arm64-arm-64bit"
+
+[[tools]]
+name = "qmd"
+version = "2.8.3"
+source = "https://github.com/tobi/qmd"
+revision = "facd35e01359e59d938bc9418e93fb9318addee3"
+code_license = "MIT"
+install = "npm install --prefix qmd-install @tobilu/qmd@2.8.3"
+
+[[tools]]
+name = "digup"
+version = "f509c329e0032fbee4d945e1edbdbca7d94af50f"
+source = "https://github.com/ARahim3/DigUp"
+revision = "f509c329e0032fbee4d945e1edbdbca7d94af50f"
+code_license = "MIT"
+install = "scripts/build-llama.sh (two build jobs); swift build -c release --product digup -j 2"
+
+[[tools]]
+name = "leann"
+version = "0.3.8"
+source = "https://github.com/StarTrail-org/LEANN"
+revision = "PyPI leann==0.3.8"
+code_license = "MIT"
+install = "uv venv --python 3.12 leann-env; uv pip install --python leann-env/bin/python leann==0.3.8"
+
+[[models]]
+tool = "qmd"
+repository = "ggml-org/embeddinggemma-300M-GGUF"
+revision = "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12"
+file = "embeddinggemma-300M-Q8_0.gguf"
+bytes = 333590944
+sha256 = "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63"
+license = "Gemma Terms of Use"
+license_source = "https://huggingface.co/google/embeddinggemma-300m/blob/main/README.md"
+
+[[models]]
+tool = "qmd"
+repository = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+revision = "a02f48bb4f057028298c21fa033da2b30d7742d5"
+file = "qwen3-reranker-0.6b-q8_0.gguf"
+bytes = 639153184
+sha256 = "22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48"
+license = "Apache-2.0"
+license_source = "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/blob/main/LICENSE"
+
+[[models]]
+tool = "qmd"
+repository = "tobil/qmd-query-expansion-1.7B-gguf"
+revision = "7816de0b72572c6c860ca1eddf97ba9e7fb8cc65"
+file = "qmd-query-expansion-1.7B-q4_k_m.gguf"
+bytes = 1282438912
+sha256 = "000dfb1c06efa6a049e9f64ba921c3740e2454f62abab6fa10e77bd30bb2bcc0"
+license = "MIT"
+license_source = "https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/blob/7816de0b72572c6c860ca1eddf97ba9e7fb8cc65/README.md"
+
+[[models]]
+tool = "digup"
+repository = "ggml-org/embeddinggemma-2-GGUF"
+revision = "bfcd298762cc34d0357ece5ebdd31791a3a374d8"
+file = "embeddinggemma-2-Q8_0.gguf"
+bytes = 309855456
+sha256 = "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135"
+license = "Apache-2.0"
+license_source = "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/blob/bfcd298762cc34d0357ece5ebdd31791a3a374d8/README.md"
+
+[[models]]
+tool = "digup"
+repository = "ggml-org/embeddinggemma-2-GGUF"
+revision = "bfcd298762cc34d0357ece5ebdd31791a3a374d8"
+file = "mmproj-embeddinggemma-2-Q8_0.gguf"
+bytes = 554821024
+sha256 = "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f"
+license = "Apache-2.0"
+license_source = "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/blob/bfcd298762cc34d0357ece5ebdd31791a3a374d8/README.md"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "config.json"
+bytes = 619
+sha256 = "56dc991b1bc2b4c52208e2c4c88e46b9e4a31a4bbaa335f2319e3dcdb8ed33be"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "pytorch_model.bin"
+bytes = 438007537
+sha256 = "d0b6e2516913f812360475154323f50e2b1e1da0ce6a435175e08f218784c6fb"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "tokenizer.json"
+bytes = 466081
+sha256 = "5fd1c882abbd30517dced455a2c9768945ec726b96727927e4959348d9de550b"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "tokenizer_config.json"
+bytes = 321
+sha256 = "9a8ed9b01c8a56b555dcdc31cd526ba9e488cfc16ee5a101b3ce64af81d34f3d"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "special_tokens_map.json"
+bytes = 112
+sha256 = "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
+
+[[models]]
+tool = "leann"
+repository = "facebook/contriever"
+revision = "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+file = "vocab.txt"
+bytes = 231508
+sha256 = "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+license = "CC-BY-NC-4.0"
+license_source = "https://github.com/facebookresearch/contriever/blob/main/LICENSE"
