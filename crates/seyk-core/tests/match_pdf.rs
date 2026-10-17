@@ -1,5 +1,10 @@
 #![cfg(feature = "pdf-render")]
 mod common;
+#[path = "support/golden_provider.rs"]
+mod golden_provider;
+use golden_provider::GoldenProvider;
+use seyk_core::discovery::ResourceKind;
+use seyk_core::segment::TextFormat;
 #[path = "support/scan_fixture.rs"]
 mod fixture;
 use common::FakeEmbedder;
@@ -7,7 +12,6 @@ use seyk_core::{
     Dimension, Embedder, Embedding, MemoryCache, Modality, ModelIdentity, ResourceLocator,
     SearchEngine, SearchMode, SqliteCache,
 };
-use std::fs;
 use tempfile::TempDir;
 
 struct Multimodal(FakeEmbedder);
@@ -32,27 +36,20 @@ impl Embedder for Multimodal {
 // Covers text and page locators with both cache implementations.
 #[test]
 fn pdf_ranking_matches_rrf_k5_golden() {
-    let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("a.md"), "basil garden basil garden").unwrap();
-    fs::write(dir.path().join("b.md"), "lavender garden").unwrap();
-    fs::write(
-        dir.path().join("garden.pdf"),
-        fixture::document(
-            &[
-                (
-                    b"BT /F1 12 Tf 50 720 Td (Public garden with basil and lavender.) Tj ET",
-                    "",
-                ),
-                (fixture::DRAWING, ""),
-                (
-                    b"BT /F1 12 Tf 50 720 Td (Another garden with basil.) Tj ET",
-                    "",
-                ),
-            ],
-            None,
-        ),
-    )
-    .unwrap();
+    let pdf = fixture::document(
+        &[
+            (
+                b"BT /F1 12 Tf 50 720 Td (Public garden with basil and lavender.) Tj ET",
+                "",
+            ),
+            (fixture::DRAWING, ""),
+            (
+                b"BT /F1 12 Tf 50 720 Td (Another garden with basil.) Tj ET",
+                "",
+            ),
+        ],
+        None,
+    );
     let mut cases = Vec::new();
     let mut saw_nonfirst_keyword = false;
     let mut saw_rank_beyond_limit = false;
@@ -60,7 +57,21 @@ fn pdf_ranking_matches_rrf_k5_golden() {
     let mut saw_page_text = false;
     for sqlite in [false, true] {
         let db = TempDir::new().unwrap();
+        let provider = GoldenProvider::new([
+            (
+                "a.md",
+                ResourceKind::Text(TextFormat::Markdown),
+                b"basil garden basil garden".to_vec(),
+            ),
+            (
+                "b.md",
+                ResourceKind::Text(TextFormat::Markdown),
+                b"lavender garden".to_vec(),
+            ),
+            ("garden.pdf", ResourceKind::Pdf, pdf.clone()),
+        ]);
         let builder = SearchEngine::builder()
+            .provider(provider)
             .embedder(Multimodal(FakeEmbedder::new(Dimension::D256, "pdf-golden")));
         let e = if sqlite {
             builder.cache(SqliteCache::open(db.path().join("cache.db")).unwrap())
@@ -77,7 +88,7 @@ fn pdf_ranking_matches_rrf_k5_golden() {
             for query in ["garden.pdf", "basil", "lavender garden", "absent"] {
                 let semantic = e
                     .search(query)
-                    .paths([dir.path()])
+                    .roots([golden_provider::root()])
                     .mode(SearchMode::Semantic)
                     .limit(10)
                     .previews(None)
@@ -108,7 +119,7 @@ fn pdf_ranking_matches_rrf_k5_golden() {
                     for weight in [0.0, 1.0] {
                         let r = e
                             .search(query)
-                            .paths([dir.path()])
+                            .roots([golden_provider::root()])
                             .mode(mode)
                             .limit(limit)
                             .lexical_weight(weight)
@@ -153,7 +164,7 @@ fn pdf_ranking_matches_rrf_k5_golden() {
                         }
                         cases.push(serde_json::json!({"sqlite": sqlite, "mode":mode,"query":query,"limit":limit,"weight":weight,
                             "hits":r.hits.iter().map(|h| serde_json::json!({
-                                "file":h.resource.to_file_path().unwrap().file_name().unwrap().to_str().unwrap(),
+                                "file":golden_provider::name(&h.resource),
                                 "locator":h.locator,"score_bits":h.score.to_bits(),"semantic_bits":h.signals.semantic.map(f32::to_bits),
                                 "lexical_bits":h.signals.lexical.map(f32::to_bits),"filename":h.signals.filename,"query_index":h.query_index,
                             })).collect::<Vec<_>>() }));

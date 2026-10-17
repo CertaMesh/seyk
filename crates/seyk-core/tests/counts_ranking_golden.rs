@@ -1,33 +1,46 @@
 mod common;
+#[path = "support/golden_provider.rs"]
+mod golden_provider;
+use golden_provider::GoldenProvider;
+use seyk_core::discovery::ResourceKind;
+use seyk_core::segment::TextFormat;
 use seyk_core::{Dimension, SearchEngine, SearchMode};
 
 // Originally captured from main 28814a85; refreshed for the intentional RRF k=5 change.
-// Only temporary paths and mtimes are normalized; score bits and complete
+// Stable fixture URIs exclude temporary paths; mtimes are normalized; score bits and complete
 // locators, signals, ordering, headings and previews remain part of the golden.
 #[test]
 fn counts_preserve_rrf_k5_ranking_bytes() {
-    let dir = tempfile::tempdir().unwrap();
-    for (name, text) in [
-        (
-            "father.md",
-            "# Family\nHe repeats the gestures he swore he never would.",
-        ),
-        (
-            "kitchen.txt",
-            "My father painted the kitchen yellow in spring.",
-        ),
-        (
-            "garden.md",
-            "Tomatoes need sun and a little basil beside them.",
-        ),
-        (
-            "incident.txt",
-            "Outage review INC-18372: the restore path never ran.",
-        ),
-    ] {
-        std::fs::write(dir.path().join(name), text).unwrap();
-    }
+    let provider = GoldenProvider::new(
+        [
+            (
+                "father.md",
+                "# Family\nHe repeats the gestures he swore he never would.",
+            ),
+            (
+                "kitchen.txt",
+                "My father painted the kitchen yellow in spring.",
+            ),
+            (
+                "garden.md",
+                "Tomatoes need sun and a little basil beside them.",
+            ),
+            (
+                "incident.txt",
+                "Outage review INC-18372: the restore path never ran.",
+            ),
+        ]
+        .map(|(name, text)| {
+            let format = if name.ends_with(".md") {
+                TextFormat::Markdown
+            } else {
+                TextFormat::Plain
+            };
+            (name, ResourceKind::Text(format), text.as_bytes().to_vec())
+        }),
+    );
     let engine = SearchEngine::builder()
+        .provider(provider)
         .embedder(common::FakeEmbedder::new(Dimension::D256, "r1"))
         .build()
         .unwrap();
@@ -42,7 +55,7 @@ fn counts_preserve_rrf_k5_ranking_bytes() {
                 let result = engine
                     .search(query)
                     .query("family spring")
-                    .paths([dir.path()])
+                    .roots([golden_provider::root()])
                     .mode(mode)
                     .limit(limit)
                     .kind_counts(true)
@@ -52,16 +65,6 @@ fn counts_preserve_rrf_k5_ranking_bytes() {
                     .hits
                     .into_iter()
                     .map(|mut h| {
-                        let name = h
-                            .resource
-                            .to_file_path()
-                            .unwrap()
-                            .file_name()
-                            .unwrap()
-                            .to_owned();
-                        h.resource = format!("mem://golden/{}", name.to_string_lossy())
-                            .parse()
-                            .unwrap();
                         h.metadata.modified_ns = None;
                         serde_json::json!({"score_bits": h.score.to_bits(), "hit":h})
                     })
