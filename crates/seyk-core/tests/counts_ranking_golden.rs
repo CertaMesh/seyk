@@ -1,11 +1,11 @@
 mod common;
 use seyk_core::{Dimension, SearchEngine, SearchMode};
 
-// Captured from origin/main 28814a85, before adding count/progress code.
+// Originally captured from main 28814a85; refreshed for the intentional RRF k=5 change.
 // Only temporary paths and mtimes are normalized; score bits and complete
 // locators, signals, ordering, headings and previews remain part of the golden.
 #[test]
-fn counts_preserve_main_ranking_bytes() {
+fn counts_preserve_rrf_k5_ranking_bytes() {
     let dir = tempfile::tempdir().unwrap();
     for (name, text) in [
         (
@@ -71,5 +71,5 @@ fn counts_preserve_main_ranking_bytes() {
         }
     }
     let actual = serde_json::to_string_pretty(&rows).unwrap() + "\n";
-    assert_eq!(actual, include_str!("fixtures/counts-main-ranking.json"));
+    assert_eq!(actual, include_str!("fixtures/counts-rrf-k5.json"));
 }

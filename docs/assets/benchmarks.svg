@@ -5,13 +5,13 @@
 <rect class="bg" width="960" height="1190" rx="12"/>
 <text x="28" y="38" class="heading" >Retrieval quality</text>
 <text x="28" y="64" class="muted" >nDCG@10 · higher is better · 0–1 scale</text>
-<text x="28" y="91" class="small" >Seyk 0.1.0 · 28814a851ded · q8 · 256 dims · CPU</text>
+<text x="28" y="91" class="small" >Seyk 0.1.0 · a4a0eea63f74 · q8 · 256 dims · CPU</text>
 <text x="28" y="113" class="small muted" >Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads</text>
 <text x="28" y="155" class="heading" >SciFact</text>
 <text x="28" y="178" class="small muted" >Seyk: segmented documents → resource ranking</text>
 <text x="28" y="221" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="205" width="429.877" height="23" rx="3" class="hybrid"/>
-<text x="916" y="222" class="" text-anchor="end">0.768</text>
+<rect x="302" y="205" width="451.920" height="23" rx="3" class="hybrid"/>
+<text x="916" y="222" class="" text-anchor="end">0.807</text>
 <text x="28" y="255" class="" >Seyk semantic</text>
 <rect x="302" y="239" width="460.275" height="23" rx="3" class="semantic"/>
 <text x="916" y="256" class="" text-anchor="end">0.822</text>
@@ -48,7 +48,7 @@
 <text x="28" y="523" class="heading" >NFCorpus</text>
 <text x="28" y="546" class="small muted" >Seyk: segmented documents → resource ranking</text>
 <text x="28" y="589" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="573" width="201.422" height="23" rx="3" class="hybrid"/>
+<rect x="302" y="573" width="201.441" height="23" rx="3" class="hybrid"/>
 <text x="916" y="590" class="" text-anchor="end">0.360</text>
 <text x="28" y="623" class="" >Seyk semantic</text>
 <rect x="302" y="607" width="189.452" height="23" rx="3" class="semantic"/>
@@ -86,8 +86,8 @@
 <text x="28" y="891" class="heading" >IRPAPERS text</text>
 <text x="28" y="914" class="small muted" >Seyk: segmented documents → resource ranking</text>
 <text x="28" y="957" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="941" width="353.944" height="23" rx="3" class="hybrid"/>
-<text x="916" y="958" class="" text-anchor="end">0.632</text>
+<rect x="302" y="941" width="363.726" height="23" rx="3" class="hybrid"/>
+<text x="916" y="958" class="" text-anchor="end">0.650</text>
 <text x="28" y="991" class="" >Seyk semantic</text>
 <rect x="302" y="975" width="330.070" height="23" rx="3" class="semantic"/>
 <text x="916" y="992" class="" text-anchor="end">0.589</text>

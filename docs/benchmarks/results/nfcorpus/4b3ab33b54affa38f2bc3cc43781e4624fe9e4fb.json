@@ -1,0 +1,509 @@
+{
+  "completion": {
+    "hybrid": {
+      "load_after": [
+        68.6865234375,
+        55.3994140625,
+        41.6025390625
+      ],
+      "queries": 323,
+      "type": "complete",
+      "wall_seconds": 1809.34217425
+    },
+    "lexical": {
+      "load_after": [
+        44.0107421875,
+        49.83251953125,
+        42.611328125
+      ],
+      "queries": 323,
+      "type": "complete",
+      "wall_seconds": 2056.325863292
+    },
+    "semantic": {
+      "load_after": [
+        41.82177734375,
+        50.18212890625,
+        42.47607421875
+      ],
+      "queries": 323,
+      "type": "complete",
+      "wall_seconds": 2027.435949625
+    }
+  },
+  "dataset": "nfcorpus",
+  "diagnostics": {
+    "hybrid": {
+      "queries_under_100_resources": 0,
+      "queries_with_result": 323,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.5201238390092879
+    },
+    "lexical": {
+      "queries_under_100_resources": 146,
+      "queries_with_result": 298,
+      "queries_without_result": 25,
+      "top_result_false_evidence_rate": 0.5436241610738255
+    },
+    "semantic": {
+      "queries_under_100_resources": 0,
+      "queries_with_result": 323,
+      "queries_without_result": 0,
+      "top_result_false_evidence_rate": 0.5386996904024768
+    }
+  },
+  "empty_transcriptions": {
+    "qrels_targeting_skipped_pages": 0,
+    "skipped_pages": 0
+  },
+  "environment": {
+    "hybrid": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 7960,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 3633,
+            "segments": 7960
+          }
+        ],
+        "size_bytes": 35200832
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 5440,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 2485,
+            "segments": 5438
+          }
+        ],
+        "size_bytes": 24568968
+      },
+      "dataset": "nfcorpus",
+      "dataset_manifest": {
+        "dataset": "nfcorpus",
+        "metadata_blake3": {
+          "docmap.tsv": "6d9017245e476cc60aa04461a18e54b0106f19a3bd8d37c4440bafddc53a873b",
+          "qrels.tsv": "2ea41cb32f278c49907f7a5331db326e01565cd2c7fca4edfdf75fa8cf22ee7a",
+          "queries.jsonl": "8671c2565e65aa4f23f2d84ccc257d83cf7d525b8ed87ccba87a1cd1aa55d67d"
+        },
+        "source": {
+          "documents": 3633,
+          "files": [
+            {
+              "name": "nfcorpus.zip",
+              "sha256": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "CC-BY-SA-4.0",
+          "queries": 323,
+          "revision": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 1584122,
+          "progress": {
+            "by_kind": {
+              "text": {
+                "indexed": 3633,
+                "skipped": 0,
+                "waiting": 0
+              }
+            },
+            "eta_seconds": null
+          },
+          "resources_discovered": 3633,
+          "resources_unchanged": 2485,
+          "resources_updated": 1148,
+          "segments_embedded": 2520,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1585371
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        32.4619140625,
+        30.29638671875,
+        30.62548828125
+      ],
+      "load_before": [
+        24.7109375,
+        35.10498046875,
+        38.98583984375
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8;text-literals-v1"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "ad7b2fee8e44b2b15f4463c0",
+      "run_id": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb-ad7b2fee8e44b2b15f4463c0-wdefault-rrf5main4542",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "lexical": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 7960,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 3633,
+            "segments": 7960
+          }
+        ],
+        "size_bytes": 35200832
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 5440,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 2485,
+            "segments": 5438
+          }
+        ],
+        "size_bytes": 24568968
+      },
+      "dataset": "nfcorpus",
+      "dataset_manifest": {
+        "dataset": "nfcorpus",
+        "metadata_blake3": {
+          "docmap.tsv": "6d9017245e476cc60aa04461a18e54b0106f19a3bd8d37c4440bafddc53a873b",
+          "qrels.tsv": "2ea41cb32f278c49907f7a5331db326e01565cd2c7fca4edfdf75fa8cf22ee7a",
+          "queries.jsonl": "8671c2565e65aa4f23f2d84ccc257d83cf7d525b8ed87ccba87a1cd1aa55d67d"
+        },
+        "source": {
+          "documents": 3633,
+          "files": [
+            {
+              "name": "nfcorpus.zip",
+              "sha256": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "CC-BY-SA-4.0",
+          "queries": 323,
+          "revision": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 1584122,
+          "progress": {
+            "by_kind": {
+              "text": {
+                "indexed": 3633,
+                "skipped": 0,
+                "waiting": 0
+              }
+            },
+            "eta_seconds": null
+          },
+          "resources_discovered": 3633,
+          "resources_unchanged": 2485,
+          "resources_updated": 1148,
+          "segments_embedded": 2520,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1585371
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        32.4619140625,
+        30.29638671875,
+        30.62548828125
+      ],
+      "load_before": [
+        24.7109375,
+        35.10498046875,
+        38.98583984375
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8;text-literals-v1"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "ad7b2fee8e44b2b15f4463c0",
+      "run_id": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb-ad7b2fee8e44b2b15f4463c0-wdefault-rrf5main4542",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    },
+    "semantic": {
+      "arch": "aarch64",
+      "cache_after": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 7960,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 3633,
+            "segments": 7960
+          }
+        ],
+        "size_bytes": 35200832
+      },
+      "cache_before": {
+        "backup_excluded": false,
+        "in_synced_folder": false,
+        "profiles": [
+          {
+            "embeddings": 5440,
+            "profile": {
+              "model": {
+                "dimension": 256,
+                "document_prompt": "title: {title} | text: {text}",
+                "max_tokens": 2048,
+                "model_id": "google/embeddinggemma-2",
+                "normalization": "mean-pool;truncate;l2",
+                "query_prompt": "task: search result | query: ",
+                "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+                "variant": "onnx-q8;text-literals-v1"
+              },
+              "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+            },
+            "profile_id": "ad7b2fee8e44b2b15f4463c0",
+            "resources": 2485,
+            "segments": 5438
+          }
+        ],
+        "size_bytes": 24568968
+      },
+      "dataset": "nfcorpus",
+      "dataset_manifest": {
+        "dataset": "nfcorpus",
+        "metadata_blake3": {
+          "docmap.tsv": "6d9017245e476cc60aa04461a18e54b0106f19a3bd8d37c4440bafddc53a873b",
+          "qrels.tsv": "2ea41cb32f278c49907f7a5331db326e01565cd2c7fca4edfdf75fa8cf22ee7a",
+          "queries.jsonl": "8671c2565e65aa4f23f2d84ccc257d83cf7d525b8ed87ccba87a1cd1aa55d67d"
+        },
+        "source": {
+          "documents": 3633,
+          "files": [
+            {
+              "name": "nfcorpus.zip",
+              "sha256": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b",
+              "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+            }
+          ],
+          "kind": "beir",
+          "license": "CC-BY-SA-4.0",
+          "queries": 323,
+          "revision": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b"
+        }
+      },
+      "depth": 200,
+      "dimension": 256,
+      "dirty": false,
+      "git_sha": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb",
+      "index": {
+        "resources_removed": 0,
+        "sync": {
+          "embed_ms": 1584122,
+          "progress": {
+            "by_kind": {
+              "text": {
+                "indexed": 3633,
+                "skipped": 0,
+                "waiting": 0
+              }
+            },
+            "eta_seconds": null
+          },
+          "resources_discovered": 3633,
+          "resources_unchanged": 2485,
+          "resources_updated": 1148,
+          "segments_embedded": 2520,
+          "skipped": [],
+          "skipped_counts": []
+        },
+        "total_ms": 1585371
+      },
+      "lexical_weight": null,
+      "load_after_index": [
+        32.4619140625,
+        30.29638671875,
+        30.62548828125
+      ],
+      "load_before": [
+        24.7109375,
+        35.10498046875,
+        38.98583984375
+      ],
+      "logical_cpus": 18,
+      "manifest_blake3": "d29f6c0308baea30f4af0a86a9bba3567e8e09b8f18c33ab2615d28692d23ff8",
+      "os": "macos",
+      "precision": "q8",
+      "profile": {
+        "model": {
+          "dimension": 256,
+          "document_prompt": "title: {title} | text: {text}",
+          "max_tokens": 2048,
+          "model_id": "google/embeddinggemma-2",
+          "normalization": "mean-pool;truncate;l2",
+          "query_prompt": "task: search result | query: ",
+          "revision": "onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+          "variant": "onnx-q8;text-literals-v1"
+        },
+        "segmenter_version": "text-v2:n60:t1000:m1800:o300+input-v2"
+      },
+      "profile_id": "ad7b2fee8e44b2b15f4463c0",
+      "run_id": "4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb-ad7b2fee8e44b2b15f4463c0-wdefault-rrf5main4542",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "schema": 1,
+      "threads": 2,
+      "type": "env"
+    }
+  },
+  "metrics": {
+    "hybrid": {
+      "R@1": 0.06047909706749804,
+      "R@10": 0.17379207935652627,
+      "R@100": 0.32574338908925893,
+      "R@20": 0.20689934132357402,
+      "R@5": 0.13349404467543702,
+      "RR@10": 0.5680745982603568,
+      "nDCG@10": 0.3596817033073805
+    },
+    "lexical": {
+      "R@1": 0.060053139459031527,
+      "R@10": 0.1464356296820245,
+      "R@100": 0.24011233464020443,
+      "R@20": 0.17142825078948323,
+      "R@5": 0.11837014662258677,
+      "RR@10": 0.5052582436483366,
+      "nDCG@10": 0.3022011241880336
+    },
+    "semantic": {
+      "R@1": 0.05399609399749456,
+      "R@10": 0.16151907256029785,
+      "R@100": 0.3147218936183745,
+      "R@20": 0.19665462569674833,
+      "R@5": 0.11945037333877488,
+      "RR@10": 0.5409258440218194,
+      "nDCG@10": 0.33830683668885014
+    }
+  },
+  "scoring": "ir_measures==0.4.3; pytrec_eval (pytrec-eval-terrier)==0.5.10; graded linear nDCG; relevance >= 1",
+  "smoke": false
+}

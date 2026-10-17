@@ -28,10 +28,10 @@ impl Embedder for Multimodal {
     }
 }
 
-// Captured with unchanged production code on main 71f9a184; complements the
-// original text golden without rewriting any of its cases.
+// Originally captured on main 71f9a184; refreshed for RRF k=5.
+// Covers text and page locators with both cache implementations.
 #[test]
-fn pdf_ranking_matches_main_golden() {
+fn pdf_ranking_matches_rrf_k5_golden() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("a.md"), "basil garden basil garden").unwrap();
     fs::write(dir.path().join("b.md"), "lavender garden").unwrap();
@@ -164,7 +164,7 @@ fn pdf_ranking_matches_main_golden() {
     }
     assert!(saw_page && saw_page_text);
     assert!(saw_nonfirst_keyword && saw_rank_beyond_limit);
-    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-pdf-main.jsonl")
+    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-pdf-rrf-k5.jsonl")
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();

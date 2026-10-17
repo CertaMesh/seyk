@@ -1,7 +1,7 @@
-//! Captured from main 71f9a18443483933f9bb5cf7f5fc18868fae4790 using this
+//! Originally captured from main 71f9a18; refreshed for RRF k=5 using this
 //! fixture and FakeEmbedder. Only the temporary root, source mtimes, and wall
 //! time are normalized. Ranking, scores, signals, locators, hashes, previews,
-//! and deterministic stats are compared to pre-change output in all modes.
+//! and deterministic stats are compared to the k=5 output in all modes.
 mod common;
 
 use seyk_core::{Dimension, SearchEngine, SearchMode};
@@ -33,7 +33,7 @@ fn normalize(value: &mut serde_json::Value, root: &str) {
 }
 
 #[test]
-fn ready_results_match_main_71f9a18_golden() {
+fn ready_results_match_rrf_k5_golden() {
     let root = tempfile::TempDir::new().unwrap();
     for (name, text) in [
         (
@@ -83,5 +83,5 @@ fn ready_results_match_main_71f9a18_golden() {
         actual.push(value);
     }
     let actual = serde_json::to_string_pretty(&actual).unwrap() + "\n";
-    assert_eq!(actual, include_str!("fixtures/ready-main-71f9a18.json"));
+    assert_eq!(actual, include_str!("fixtures/ready-rrf-k5.json"));
 }

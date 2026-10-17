@@ -1472,10 +1472,10 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
     }
 }
 
-// Captured on main 71f9a184 before match provenance was implemented. Compare
+// Originally captured on main 71f9a184; refreshed for RRF k=5. Compare
 // f32 bits (not rounded scores), order, locators and existing signal fields.
 #[test]
-fn ranking_matches_pre_match_golden() {
+fn ranking_matches_rrf_k5_golden() {
     let mut cases = Vec::new();
     both_caches(|engine, _, root| {
         for mode in [
@@ -1521,7 +1521,7 @@ fn ranking_matches_pre_match_golden() {
             }
         }
     });
-    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-main.jsonl")
+    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-rrf-k5.jsonl")
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
