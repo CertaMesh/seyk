@@ -47,7 +47,7 @@
         "score": 0.4000000059604645,
         "signals": {
           "filename": false,
-          "lexical": 1.6622148752212524,
+          "lexical": 1.649606466293335,
           "semantic": 0.42640143632888794
         }
       },
@@ -72,7 +72,7 @@
         "score": 0.3214285373687744,
         "signals": {
           "filename": false,
-          "lexical": 1.0198675681749592e-6,
+          "lexical": 1.02803733170731e-6,
           "semantic": 0.30151134729385376
         }
       },
@@ -169,7 +169,7 @@
         "score": 0.25,
         "signals": {
           "filename": false,
-          "lexical": 1.6622148752212524,
+          "lexical": 1.649606466293335,
           "semantic": null
         }
       },
@@ -194,7 +194,7 @@
         "score": 0.1875,
         "signals": {
           "filename": false,
-          "lexical": 1.0198675681749592e-6,
+          "lexical": 1.02803733170731e-6,
           "semantic": null
         }
       }
