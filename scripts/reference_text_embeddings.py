@@ -1,10 +1,11 @@
 """Reference text embeddings from the official sentence-transformers implementation.
 
-Writes tests/fixtures/reference_text.json, which tests/parity.rs compares the
-Rust/ONNX path against (token ids and cosine similarity).
+Writes crates/seyk-embeddinggemma/tests/fixtures/reference_text.json. The crate
+compares the Rust/ONNX path against it in tests/parity.rs (token ids and cosine
+similarity).
 
     pip install "sentence-transformers>=6.1" "transformers>=5.19" torch
-    python scripts/reference_text_embeddings.py tests/fixtures/reference_text.json
+    python scripts/reference_text_embeddings.py crates/seyk-embeddinggemma/tests/fixtures/reference_text.json
 
 Runs in float32: the model card warns that float16 overflows.
 """
