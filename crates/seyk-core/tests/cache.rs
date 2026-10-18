@@ -114,10 +114,6 @@ fn assert_malformed_vector_error(error: seyk_core::Error) {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Solo #4349: timestamp changes need a writable Windows file handle"
-)]
 fn unchanged_and_mtime_only_changes_reuse_embeddings() {
     let temp = TempDir::new().unwrap();
     let file = temp.path().join("notes.txt");
@@ -130,7 +126,9 @@ fn unchanged_and_mtime_only_changes_reuse_embeddings() {
     search(&engine, temp.path());
     assert_eq!(fake.resource_count(), 0);
 
-    fs::File::open(&file)
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
         .unwrap()
         .set_modified(SystemTime::now() + Duration::from_secs(2))
         .unwrap();

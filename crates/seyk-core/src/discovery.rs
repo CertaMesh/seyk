@@ -1090,10 +1090,6 @@ mod tests {
     use std::fs;
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Solo #4348: discovery fixture assumes slash-separated paths"
-    )]
     fn walks_and_filters() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -1109,7 +1105,7 @@ mod tests {
         fs::write(root.join("drafts/old.md"), "x").unwrap();
         fs::write(root.join(".hidden.md"), "x").unwrap();
 
-        let names = |opts: &DiscoveryOptions| -> Vec<String> {
+        let names = |opts: &DiscoveryOptions| -> Vec<PathBuf> {
             discover(&[root.to_path_buf()], opts)
                 .unwrap()
                 .into_iter()
@@ -1117,34 +1113,42 @@ mod tests {
                     r.path
                         .strip_prefix(root.canonicalize().unwrap())
                         .unwrap()
-                        .display()
-                        .to_string()
+                        .to_path_buf()
                 })
                 .collect()
         };
 
         assert_eq!(
             names(&DiscoveryOptions::default()),
-            ["drafts/old.md", "notes/a.md", "notes/deep/b.txt"]
+            ["drafts/old.md", "notes/a.md", "notes/deep/b.txt"].map(PathBuf::from)
         );
 
         let opts = DiscoveryOptions {
             exclude: vec!["drafts".into()],
             ..Default::default()
         };
-        assert_eq!(names(&opts), ["notes/a.md", "notes/deep/b.txt"]);
+        assert_eq!(
+            names(&opts),
+            ["notes/a.md", "notes/deep/b.txt"].map(PathBuf::from)
+        );
 
         let opts = DiscoveryOptions {
             include: vec!["*.md".into()],
             ..Default::default()
         };
-        assert_eq!(names(&opts), ["drafts/old.md", "notes/a.md"]);
+        assert_eq!(
+            names(&opts),
+            ["drafts/old.md", "notes/a.md"].map(PathBuf::from)
+        );
 
         let opts = DiscoveryOptions {
             include: vec!["notes/**".into()],
             ..Default::default()
         };
-        assert_eq!(names(&opts), ["notes/a.md", "notes/deep/b.txt"]);
+        assert_eq!(
+            names(&opts),
+            ["notes/a.md", "notes/deep/b.txt"].map(PathBuf::from)
+        );
     }
 
     #[test]
