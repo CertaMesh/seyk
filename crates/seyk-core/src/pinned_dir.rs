@@ -80,6 +80,8 @@ pub(crate) fn ensure_kind(stat: &libc::stat, directory: bool) -> io::Result<()> 
 pub(crate) fn open_at(directory: &File, name: &OsStr, is_dir: bool) -> io::Result<File> {
     let before = stat_at(directory, name)?;
     ensure_kind(&before, is_dir)?;
+    #[cfg(test)]
+    local_content_tests::opening(directory, name);
     let file = open_raw(
         directory,
         name,
@@ -87,7 +89,10 @@ pub(crate) fn open_at(directory: &File, name: &OsStr, is_dir: bool) -> io::Resul
     )?;
     let after = descriptor_stat(&file)?;
     ensure_kind(&after, is_dir)?;
-    if identity(&before) != identity(&after) {
+    // A directory open may trigger a Linux automount that stat leaves idle.
+    // Adopt the opened directory's identity; callers pin it for their lifetime.
+    // Regular files must still be the exact inode checked before opening.
+    if !is_dir && identity(&before) != identity(&after) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "local-content path changed while opening",
@@ -411,6 +416,10 @@ fn clear_errno() {
         *libc::__error() = 0
     };
 }
+
+#[cfg(test)]
+#[path = "pinned_dir/local_content_tests.rs"]
+mod local_content_tests;
 
 #[cfg(test)]
 mod tests {
