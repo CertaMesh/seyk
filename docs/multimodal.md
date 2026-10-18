@@ -72,6 +72,12 @@ audio file independently. Audio weights/policy live in `audio-input-v1` and the
 preparation descriptor, leaving the text cache profile unchanged. No PCM, mel
 features, audio tokens or transcript are written to the cache.
 
+Audio identity preparation also retains about 324.54 MiB of encoder bytes per
+model, including cached-only audio search. Session initialization temporarily
+clones another 324.31 MiB of weights, plus ONNX Runtime allocations. Text-only
+use allocates no audio snapshot. See [audio snapshot memory](embedding.md#audio-snapshot-memory)
+for reload and retry semantics and the scoped release memory measurement.
+
 The encoded limit remains 32 MiB; the derived decoded-duration limit is
 1,048.576 seconds. HE-AAC/SBR, multiple tracks and complex edit lists are typed
 unsupported inputs. No STT, previews, VAD or diarization ship in 5a. Explicit

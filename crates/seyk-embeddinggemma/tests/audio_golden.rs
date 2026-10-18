@@ -157,19 +157,19 @@ fn missing_audio_files_leave_text_available() {
         missing.input_identity(Modality::Audio).unwrap(),
         installed.input_identity(Modality::Audio).unwrap()
     );
+    let signal = fixture::signal();
+    let expected = missing.embed_audio(&signal, 16000).unwrap();
     drop(missing);
     drop(text);
-    // A same-length edit between construction and lazy load must not cache a
-    // vector under the old identity. Replace a hard link, never mutate HF data.
+    // The installed model has prepared its identity but not its session. It
+    // must infer from the pinned snapshot after a same-length graph replacement.
+    // Replace the disposable hard link, never mutate provisioned weights.
     let graph = dir.path().join(audio::FILES[0]);
     let mut bytes = std::fs::read(&graph).unwrap();
     bytes[0] ^= 1;
     std::fs::remove_file(&graph).unwrap();
     std::fs::write(&graph, bytes).unwrap();
-    let error = installed
-        .embed_audio(&fixture::signal(), 16000)
-        .unwrap_err();
-    assert!(error.to_string().contains("audio weights changed"));
+    assert_eq!(installed.embed_audio(&signal, 16000).unwrap(), expected);
     let reloaded = EmbeddingGemma2::builder()
         .model_path(dir.path())
         .vision(false)
@@ -181,6 +181,7 @@ fn missing_audio_files_leave_text_available() {
         reloaded.input_identity(Modality::Audio).unwrap(),
         installed.input_identity(Modality::Audio).unwrap()
     );
+    assert!(reloaded.embed_audio(&signal, 16000).is_err());
 }
 
 fn cases() -> impl Iterator<Item = (&'static str, Vec<f32>, Vec<f32>, serde_json::Value)> {
