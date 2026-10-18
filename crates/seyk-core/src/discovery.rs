@@ -29,9 +29,19 @@ impl PolicyRoot {
     pub fn new(path: &Path) -> Result<Self> {
         ensure_allowed_path(path)?;
         let logical = logical_absolute_path(path)?;
+        Self::from_logical_path(path, logical)
+    }
+
+    fn from_logical_path(path: &Path, logical: PathBuf) -> Result<Self> {
         // Resolve the supplied spelling once, preserving filesystem handling
         // of a file with a trailing slash or `/.` on each platform.
         let resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
+        if logical.canonicalize().map_err(|e| Error::io(path, e))? != resolved {
+            return Err(Error::io(
+                path,
+                std::io::Error::other("root target changed while capturing its identities"),
+            ));
+        }
         Ok(Self { logical, resolved })
     }
 
@@ -63,7 +73,7 @@ impl PolicyRoot {
     /// This observation does not recheck name policy and cannot be used as a
     /// policy-checked root. Check the resulting logical child before authorizing it.
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0308
     /// use seyk_core::discovery::PolicyRoot;
     /// fn unchecked_root(root: &PolicyRoot) -> PolicyRoot {
     ///     root.current().unwrap()
@@ -1066,6 +1076,34 @@ pub fn audio_byte_limit(seconds: u64) -> crate::Result<u64> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn construction_rejects_retarget_between_logical_and_resolved_capture() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        for branch in ["first", "second"] {
+            std::fs::create_dir_all(base.join(branch).join("child")).unwrap();
+        }
+        let alias = base.join("alias");
+        symlink("first/child", &alias).unwrap();
+        let supplied = alias.join("..");
+        let logical = logical_absolute_path(&supplied).unwrap();
+        assert_eq!(logical, base.join("first"));
+        std::fs::remove_file(&alias).unwrap();
+        symlink("second/child", &alias).unwrap();
+        assert_eq!(supplied.canonicalize().unwrap(), base.join("second"));
+        assert!(matches!(
+            PolicyRoot::from_logical_path(&supplied, logical),
+            Err(Error::Io { path, source })
+                if path == supplied && source.kind() == std::io::ErrorKind::Other
+        ));
+        let root = PolicyRoot::new(&supplied).unwrap();
+        assert_eq!(root.uri_path(), base.join("second"));
+        assert!(root.revalidate().unwrap());
+    }
+
     #[test]
     fn absolute_policy_path_keeps_parent_components() {
         let relative = Path::new("vault.opvault/../safe.txt");
@@ -1090,10 +1128,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Solo #4348: discovery fixture assumes slash-separated paths"
-    )]
+    #[cfg_attr(windows, ignore = "discovery fixture assumes slash-separated paths")]
     fn walks_and_filters() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

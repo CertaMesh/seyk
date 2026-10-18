@@ -19,6 +19,9 @@ The operator provisions them locally or uses the explicit model download
 command. The pinned export declares Apache-2.0 in its
 [model card](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/blob/daa72c51243991dfcaf9f9137d2c573d8f7790c0/README.md).
 Preserve that licence and upstream notices when distributing the model assets.
+The same card states that deployments must adhere to the
+[Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy);
+anyone deploying Seyk with these weights is bound by it.
 
 ONNX Runtime (MIT) is the native inference dependency; SQLite is bundled by
 rusqlite (SQLite is public domain). Their upstream distributions include notices
@@ -182,7 +185,8 @@ see Lin et al., *Microsoft COCO: Common Objects in Context*, ECCV 2014.
 The source embeddings used google/embeddinggemma-2 at
 914f7f89142e33e77833254d9c9b90c3cef7303b (float16, Sentence Transformers).
 
-Files live in `crates/seyk-embed/assets/photo-anchor/`.
+Files live in `crates/seyk-embed/assets/photo-anchor/`. Because the `seyk-embed`
+package bundles them, its declared licence is `Apache-2.0 AND CC-BY-4.0`.
 
 | Bundled file | Bytes | SHA-256 |
 |---|---:|---|

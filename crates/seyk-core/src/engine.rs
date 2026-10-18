@@ -3245,7 +3245,7 @@ mod tests {
         let w = |q: &str| keyword_weight(&[q.to_string()]);
         for q in [
             "father.md",
-            "Seren",
+            "Example Person",
             "INC-18372",
             "where is Session::restore() called",
             "invoice_38192",
@@ -3254,8 +3254,8 @@ mod tests {
             assert_eq!(w(q), 1.0, "{q}");
         }
         for q in [
-            "where did I write about someone becoming like their father",
-            "grief as something physical",
+            "how can I make tomato soup for dinner",
+            "how to grow vegetables in a small garden",
         ] {
             assert_eq!(w(q), PROSE_KEYWORD_WEIGHT, "{q}");
         }

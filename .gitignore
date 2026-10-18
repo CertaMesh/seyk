@@ -2,6 +2,7 @@
 *.sqlite3*
 
 /tmp/
+__pycache__/
 .anvil.local
 
 # System Voice speech is generated locally in tmp/, never distributed.

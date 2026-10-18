@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Local search, evidence and cache engine"
+repository.workspace = true
+readme.workspace = true
+keywords = ["search", "semantic-search", "retrieval", "local-first", "evidence"]
+categories = ["text-processing", "filesystem"]
 
 [features]
 default = []

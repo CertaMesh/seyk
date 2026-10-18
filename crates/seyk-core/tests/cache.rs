@@ -116,7 +116,7 @@ fn assert_malformed_vector_error(error: seyk_core::Error) {
 #[test]
 #[cfg_attr(
     windows,
-    ignore = "Solo #4349: timestamp changes need a writable Windows file handle"
+    ignore = "timestamp changes need a writable Windows file handle"
 )]
 fn unchanged_and_mtime_only_changes_reuse_embeddings() {
     let temp = TempDir::new().unwrap();
