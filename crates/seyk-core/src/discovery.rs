@@ -1090,10 +1090,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Solo #4348: discovery fixture assumes slash-separated paths"
-    )]
+    #[cfg_attr(windows, ignore = "discovery fixture assumes slash-separated paths")]
     fn walks_and_filters() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

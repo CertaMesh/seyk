@@ -272,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let runs = 20;
     for _ in 0..runs {
-        embedder.embed_query("Where did I describe grief as something physical?")?;
+        embedder.embed_query("How do I prepare tomato soup?")?;
     }
     row(
         "embed query".into(),

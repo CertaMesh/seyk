@@ -4,8 +4,8 @@
 #   gh api repos/CertaMesh/seyk/contents/scripts/install.sh \
 #     -H "Accept: application/vnd.github.raw" | sh
 #
-# Uses the GitHub CLI because the repository is private; run `gh auth login`
-# first. Installs to $SEYK_INSTALL_DIR, default ~/.local/bin.
+# Uses the GitHub CLI to download and verify the release archive; run
+# `gh auth login` first. Installs to $SEYK_INSTALL_DIR, default ~/.local/bin.
 set -eu
 
 repo="CertaMesh/seyk"

@@ -34,7 +34,7 @@ and the engine's generated profile together; this test needs local weights and
 is ignored in ordinary CI. Core keeps no backend dependency.
 
 The self-made `support/pdf_fixture.rs::malformed_cmap` generator reproduces both
-CMap panics from Solo #4476: an overlapping ToUnicode mapping with an unknown
+CMap panics seen on real PDFs: an overlapping ToUnicode mapping with an unknown
 FontAwesome glyph (`unexpected entry in unicode map`), and a three-byte
 bfrange destination (`bad length of hexstring`). No IRPAPERS PDF bytes are used
 or committed. Tests assert both original panic messages locally, typed failure

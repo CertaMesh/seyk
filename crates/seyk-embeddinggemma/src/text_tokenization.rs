@@ -176,7 +176,7 @@ The recipe calls for flour, water, salt, and yeast.
 fn main() { println!(\"hello\"); }
 SELECT name FROM documents WHERE id = 42;
 https://example.test/search?q=rust&limit=10
-/home/alex/notes/meeting-2026-10-15.md
+/home/example-user/notes/meeting-2026-10-15.md
 Markdown: **bold**, _italic_, `code`, and [a link](https://example.test).
 JSON: {\"enabled\": true, \"count\": 3}
 Numbers: 0 -17 3.14159 1e-9 100%.

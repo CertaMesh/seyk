@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Offline, on-demand Whisper transcription for Seyk"
+repository.workspace = true
+readme.workspace = true
+keywords = ["whisper", "speech-to-text", "transcription", "offline", "onnx"]
+categories = ["multimedia::audio", "science"]
 
 [dependencies]
 seyk-core = { path = "../seyk-core", version = "0.1.0", features = ["audio"] }
