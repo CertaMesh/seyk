@@ -118,14 +118,39 @@ text embedding. Video returns `UnsupportedModality`. `GemmaConfig::audio` and
 ordinary model file list. The CLI provisions `audio::FILES` separately.
 `Embedder::input_identity(modality)` returns `Result<&str>`, defaults to `Ok("")`, and
 adds modality-specific weights/preprocessing to input hashes without changing the
-shared `ModelIdentity` or text cache profile. Audio hashing starts on the first
-audio identity request, before cache admission (including cached-only search),
-or direct audio embedding. Text-only use reads no audio assets. Failed
-preparation can be retried after installing or repairing the files; a successful
-identity stays fixed until model reload. The digest recipe and existing cache
-keys are unchanged. Filename-based session loading still rechecks the digest
-before the first inference; binding loading to an owned byte snapshot is a
-separate follow-up.
+shared `ModelIdentity` or text cache profile. The first successful audio identity
+request, before cache admission (including cached-only search), or direct audio
+embedding captures the encoder graph and external weights into an immutable
+owned snapshot. The digest hashes those captured bytes. Audio session creation
+loads the same graph from memory and registers a byte-identical owned copy of
+the captured external weights. It does not reopen the encoder paths.
+
+Successful capture pins the audio identity and bytes until model reload.
+Failed capture can be retried after installing or repairing the files. A failed
+session initialization can also be retried, using the same pinned bytes.
+Disk changes after capture require a fresh model instance to take effect.
+The digest recipe, existing cache keys, and text cache profile are unchanged;
+no cache migration is needed. Text-only use reads no audio assets and allocates
+no audio snapshot.
+
+<a id="audio-snapshot-memory"></a>
+
+For the pinned q8 encoder, each prepared model retains 340,307,954 bytes
+(about 324.54 MiB), even for cached-only audio search without inference.
+Each session initialization attempt adds a transient 340,058,624-byte external
+weight clone (about 324.31 MiB), plus ONNX Runtime allocations. These byte counts
+describe ownership, not total process RSS.
+
+A matched release measurement on macOS arm64 compared baseline `057355af`
+with the snapshot implementation in five alternating baseline/candidate pairs.
+The workload used q8, 768 dimensions, one thread, one session, one second of
+audio, and the same public-API six-stage fixture, toolchain, and private assets.
+Each fresh process used a fresh cache after the assets were warm-hashed.
+The paired whole-process peak RSS increase had a median of 674.17 MiB
+(range 652.63–685.72 MiB). All five pairs had bit-identical text and audio
+outputs. This scoped result includes runtime and allocator residency;
+it does not establish a general RAM budget, a leak, or a speed change.
+
 For images, opt into preprocessing and provision the vision weights:
 
 ```toml

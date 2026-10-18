@@ -40,34 +40,36 @@ bfrange destination (`bad length of hexstring`). No IRPAPERS PDF bytes are used
 or committed. Tests assert both original panic messages locally, typed failure
 counts, continued indexing, and physical page locators for surviving pages.
 
-## Ready-search golden (lexical fallback)
+## Ranking goldens (RRF k=5)
 
-`ready-main-71f9a18.json` was captured by running the four-document fixture in
-`../ready_main_golden.rs` against main
-`71f9a18443483933f9bb5cf7f5fc18868fae4790`, with Rust 1.99.0 and `FakeEmbedder`.
-It covers hybrid, lexical and semantic search. The capture uses main's engine,
-not a second request through the changed implementation. Temporary root paths,
-source mtimes and elapsed milliseconds are normalized; scores, order, signals,
-locators, hashes, previews and deterministic stats remain intact. The later
-additive `match` field is excluded from this historical fixture;
-`counts_ranking_golden.rs` checks complete hits including that field.
+`counts-rrf-k5.json` and `ready-rrf-k5.json` freeze the complete synthetic
+ranking results after the intentional default fusion change from RRF k=60 to
+k=5. The original captures came from main `28814a85` (counts) and `71f9a18`
+(ready search). They were refreshed from the new engine on a branch based on
+main `dc649344`, using Rust 1.99.0 and `FakeEmbedder`.
 
-To reproduce, create an isolated checkout of that main commit (for example `git worktree add`), copy
-`ready_main_golden.rs` into its core tests, remove `.lexical_fallback(true)`
-(the API did not exist on main), and replace the final `assert_eq!` with:
+Only temporary paths, source mtimes and elapsed milliseconds are normalized.
+Scores, ordering, signals, locators, hashes, previews and deterministic stats
+remain covered. The ready fixture still excludes the later additive `match`
+field; the counts fixture covers it in full. These are regression snapshots
+for the new default, not a claim that rankings remain identical to old main.
+The focused `hybrid_rrf_k5_preserves_a_strong_semantic_lead` test independently
+pins the fusion behavior.
 
-```rust
-std::fs::write(std::env::var("SEYK_GOLDEN_OUTPUT").unwrap(), actual).unwrap();
-```
+`match-ranking-rrf-k5.jsonl` and `match-pdf-rrf-k5.jsonl` extend the same
+coverage to 168 text and 144 mixed text/PDF cases across memory and SQLite
+caches. Originally captured on main `71f9a184`, they were regenerated from
+the k=5 engine after integrating main through `7c4012ed`. They retain all
+case settings, hit order, query identities and signal/locator fields. Only
+normalized fusion score bits change: 196 hybrid and 68 lexical scores.
+Semantic cases remain byte-identical. An independent float32 calculation
+from the frozen semantic, keyword and filename ranks reproduced both the
+old k=60 snapshots and the new k=5 captures exactly across all 312 cases.
+Lexical mode also uses RRF normalization, so its scores change even when
+its ordering does not. The complete snapshot assertions remain in place.
 
-Run in that checkout, with an absolute output path outside the source tree:
-
-```sh
-SEYK_GOLDEN_OUTPUT=/tmp/ready-main-71f9a18.json \
-  rustup run 1.99.0 cargo test -p seyk-core --locked --test ready_main_golden
-```
-
-Compare that output with this frozen fixture. Do not regenerate it with the
-branch engine. The separate `ready_results_match_with_lexical_fallback_opt_in`
-test checks opt-in equivalence within one revision; it is not the cross-revision
-identity proof.
+To intentionally refresh a golden, temporarily replace the test's final
+assertion with a write of `actual`, run that integration test, then restore the
+assertion and rerun it against the captured fixture. Review the resulting diff:
+only intended ranking changes belong in a refresh. Never refresh these fixtures
+to silence an unexplained failure.

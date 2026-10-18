@@ -1,4 +1,6 @@
 mod common;
+#[path = "support/golden_provider.rs"]
+mod golden_provider;
 #[cfg(feature = "pdf")]
 #[path = "support/scan_fixture.rs"]
 mod hydration_fixture;
@@ -1472,12 +1474,54 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
     }
 }
 
-// Captured on main 71f9a184 before match provenance was implemented. Compare
-// f32 bits (not rounded scores), order, locators and existing signal fields.
+// Canonical provider IDs keep physical temporary paths out of BM25 inputs.
+// Compare exact f32 bits, order, locators and existing signal fields.
 #[test]
-fn ranking_matches_pre_match_golden() {
+fn ranking_matches_rrf_k5_golden() {
     let mut cases = Vec::new();
-    both_caches(|engine, _, root| {
+    let mut saw_filename = false;
+    for sqlite in [false, true] {
+        use golden_provider::GoldenProvider;
+        use seyk_core::discovery::ResourceKind;
+        use seyk_core::segment::TextFormat;
+        let provider = GoldenProvider::new(
+            [
+                (
+                    "father.md",
+                    "He repeats the gestures he swore he never would.",
+                ),
+                (
+                    "kitchen.md",
+                    "My father painted the kitchen yellow in spring.",
+                ),
+                (
+                    "incident.md",
+                    "Outage review for INC-18372: the restore path never ran.",
+                ),
+                (
+                    "garden.md",
+                    "Tomatoes need sun and a little basil beside them.",
+                ),
+            ]
+            .map(|(name, text)| {
+                (
+                    name,
+                    ResourceKind::Text(TextFormat::Markdown),
+                    text.as_bytes().to_vec(),
+                )
+            }),
+        );
+        let db = TempDir::new().unwrap();
+        let builder = SearchEngine::builder()
+            .provider(provider)
+            .embedder(FakeEmbedder::new(Dimension::D256, "r1"));
+        let engine = if sqlite {
+            builder.cache(SqliteCache::open(db.path().join("cache.sqlite3")).unwrap())
+        } else {
+            builder.cache(MemoryCache::new())
+        }
+        .build()
+        .unwrap();
         for mode in [
             SearchMode::Hybrid,
             SearchMode::Semantic,
@@ -1497,7 +1541,7 @@ fn ranking_matches_pre_match_golden() {
                         let mut request = engine
                             .search(queries[0])
                             .mode(mode)
-                            .paths([root])
+                            .roots([golden_provider::root()])
                             .limit(limit);
                         for q in &queries[1..] {
                             request = request.query(*q);
@@ -1506,10 +1550,21 @@ fn ranking_matches_pre_match_golden() {
                             request = request.lexical_weight(w);
                         }
                         let r = request.execute().unwrap();
+                        for hit in &r.hits {
+                            let name = golden_provider::name(&hit.resource);
+                            let named = mode != SearchMode::Semantic
+                                && queries.iter().any(|q| {
+                                    q.eq_ignore_ascii_case(name)
+                                        || q.eq_ignore_ascii_case(name.trim_end_matches(".md"))
+                                });
+                            assert_eq!(hit.signals.filename, named);
+                            assert_eq!(hit.r#match.filename_rank.is_some(), named);
+                            saw_filename |= named;
+                        }
                         cases.push(serde_json::json!({
                             "mode": mode, "queries": queries, "limit": limit, "weight": weight,
                             "hits": r.hits.iter().map(|h| serde_json::json!({
-                                "file": h.resource.to_file_path().unwrap().file_name().unwrap().to_str().unwrap(),
+                                "file": golden_provider::name(&h.resource),
                                 "locator": h.locator, "score_bits": h.score.to_bits(),
                                 "semantic_bits": h.signals.semantic.map(f32::to_bits),
                                 "lexical_bits": h.signals.lexical.map(f32::to_bits),
@@ -1520,8 +1575,9 @@ fn ranking_matches_pre_match_golden() {
                 }
             }
         }
-    });
-    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-main.jsonl")
+    }
+    assert!(saw_filename);
+    let expected: Vec<serde_json::Value> = include_str!("fixtures/match-ranking-rrf-k5.jsonl")
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();

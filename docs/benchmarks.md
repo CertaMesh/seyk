@@ -8,41 +8,54 @@
 
 ## Published retrieval comparison
 
-Measured on 2026-10-14 with Seyk 0.1.0, clean commit
-`28814a851ded4d1b3d5e0def1d112094a852e334` (the current `origin/main` when these runs started).
-The chart records that measured commit; later documentation commits do not change
-the search engine. Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2
-inference threads. ONNX Runtime CPU inference, q8,
-256-dimensional vectors, default segmentation and fusion, 200-segment retrieval
-depth, all hybrid/semantic/lexical queries. Model:
+Measured on 2026-10-15–16 with Seyk 0.1.0, clean commit
+`a4a0eea63f747b0acf4e3a5fa844f79fc5bef39c`, with default RRF k=5.
+The chart records the measured source commit, before later main integration.
+Machine: Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads.
+ONNX Runtime CPU inference, q8, 256-dimensional vectors, default segmentation,
+adaptive lexical weighting, filename weight 3, candidate depth 800 and
+200-segment output depth; all hybrid/semantic/lexical queries. Model:
 `onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
 Only provisioned weights were used; SHA-256 hashes were checked against the pinned
-model files. Compatible document embedding caches were reused; every query was
-rerun. This measures ranking quality, not cold indexing speed.
+model files. Main populated the `;text-literals-v1` embedding profile across
+bounded runs; the k=5 branch reused those embeddings and embedded zero new
+segments. Every query was rerun. This measures ranking quality, not indexing speed.
 
 The full test splits contain 5,183 documents / 300 queries (SciFact),
 3,633 / 323 (NFCorpus), and 3,226 nonempty pages / 180 queries (IRPAPERS text).
 All 180 IRPAPERS questions remain in the denominator, including the question
 whose relevant page has an empty transcription. Resource-level metrics use the
 first returned segment per resource; IRPAPERS text resources are individual pages.
-One-minute load samples across these runs were 25.4–35.5 (SciFact), 17.9–22.4
-(NFCorpus) and 17.2–23.9 (IRPAPERS text). These runs make no timing or
-quiet-machine performance claim.
+Machine load varied and the baseline required cold indexing while the branch
+used warm caches. These runs make no timing or quiet-machine performance claim.
 
 | Dataset | Seyk mode | nDCG@10 | MRR@10 | Recall@10 |
 |---|---|---:|---:|---:|
-| SciFact | hybrid | 0.76764 | 0.73208 | 0.89189 |
+| SciFact | hybrid | 0.80700 | 0.77649 | 0.92056 |
 | SciFact | semantic | 0.82192 | 0.80290 | 0.90122 |
 | SciFact | lexical | 0.64764 | 0.61227 | 0.77867 |
-| NFCorpus | hybrid | 0.35968 | 0.56807 | 0.17379 |
+| NFCorpus | hybrid | 0.35972 | 0.55989 | 0.17545 |
 | NFCorpus | semantic | 0.33831 | 0.54093 | 0.16152 |
 | NFCorpus | lexical | 0.30220 | 0.50526 | 0.14644 |
-| IRPAPERS text | hybrid | 0.63204 | 0.56024 | 0.85556 |
+| IRPAPERS text | hybrid | 0.64951 | 0.57637 | 0.87778 |
 | IRPAPERS text | semantic | 0.58941 | 0.51834 | 0.81111 |
 | IRPAPERS text | lexical | 0.62941 | 0.56413 | 0.83333 |
 
-Hybrid trails semantic-only on SciFact. This known fusion limitation is a
-planned follow-up.
+The same-profile baseline was clean main commit
+`4b3ab33b54affa38f2bc3cc43781e4624fe9e4fb` with RRF k=60. Separate release
+builds supplied the main and branch binaries. Changing only k to 5 improved
+hybrid nDCG@10 in all three datasets:
+
+| Dataset | k=60 | k=5 | Delta |
+|---|---:|---:|---:|
+| SciFact | 0.767638 | 0.807000 | +0.039362 |
+| NFCorpus | 0.359682 | 0.359716 | +0.000034 |
+| IRPAPERS text | 0.632042 | 0.649511 | +0.017469 |
+
+Semantic and lexical rankings were unchanged across all 803 queries. The NFCorpus
+increase is small; the result meets the 0.005 maximum-drop gate for both NFCorpus
+and SciFact. Hybrid still trails semantic-only on SciFact. These datasets also
+informed the choice of k, so the comparison is not an unseen-dataset evaluation.
 nDCG@10 rewards relevant documents near the top of the first ten results, with
 linear graded relevance and a 0–1 scale (higher is better).
 
@@ -80,7 +93,8 @@ The [comparison manifest](benchmarks/comparisons.toml) records each source title
 URL, retrieval date, protocol and numeric source score. The small
 [aggregate snapshots](benchmarks/results) record measured provenance and metrics;
 no dataset text, document maps, per-query rows or per-document hash lists are
-committed. This run's per-query rows and uv environments were deleted after scoring.
+committed. Raw captures stay outside the repository; shared scoring environments
+are retained for concurrent work.
 When datasets are shared with concurrent runs, retain the raw inputs and
 materialized corpora until every consumer finishes. Preserve provisioned model
 files.
@@ -98,7 +112,7 @@ Use a dedicated result directory to reproduce an exact archived selection:
 ```bash
 python3.12 scripts/bench/chart.py \
   --results docs/benchmarks/results \
-  --commit 28814a851ded4d1b3d5e0def1d112094a852e334 \
+  --commit a4a0eea63f747b0acf4e3a5fa844f79fc5bef39c \
   --version 0.1.0 \
   --machine 'Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads'
 python3.12 -m unittest discover -s scripts/bench -p test_chart.py
@@ -487,3 +501,279 @@ score output record that count.
 
 See [the current published comparison](#published-retrieval-comparison) for
 full measured results, source links and setup differences.
+
+## Photo Anchor quality gate (P2, 2026-10-16)
+
+This offline experiment compares the P1 Photo Anchor codec with exact f32 image
+vectors. It does not change the engine, cache, schema, ranking, or f32 default.
+The q4 scan optimization is a separate task (Solo #4714).
+
+### Reproduce
+
+The committed `scripts/fixtures/photo-manifest.json` pins 280 public CC0 photos
+from Wikimedia Commons by URL and SHA-256, with each item's source page and
+licence URL. Downloads go only to ignored `tmp/photo-fixture/`. The collection
+began with 300 candidates across 30 subjects; visual review removed two artwork
+reproductions and 18 repeated views before embedding. Photographs of objects,
+including museum artifacts, remain as distractors. No photos are distributed.
+The 60 hand-written queries in `scripts/fixtures/photo-queries.json` contain
+explicit image-ID relevance labels: 2 = directly relevant, 1 = incidental or
+partial match, absent = not relevant. Labels were set before scoring, from
+contact-sheet inspection; source search terms are not used as relevance labels.
+These are single-reviewer judgments, with residual near-duplicates and subject
+imbalance, not an independent benchmark or a representative personal library.
+
+```sh
+python3 scripts/fetch_photo_fixture.py
+python3 scripts/fetch_photo_fixture.py --verify
+# SEYK_MODEL must name a directory of already-provisioned q8 text + vision files.
+export SEYK_MODEL=/path/to/provisioned/model
+export CARGO_NET_OFFLINE=true
+export ORT_LIB_PATH=/path/to/provisioned/onnxruntime-library-directory
+TC=$(rustup run 1.99.0 rustc --print sysroot)
+export PATH="$TC/bin:$PATH" RUSTC="$TC/bin/rustc" RUSTDOC="$TC/bin/rustdoc"
+rustup run 1.99.0 cargo run --release --locked --example image_quant_eval
+/usr/bin/time -l target/release/examples/image_quant_eval --score-only
+```
+
+The fetch script checks all manifest entries before fetching and verifies every
+image, including existing files. A checksum mismatch fails without replacing the
+file. `--verify` never fetches. The evaluator also runs this verification before
+reading images. Vector cache keys include the model identity, modality identity,
+task and input bytes. Each completed 768-dimensional embedding is cached
+atomically; 256-dimensional vectors are derived by truncating and normalizing.
+An interrupted inference run resumes from completed vectors. The 35-minute guard
+is cooperative: it stops between photos once the budget is reached, without
+interrupting an in-flight embedding. The text-query loop is not time-checked.
+Local runs additionally need the shared gate lock and a separate external
+40-minute timeout for the **whole phase**, including compilation.
+
+`--score-only` checks the current fixture/queries against the prepared cache and
+runs without a model. Output `tmp/photo-fixture/results.json` includes per-query
+rankings, all per-dimension clipping rates, model/input identity, and the fixture
+fingerprint. Remove photos, intermediate vectors and raw outputs after recording
+the small report; fetching and inference reproduce them when needed.
+
+### Definitions and measurement boundaries
+
+nDCG@10 uses gain `2^grade - 1` and log2 rank discount, averaged across queries.
+Recall@1 is the number of relevant images in the first result divided by all
+relevant images for that query (not hit rate). Each quality share is the ratio
+of macro averages to f32. Top-10 overlap ignores order; the pass bar's identical
+top-10 fraction requires identical order and uses manifest order to break ties.
+Re-ranking sorts the q4 top 20 or 50 by exact f32 scores, excluding the approximate
+tail. Error is absolute score error over all query/image pairs before re-ranking.
+Clipping counts values outside the calibration interval before rounding; the
+3% check is applied to **every dimension**, with mean/max also reported.
+
+Image-vector memory means payload bytes: `N*d*4` for f32 and `N*d/2` for flat q4.
+Query LUTs and optional exact re-ranking scratch are reported separately. The
+quality harness retains f32 ground truth, so its RSS cannot establish a deployed
+q4 memory reduction. Scoring-only RSS excludes model loading/inference but still
+includes ground truth, both query sets, and reporting allocations. Cached-query
+retrieval timing includes LUT creation, scanning, sorting and exact shortlist
+scoring, averaged over 20 repetitions per query, with variant order rotated between
+queries. It excludes query embedding,
+SQLite I/O and RRF; it is not end-to-end engine search latency.
+
+The P1 Criterion scan medians are reused without rerunning or claiming a speedup:
+256: f32 33.631 µs / q4 101.190 µs per 1,000 vectors;
+768: f32 115.110 µs / q4 383.410 µs. They are medians of five busy-machine runs
+(30 samples, 500 ms warm-up, 2 s measurement; Apple M5 Max, 18 logical CPUs).
+The original ranges were 31.741–41.676 / 99.470–114.510 µs at 256 and
+98.970–127.690 / 344.050–462.150 µs at 768. Setup, encoding and LUT creation were
+excluded from those scan timings. P2 cached-query timings have a different scope.
+
+SQLite page counts, production end-to-end search latency, text-ranking parity
+and NanoSciFact before/after belong to the P3 search-path experiment. P2 neither
+creates a SQLite image-code table nor changes search behavior, so it cannot
+supply those measurements. This small fixture cannot predict 10k–100k-image
+quality, particularly for the default dimension of 256.
+
+### Measured results and decision
+
+**NO-GO for P3 adoption at both 256 and 768 dimensions.** The table below applies the original pass bar to the vendored Pastel tables only. No local calibration was fitted.
+
+Run: 280 photos, 60 queries, 317 graded labels; fixture/query BLAKE3 `9cb18b087d0b30e06792472c86e8a7ef07a8b19e0811473ef864f9daa824766d`. q8 ONNX model revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0`, four CPU threads; Rust 1.99.0 release, ONNX Runtime 1.28, macOS 26.5 arm64, Apple M5 Max (18 logical CPUs). All four provisioned model graph/data SHA-256s matched the revision.
+
+| Dim | Variant | nDCG@10 | Share of f32 | Recall@1 | Share of f32 | Top-10 overlap | Identical ordered top-10 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 256 | f32 | 0.956234 | 1.000000 | 0.377415 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+| 256 | q4 | 0.953261 | 0.996891 | 0.388526 | 1.029440 | 95.5000% | 4/60 (6.67%) |
+| 256 | q4_rerank20 | 0.956234 | 1.000000 | 0.377415 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+| 256 | q4_rerank50 | 0.956234 | 1.000000 | 0.377415 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+| 768 | f32 | 0.959800 | 1.000000 | 0.390749 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+| 768 | q4 | 0.960649 | 1.000884 | 0.394082 | 1.008531 | 96.5000% | 4/60 (6.67%) |
+| 768 | q4_rerank20 | 0.959800 | 1.000000 | 0.390749 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+| 768 | q4_rerank50 | 0.959800 | 1.000000 | 0.390749 | 1.000000 | 100.0000% | 60/60 (100.00%) |
+
+| Dim | Absolute score error mean / max | Clip mean / max | Dimensions above 3% | Fixture mean–anchor cosine |
+|---|---:|---:|---:|---:|
+| 256 | 0.003132 / 0.026925 | 1.0240% / 8.5714% | 14 | 0.973864 |
+| 768 | 0.002106 / 0.021545 | 1.0649% / 7.8571% | 35 | 0.972840 |
+
+The quality bar requires rerank-50 nDCG share ≥ 0.999 and identical ordered top-10 for ≥ 95% of queries, plus stored-only nDCG share ≥ 0.98. The other bars require every dimension’s clipping ≤ 3%, image payload ≤ 1/7 of f32, and scan latency ≤ f32.
+
+| Dim | Quality bar | Every-dimension clipping bar | Image payload bar | P1 scan bar | Decision |
+|---|---|---|---|---|---|
+| 256 | PASS | FAIL | PASS | FAIL | NO-GO |
+| 768 | PASS | FAIL | PASS | FAIL | NO-GO |
+
+| Dim | f32 image payload | q4 image payload / capacity | Query LUT payload | Top-50 exact scratch payload |
+|---|---:|---:|---:|---:|
+| 256 | 286,720 B | 35,840 B | 131,076 B | 51,200 B |
+| 768 | 860,160 B | 107,520 B | 393,220 B | 153,600 B |
+
+The image payload is exactly 1/8 of f32 (87.5% fewer bytes), passing the 1/7 bar. This excludes LUTs and exact re-ranking buffers; with only 280 images these fixed costs matter. It does not imply an eightfold reduction in process RSS.
+
+| Dim | Variant | Cached-query retrieval, median µs | Range across five runs, µs |
+|---|---|---:|---:|
+| 256 | f32 | 13.953 | 13.416–15.255 |
+| 256 | q4 | 124.109 | 118.141–139.886 |
+| 256 | q4_rerank20 | 126.529 | 118.652–160.797 |
+| 256 | q4_rerank50 | 130.887 | 120.870–144.556 |
+| 768 | f32 | 31.842 | 30.945–55.515 |
+| 768 | q4 | 304.278 | 280.271–389.500 |
+| 768 | q4_rerank20 | 302.499 | 281.738–348.875 |
+| 768 | q4_rerank50 | 298.263 | 287.893–364.082 |
+
+Five fresh scoring-only processes, 20 repetitions per query/variant/dimension per process. Peak RSS (`/usr/bin/time -l`, bytes on macOS): median 31,326,208 B, range 30,834,688–32,423,936 B. These runs retain f32 reference vectors and measure the whole harness, not isolated q4 search.
+
+The machine was shared with unrelated builds/benchmarks (load averages 16.54/20.91/23.16 at gate acquisition; 18 logical CPUs). Timing ranges are descriptive; no concurrency or compiler tuning was attempted. A separate one-second inference profile located work inside ONNX Runtime attention/matrix operations; it was taken before scoring timings. The measured scoring path scans all 280 images and sorts candidates; no engine I/O is involved.
+
+All 480 query/variant/dimension metric rows and aggregate shares were independently recomputed from committed labels and result rankings. All five scoring runs produced identical rankings. Each scoring run rechecked every photo hash. The fetcher was also checked for valid cached input, corrupt bytes, missing files and unapproved licences, including zero network access in verification mode.
+
+The P1 scan bar and the per-dimension clipping bar fail at both dimensions. Quality passes on this fixture: re-ranking 20 or 50 reproduces every baseline top-10 list. Keep f32 as the default; this experiment does not authorize P3 integration. Improving scan speed is tracked separately as Solo #4714. Any later adoption decision needs representative library sizes and the deferred engine measurements; this small, single-reviewer fixture provides no large-library guarantee.
+
+### Local competitor runs
+
+`bench.py compete` adapts pinned QMD, DigUp and LEANN installs to the same
+materialized `.txt` corpus, query IDs, first-document-occurrence collapse and
+`ir_measures` scoring described above. It never provisions software or models.
+The aggregate/provenance file is `docs/benchmarks/head-to-head.toml`; only completed,
+scored runs belong there as **measured on Seyk's harness**. Published vendor or
+model scores are a separate comparison.
+
+#### Measured results
+
+Measured on 2026-10-14–16 with clean adapter commit
+`b2c13ec5eb5d90befc65b3bffc3a9ea0b3ea73c7`. The table compares complete tool
+configurations, including their different models and native chunking. All use
+the same materialized corpora, query sets and scoring. Each configuration has
+one evaluation pass; QMD's stochastic expansion can vary on another pass.
+
+A later cleanup-only fix terminates surviving process-group children even when
+their leader has exited. The 18 measurements retain the commit above; this fix
+does not change retrieval, ranking, scoring or their recorded provenance.
+
+| Tool / mode | SciFact nDCG@10 | NFCorpus nDCG@10 | IRPAPERS text nDCG@10 |
+|---|---:|---:|---:|
+| QMD vector | 0.718541 | 0.376507 | 0.447891 |
+| QMD hybrid | 0.679850 | 0.368419 | 0.445633 |
+| QMD full (reranker) | 0.695797 | 0.380972 | 0.465203 |
+| DigUp hybrid | 0.800734 | 0.370653 | 0.682180 |
+| LEANN Contriever | 0.651517 | 0.318308 | 0.570307 |
+
+QMD's native lexical run is reported separately as a diagnostic footnote.[^qmd-native-and]
+
+The [aggregate manifest](benchmarks/head-to-head.toml) records all 18 completed
+configurations, query/result-depth counts, model and install hashes, dataset
+pins, hardware paths and timings. Timings are operational context from single
+passes and bounded restarts, not replicated speed comparisons. Comparative speed
+is inconclusive. No dataset text, query text, ranked rows or document maps are
+included.
+
+The adapter currently requires macOS. Every indexer and query worker, including
+children, runs under `sandbox-exec` with `scripts/bench/offline.sb`. External
+network access is denied; localhost is allowed for LEANN's local ZMQ embedding
+process. `offline-check` proves that numeric external TCP fails with EPERM/EACCES
+and localhost succeeds. Cloud API keys, proxy settings and service endpoints are
+not inherited. HF offline flags are additional guards, not the isolation proof.
+
+Installs live in `~/.cache/seyk-bench/competitors`: QMD 2.8.3 in `qmd-install`
+(`npm install --prefix qmd-install @tobilu/qmd@2.8.3`); LEANN 0.3.8 in `leann-env`
+(`uv venv --python 3.12 leann-env`, then
+`uv pip install --python leann-env/bin/python leann==0.3.8`); and the DigUp source
+at commit `f509c329e0032fbee4d945e1edbdbca7d94af50f` in `digup`.
+DigUp uses its `scripts/build-llama.sh` (build parallelism limited to two) followed
+by `swift build -c release --product digup -j 2`. Its llama.cpp pin is
+`4d756bc72bf00a4aacf410ae15a2d315f3db400d` plus the upstream no-logits patch.
+All three tools' code is MIT; model terms are recorded separately.
+
+Provision the files listed in the aggregate file under `qmd-models`, `digup-models`
+and `leann-models`. The local `competitors/model-provenance.json` records each
+`tool`, `repository`, `revision`, `file`, `bytes`, `sha256`, and `license`.
+Keep QMD's npm lockfile and `uv pip freeze` output in
+`competitors/leann-requirements.txt`. Before each phase, the adapter checks the
+installed version and every model's size/hash, and fingerprints the install lock
+or DigUp binary. Results also record platform, CPU, load, hardware path, indexing
+duration and per-query wall time. Model provisioning is explicitly separate from
+running this adapter.
+
+```bash
+export UV_CACHE_DIR="$HOME/.cache/seyk-bench/competitors/harness-uv"
+uv run --locked --python 3.12 scripts/bench/bench.py offline-check
+uv run --locked --python 3.12 scripts/bench/bench.py fetch scifact
+uv run --locked --python 3.12 scripts/bench/bench.py materialize scifact
+# Hold seyk-local-gate for each bounded index/query phase.
+uv run --locked --python 3.12 scripts/bench/bench.py compete qmd scifact \
+  --mode vector --phase index --label comparison
+uv run --locked --python 3.12 scripts/bench/bench.py compete qmd scifact \
+  --mode vector --phase query --label comparison
+# Repeat the identical query command until it reports the completed .jsonl.
+# Then score the exact output filename:
+uv run --locked --python 3.12 scripts/bench/bench.py score scifact \
+  ~/.cache/seyk-bench/runs/scifact/qmd-vector-comparison.jsonl
+```
+
+Queries checkpoint after 50 by default (`--max-queries`), or at the phase time
+budget (at most 3,000 seconds plus one bounded query). Resumption requires the
+same commit, dirty state, models, install fingerprint and dataset manifest, and
+an exact prefix of the query list. A `.partial` file is never scored. Use a new
+label for a new configuration. Keep the code unchanged while a run is in progress.
+
+QMD's modes are `bm25` (SDK `searchLex`), `vector` (`searchVector`), `hybrid`
+(native query expansion and RRF with reranking disabled), and `full` (native
+query expansion, RRF and reranking). The latter two request 200 candidates/results;
+the pinned engine's internal 20-hit retrieval per signal remains unchanged.
+Short rankings are retained and reported, not padded or refilled. Vector indexing
+uses QMD's regex chunker and Metal. BM25 uses CPU and should get its own label if
+measuring lexical-only index time. Vector, hybrid and full can share the vector
+index, with separate run files. Full and hybrid use the scorer's `hybrid` slot;
+`competitor_mode` and the run ID distinguish them. Score these files separately.
+QMD's native query expansion samples with temperature 0.7, top-p 0.8 and top-k
+20, so repeat runs can vary. When hybrid and full share an index, run hybrid
+first: full then reuses the cached expansions. Their query times consequently
+reflect different cache states; they are not an isolated reranker latency test.
+
+DigUp's `hybrid` mode uses its stock `index --include-datasets` and persistent
+`search-service`, with `limit=200`, meaning search enabled and prefix completion
+disabled. Its index must contain every corpus file, with no pending/unfinished
+files. A silent keyword fallback is an error. LEANN's `contriever` mode explicitly
+selects local Contriever with its stock HNSW CLI ingestion/chunking and persistent
+search API with PyTorch MPS embedding; Contriever is not the current macOS CLI
+default (MiniLM is). HNSW traversal remains on CPU.
+Its embedding process is started inside the sandbox, without reusing a daemon.
+LEANN receives `--include-hidden --file-types .txt` because its directory reader
+otherwise filters files under the harness's `.cache` ancestor. The adapter first
+checks that the corpus contains exactly the manifest's files, then verifies that
+every file appears in the built passage metadata. The reported index time excludes
+this post-build integrity check. LEANN uses one thread for HNSW and CPU
+OpenMP/BLAS pools: the initial multi-thread CPU configuration crashed in `libomp` during model
+initialization, matching the stack in this [upstream PyTorch/Faiss issue](https://github.com/pytorch/pytorch/issues/149201).
+Both the one-thread CPU fallback and the selected MPS configuration passed
+offline indexing and retrieval. Reported runs use MPS with the native FP16 default;
+the timings describe this configuration, not maximum LEANN throughput.
+
+Mapping uses the opaque corpus filename, never QMD's content-derived docid.
+Unexpected paths, unknown document keys, invalid scores or incomplete indexing
+fail the run. The scoring formula is unchanged. The Seyk-specific SciFact BM25
+sanity interval does not apply to another engine's lexical score.
+
+After scoring and preserving aggregates/provenance, delete your generated query
+rows, run rows, competitor indexes and harness uv cache. When datasets are shared,
+retain raw downloads, corpora and document maps until the orchestrator confirms
+all consumers are finished. Keep removable tool/model installs until their removal
+is authorized. Do not delete another worker's artifacts.
+
+[^qmd-native-and]: **Native AND lexical diagnostic:** scifact: 0.045448, nfcorpus: 0.202307, irpapers: 0.011111. Empty rankings: 283/300, 136/323, 175/180 queries, respectively. Pinned QMD 2.8.3 joins positive query terms with `AND`; these scores are not a headline comparison of lexical quality. Its [documented lexical grammar](https://github.com/tobi/qmd/blob/facd35e01359e59d938bc9418e93fb9318addee3/docs/SYNTAX.md) has no any-term option. The documented natural-query pipeline combines expansion with lexical/vector retrieval and is represented by hybrid/full above. Query terms were not rewritten or removed.

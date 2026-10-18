@@ -1,0 +1,679 @@
+[
+  {
+    "id": "q01",
+    "text": "A photograph of a dog.",
+    "relevant": {
+      "dog-01": 2,
+      "dog-02": 2,
+      "dog-03": 2,
+      "dog-04": 2,
+      "dog-05": 2,
+      "dog-06": 2,
+      "dog-07": 2,
+      "dog-08": 2,
+      "dog-09": 2,
+      "dog-10": 2
+    }
+  },
+  {
+    "id": "q02",
+    "text": "A dog outside with mountains in the background.",
+    "relevant": {
+      "dog-01": 2
+    }
+  },
+  {
+    "id": "q03",
+    "text": "A photograph of a domestic cat.",
+    "relevant": {
+      "cat-01": 2,
+      "cat-02": 2,
+      "cat-03": 2
+    }
+  },
+  {
+    "id": "q04",
+    "text": "A close-up of a cat with blue eyes.",
+    "relevant": {
+      "cat-01": 2
+    }
+  },
+  {
+    "id": "q05",
+    "text": "Live horses standing or grazing outdoors.",
+    "relevant": {
+      "horse-01": 2,
+      "horse-05": 2,
+      "horse-06": 2,
+      "horse-07": 2,
+      "horse-08": 2,
+      "horse-09": 2,
+      "horse-10": 2,
+      "horse-04": 1
+    }
+  },
+  {
+    "id": "q06",
+    "text": "A white horse with dark patches on its coat.",
+    "relevant": {
+      "horse-10": 2
+    }
+  },
+  {
+    "id": "q07",
+    "text": "Cows in a field.",
+    "relevant": {
+      "cow-01": 2,
+      "cow-02": 2,
+      "cow-03": 2,
+      "cow-04": 2,
+      "cow-07": 2
+    }
+  },
+  {
+    "id": "q08",
+    "text": "Cattle lying down on dry ground.",
+    "relevant": {
+      "cow-04": 2
+    }
+  },
+  {
+    "id": "q09",
+    "text": "A living elephant outdoors.",
+    "relevant": {
+      "elephant-01": 2,
+      "elephant-04": 2,
+      "elephant-05": 2,
+      "elephant-08": 2,
+      "elephant-03": 1
+    }
+  },
+  {
+    "id": "q10",
+    "text": "An elephant standing in front of a temple.",
+    "relevant": {
+      "elephant-05": 2
+    }
+  },
+  {
+    "id": "q11",
+    "text": "A photograph of a butterfly.",
+    "relevant": {
+      "butterfly-01": 2,
+      "butterfly-02": 2,
+      "butterfly-03": 2,
+      "butterfly-05": 2,
+      "butterfly-06": 2,
+      "butterfly-07": 2,
+      "butterfly-08": 2,
+      "butterfly-09": 2,
+      "flower-01": 2
+    }
+  },
+  {
+    "id": "q12",
+    "text": "A butterfly feeding on a flower.",
+    "relevant": {
+      "butterfly-01": 2,
+      "butterfly-07": 2,
+      "flower-01": 2
+    }
+  },
+  {
+    "id": "q13",
+    "text": "A close-up photograph of flowers.",
+    "relevant": {
+      "flower-01": 2,
+      "flower-02": 2,
+      "flower-03": 2,
+      "flower-04": 2,
+      "flower-07": 2,
+      "flower-08": 2,
+      "flower-09": 2,
+      "flower-10": 2,
+      "butterfly-01": 1,
+      "butterfly-07": 1
+    }
+  },
+  {
+    "id": "q14",
+    "text": "A pink flower against a dark green background.",
+    "relevant": {
+      "flower-04": 2,
+      "flower-10": 2
+    }
+  },
+  {
+    "id": "q15",
+    "text": "Mushrooms growing outdoors.",
+    "relevant": {
+      "mushroom-02": 2,
+      "mushroom-03": 2,
+      "mushroom-04": 2,
+      "mushroom-06": 2,
+      "mushroom-08": 2,
+      "mushroom-09": 2,
+      "mushroom-10": 2
+    }
+  },
+  {
+    "id": "q16",
+    "text": "A red mushroom cap covered in white spots.",
+    "relevant": {
+      "mushroom-02": 2
+    }
+  },
+  {
+    "id": "q17",
+    "text": "A view into a forest with trees and green vegetation.",
+    "relevant": {
+      "forest-01": 2,
+      "forest-02": 2,
+      "forest-03": 2,
+      "forest-05": 2,
+      "forest-07": 2,
+      "forest-08": 2,
+      "forest-09": 2,
+      "forest-10": 2,
+      "mountain-06": 1
+    }
+  },
+  {
+    "id": "q18",
+    "text": "Sunlight shining through a canopy of green leaves.",
+    "relevant": {
+      "forest-03": 2
+    }
+  },
+  {
+    "id": "q19",
+    "text": "Water cascading down a waterfall.",
+    "relevant": {
+      "waterfall-01": 2,
+      "waterfall-02": 2,
+      "waterfall-03": 2,
+      "waterfall-04": 2,
+      "waterfall-05": 2,
+      "waterfall-06": 2,
+      "waterfall-07": 2,
+      "waterfall-08": 2,
+      "waterfall-09": 2,
+      "waterfall-10": 1
+    }
+  },
+  {
+    "id": "q20",
+    "text": "A wide waterfall dropping in several parallel streams.",
+    "relevant": {
+      "waterfall-07": 2,
+      "waterfall-02": 1,
+      "waterfall-03": 1
+    }
+  },
+  {
+    "id": "q21",
+    "text": "A landscape with mountains or rugged rocky hills.",
+    "relevant": {
+      "mountain-01": 2,
+      "mountain-04": 2,
+      "mountain-06": 2,
+      "mountain-07": 2,
+      "mountain-08": 2,
+      "mountain-09": 2,
+      "mountain-10": 2,
+      "horse-09": 2,
+      "dog-01": 1,
+      "mountain-03": 1,
+      "beach-06": 1,
+      "sailboat-07": 1
+    }
+  },
+  {
+    "id": "q22",
+    "text": "Green northern lights in the sky above dark mountains.",
+    "relevant": {
+      "mountain-03": 2
+    }
+  },
+  {
+    "id": "q23",
+    "text": "A sandy beach beside the sea.",
+    "relevant": {
+      "beach-01": 2,
+      "beach-02": 2,
+      "beach-03": 2,
+      "beach-04": 2,
+      "beach-06": 2,
+      "beach-07": 2,
+      "beach-08": 2,
+      "beach-09": 2,
+      "beach-10": 2,
+      "turtle-03": 1,
+      "turtle-07": 1
+    }
+  },
+  {
+    "id": "q24",
+    "text": "A beach photographed at sunset.",
+    "relevant": {
+      "beach-03": 2
+    }
+  },
+  {
+    "id": "q25",
+    "text": "A lighthouse beside the coast.",
+    "relevant": {
+      "lighthouse-01": 2,
+      "lighthouse-02": 2,
+      "lighthouse-03": 2,
+      "lighthouse-04": 2,
+      "lighthouse-05": 2,
+      "lighthouse-07": 2,
+      "lighthouse-08": 2,
+      "lighthouse-09": 2,
+      "lighthouse-10": 2
+    }
+  },
+  {
+    "id": "q26",
+    "text": "A red and white striped lighthouse.",
+    "relevant": {
+      "lighthouse-02": 2,
+      "lighthouse-03": 2,
+      "lighthouse-10": 2,
+      "lighthouse-04": 1
+    }
+  },
+  {
+    "id": "q27",
+    "text": "A bridge crossing water.",
+    "relevant": {
+      "bridge-01": 2,
+      "bridge-02": 2,
+      "bridge-08": 2,
+      "beach-09": 1
+    }
+  },
+  {
+    "id": "q28",
+    "text": "An illuminated bridge and city at night.",
+    "relevant": {
+      "bridge-02": 2
+    }
+  },
+  {
+    "id": "q29",
+    "text": "Bicycles parked or being ridden outdoors.",
+    "relevant": {
+      "bicycle-01": 2,
+      "bicycle-02": 2,
+      "bicycle-03": 2,
+      "bicycle-04": 2,
+      "bicycle-05": 2,
+      "bicycle-06": 2,
+      "bicycle-07": 2,
+      "bicycle-08": 2,
+      "bicycle-10": 2
+    }
+  },
+  {
+    "id": "q30",
+    "text": "A bicycle in the snow.",
+    "relevant": {
+      "bicycle-01": 2,
+      "bicycle-02": 2
+    }
+  },
+  {
+    "id": "q31",
+    "text": "A train on railway tracks.",
+    "relevant": {
+      "train-01": 2,
+      "train-02": 2,
+      "train-03": 2,
+      "train-04": 2,
+      "train-05": 2,
+      "train-06": 2,
+      "train-07": 2,
+      "train-08": 2,
+      "train-09": 2,
+      "train-10": 2
+    }
+  },
+  {
+    "id": "q32",
+    "text": "A freight train hauling a long line of cars.",
+    "relevant": {
+      "train-01": 2
+    }
+  },
+  {
+    "id": "q33",
+    "text": "An airplane flying in the sky.",
+    "relevant": {
+      "airplane-01": 2,
+      "airplane-02": 2,
+      "airplane-04": 2,
+      "airplane-06": 2,
+      "airplane-07": 2
+    }
+  },
+  {
+    "id": "q34",
+    "text": "A view of an airplane wing from a passenger window.",
+    "relevant": {
+      "airplane-03": 2
+    }
+  },
+  {
+    "id": "q35",
+    "text": "A sailboat on the water.",
+    "relevant": {
+      "sailboat-02": 2,
+      "sailboat-03": 2,
+      "sailboat-05": 2,
+      "sailboat-06": 2,
+      "sailboat-07": 2,
+      "sailboat-08": 2,
+      "sailboat-09": 2,
+      "beach-02": 1,
+      "sailboat-10": 1
+    }
+  },
+  {
+    "id": "q36",
+    "text": "A boat with a raised white sail.",
+    "relevant": {
+      "sailboat-03": 2,
+      "sailboat-06": 2,
+      "sailboat-07": 2,
+      "sailboat-08": 2,
+      "sailboat-02": 1
+    }
+  },
+  {
+    "id": "q37",
+    "text": "A guitar, including close-up details of the instrument.",
+    "relevant": {
+      "guitar-01": 2,
+      "guitar-02": 2,
+      "guitar-03": 2,
+      "guitar-04": 2,
+      "guitar-05": 2,
+      "guitar-06": 2,
+      "guitar-07": 2,
+      "guitar-08": 2,
+      "guitar-09": 2,
+      "guitar-10": 2
+    }
+  },
+  {
+    "id": "q38",
+    "text": "A person playing an acoustic guitar.",
+    "relevant": {
+      "guitar-01": 2,
+      "guitar-04": 2
+    }
+  },
+  {
+    "id": "q39",
+    "text": "A violin, including close-up views of the instrument.",
+    "relevant": {
+      "violin-01": 2,
+      "violin-02": 2,
+      "violin-04": 2,
+      "violin-05": 2,
+      "violin-07": 2,
+      "violin-08": 2,
+      "violin-09": 2
+    }
+  },
+  {
+    "id": "q40",
+    "text": "A violin held in a person's hands.",
+    "relevant": {
+      "violin-04": 2,
+      "violin-05": 2
+    }
+  },
+  {
+    "id": "q41",
+    "text": "Edible apples on a tree or ready to eat.",
+    "relevant": {
+      "apple-fruit-01": 2,
+      "apple-fruit-02": 2,
+      "apple-fruit-03": 2,
+      "apple-fruit-05": 2,
+      "apple-fruit-06": 2,
+      "apple-fruit-07": 2,
+      "apple-fruit-08": 2,
+      "apple-fruit-09": 2
+    }
+  },
+  {
+    "id": "q42",
+    "text": "A wooden barrel full of apples.",
+    "relevant": {
+      "apple-fruit-08": 2
+    }
+  },
+  {
+    "id": "q43",
+    "text": "Pizza topped with cheese and other ingredients.",
+    "relevant": {
+      "pizza-01": 2,
+      "pizza-02": 2,
+      "pizza-03": 2,
+      "pizza-04": 2,
+      "pizza-05": 2,
+      "pizza-06": 2,
+      "pizza-07": 2,
+      "pizza-08": 2,
+      "pizza-09": 2,
+      "pizza-10": 2
+    }
+  },
+  {
+    "id": "q44",
+    "text": "A rectangular pizza on a tray or board.",
+    "relevant": {
+      "pizza-04": 2,
+      "pizza-05": 2,
+      "pizza-07": 2,
+      "pizza-09": 2
+    }
+  },
+  {
+    "id": "q45",
+    "text": "Coffee in a cup.",
+    "relevant": {
+      "coffee-cup-01": 2,
+      "coffee-cup-02": 2,
+      "coffee-cup-03": 2,
+      "coffee-cup-04": 2,
+      "coffee-cup-05": 2,
+      "coffee-cup-06": 2,
+      "coffee-cup-07": 2,
+      "coffee-cup-08": 2,
+      "coffee-cup-09": 2,
+      "coffee-cup-10": 2,
+      "pizza-10": 1
+    }
+  },
+  {
+    "id": "q46",
+    "text": "A cup of black coffee surrounded by coffee beans.",
+    "relevant": {
+      "coffee-cup-02": 2,
+      "coffee-cup-03": 2,
+      "coffee-cup-08": 2
+    }
+  },
+  {
+    "id": "q47",
+    "text": "The exterior of a castle or stone fortress.",
+    "relevant": {
+      "castle-01": 2,
+      "castle-02": 2,
+      "castle-04": 2,
+      "castle-05": 2,
+      "castle-06": 2,
+      "castle-07": 2,
+      "castle-08": 2,
+      "castle-09": 2,
+      "castle-10": 2
+    }
+  },
+  {
+    "id": "q48",
+    "text": "An ornate white castle with tall pointed towers.",
+    "relevant": {
+      "castle-01": 2,
+      "castle-08": 2,
+      "castle-09": 1
+    }
+  },
+  {
+    "id": "q49",
+    "text": "A traditional windmill with sails or blades.",
+    "relevant": {
+      "windmill-01": 2,
+      "windmill-02": 2,
+      "windmill-04": 2,
+      "windmill-05": 2,
+      "windmill-06": 2,
+      "windmill-07": 2,
+      "windmill-09": 2,
+      "windmill-10": 1
+    }
+  },
+  {
+    "id": "q50",
+    "text": "White wind turbines standing beside fields.",
+    "relevant": {
+      "hot-air-balloon-06": 2
+    }
+  },
+  {
+    "id": "q51",
+    "text": "An ornamental fountain in a public space.",
+    "relevant": {
+      "fountain-01": 2,
+      "fountain-02": 2,
+      "fountain-03": 2,
+      "fountain-05": 2,
+      "fountain-07": 2,
+      "fountain-09": 2,
+      "fountain-10": 2
+    }
+  },
+  {
+    "id": "q52",
+    "text": "A tall jet of water spraying into the air.",
+    "relevant": {
+      "fountain-07": 2,
+      "fountain-09": 2
+    }
+  },
+  {
+    "id": "q53",
+    "text": "A living penguin.",
+    "relevant": {
+      "penguin-02": 2,
+      "penguin-03": 2,
+      "penguin-04": 2,
+      "penguin-06": 2,
+      "penguin-08": 2,
+      "penguin-09": 2,
+      "penguin-10": 2
+    }
+  },
+  {
+    "id": "q54",
+    "text": "A penguin standing upright on the ground.",
+    "relevant": {
+      "penguin-02": 2,
+      "penguin-08": 2,
+      "penguin-10": 2,
+      "penguin-09": 1
+    }
+  },
+  {
+    "id": "q55",
+    "text": "A sea turtle.",
+    "relevant": {
+      "turtle-01": 2,
+      "turtle-02": 2,
+      "turtle-03": 2,
+      "turtle-04": 2,
+      "turtle-05": 2,
+      "turtle-06": 2,
+      "turtle-07": 2,
+      "turtle-08": 2,
+      "turtle-09": 2,
+      "turtle-10": 2
+    }
+  },
+  {
+    "id": "q56",
+    "text": "A sea turtle swimming underwater.",
+    "relevant": {
+      "turtle-06": 2,
+      "turtle-08": 2,
+      "turtle-09": 2,
+      "turtle-01": 1
+    }
+  },
+  {
+    "id": "q57",
+    "text": "A farm tractor.",
+    "relevant": {
+      "tractor-01": 2,
+      "tractor-02": 2,
+      "tractor-03": 2,
+      "tractor-04": 2,
+      "tractor-05": 2,
+      "tractor-06": 2,
+      "tractor-07": 2,
+      "tractor-08": 2,
+      "tractor-09": 2,
+      "tractor-10": 2
+    }
+  },
+  {
+    "id": "q58",
+    "text": "A tractor working in a cultivated field.",
+    "relevant": {
+      "tractor-02": 2,
+      "tractor-03": 2,
+      "tractor-04": 2,
+      "tractor-05": 2,
+      "tractor-06": 2,
+      "tractor-08": 2,
+      "tractor-09": 2,
+      "tractor-10": 2
+    }
+  },
+  {
+    "id": "q59",
+    "text": "Hot air balloons in the sky.",
+    "relevant": {
+      "hot-air-balloon-08": 2,
+      "hot-air-balloon-10": 2
+    }
+  },
+  {
+    "id": "q60",
+    "text": "An aerial view of fields, lakes and towns.",
+    "relevant": {
+      "hot-air-balloon-01": 2,
+      "hot-air-balloon-02": 2,
+      "hot-air-balloon-03": 2,
+      "hot-air-balloon-04": 2,
+      "hot-air-balloon-05": 2,
+      "hot-air-balloon-07": 2,
+      "hot-air-balloon-09": 2,
+      "sailboat-10": 1
+    }
+  }
+]
