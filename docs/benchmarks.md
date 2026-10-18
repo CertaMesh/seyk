@@ -506,7 +506,7 @@ full measured results, source links and setup differences.
 
 This offline experiment compares the P1 Photo Anchor codec with exact f32 image
 vectors. It does not change the engine, cache, schema, ranking, or f32 default.
-The q4 scan optimization is a separate task (Solo #4714).
+The q4 scan optimization remains separate work.
 
 ### Reproduce
 
@@ -643,7 +643,7 @@ The machine was shared with unrelated builds/benchmarks (load averages 16.54/20.
 
 All 480 query/variant/dimension metric rows and aggregate shares were independently recomputed from committed labels and result rankings. All five scoring runs produced identical rankings. Each scoring run rechecked every photo hash. The fetcher was also checked for valid cached input, corrupt bytes, missing files and unapproved licences, including zero network access in verification mode.
 
-The P1 scan bar and the per-dimension clipping bar fail at both dimensions. Quality passes on this fixture: re-ranking 20 or 50 reproduces every baseline top-10 list. Keep f32 as the default; this experiment does not authorize P3 integration. Improving scan speed is tracked separately as Solo #4714. Any later adoption decision needs representative library sizes and the deferred engine measurements; this small, single-reviewer fixture provides no large-library guarantee.
+The P1 scan bar and the per-dimension clipping bar fail at both dimensions. Quality passes on this fixture: re-ranking 20 or 50 reproduces every baseline top-10 list. Keep f32 as the default; this experiment does not authorize P3 integration. Scan speed needs further work. Any later adoption decision needs representative library sizes and the deferred engine measurements; this small, single-reviewer fixture provides no large-library guarantee.
 
 ### Local competitor runs
 
@@ -772,8 +772,7 @@ sanity interval does not apply to another engine's lexical score.
 
 After scoring and preserving aggregates/provenance, delete your generated query
 rows, run rows, competitor indexes and harness uv cache. When datasets are shared,
-retain raw downloads, corpora and document maps until the orchestrator confirms
-all consumers are finished. Keep removable tool/model installs until their removal
+retain raw downloads, corpora and document maps until all consumers are finished. Keep removable tool/model installs until their removal
 is authorized. Do not delete another worker's artifacts.
 
 [^qmd-native-and]: **Native AND lexical diagnostic:** scifact: 0.045448, nfcorpus: 0.202307, irpapers: 0.011111. Empty rankings: 283/300, 136/323, 175/180 queries, respectively. Pinned QMD 2.8.3 joins positive query terms with `AND`; these scores are not a headline comparison of lexical quality. Its [documented lexical grammar](https://github.com/tobi/qmd/blob/facd35e01359e59d938bc9418e93fb9318addee3/docs/SYNTAX.md) has no any-term option. The documented natural-query pipeline combines expansion with lexical/vector retrieval and is represented by hybrid/full above. Query terms were not rewritten or removed.

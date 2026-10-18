@@ -13,9 +13,8 @@ from sentence_transformers import SentenceTransformer
 out = sys.argv[1]
 m = SentenceTransformer("google/embeddinggemma-2", model_kwargs={"dtype": torch.float32},
                         config_kwargs={"vision_config": None, "audio_config": None})
-queries = ["Where did I write about the protagonist becoming like his father?", "tomato soup recipe", "how does redis caching work"]
-docs = [("father", "He notices himself repeating the same gestures his father made, the same sigh before speaking."),
-        (None, "Simmer tomatoes with garlic and basil for twenty minutes, then blend."),
+queries = ["tomato soup recipe", "how does redis caching work"]
+docs = [(None, "Simmer tomatoes with garlic and basil for twenty minutes, then blend."),
         ("Redis", "Redis keeps hot keys in memory so repeated reads avoid the database.")]
 tok = m.tokenizer
 res = {"queries": [], "docs": []}
