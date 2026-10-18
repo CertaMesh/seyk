@@ -1,6 +1,7 @@
 //! Gemma 4 audio preprocessing and the optional pinned q8 encoder.
 use super::*;
 use rustfft::{FftPlanner, num_complex::Complex};
+use std::io::Read;
 use std::sync::OnceLock;
 
 /// Version of the reference feature and token policy.
@@ -12,69 +13,173 @@ pub const FILES: [&str; 2] = [
 ];
 
 pub(super) struct AudioEncoder {
-    identity: OnceLock<String>,
+    snapshot: OnceLock<AudioSnapshot>,
     identity_init: Mutex<()>,
     dir: PathBuf,
     session: Mutex<Option<Session>>,
     #[cfg(test)]
     hash_passes: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
+    session_loads: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
     bytes_read: std::sync::atomic::AtomicUsize,
 }
 impl AudioEncoder {
     pub fn new(dir: &Path) -> Self {
         Self {
-            identity: OnceLock::new(),
+            snapshot: OnceLock::new(),
             identity_init: Mutex::new(()),
             dir: dir.into(),
             session: Mutex::new(None),
             #[cfg(test)]
             hash_passes: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
+            session_loads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
             bytes_read: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
-    /// Publish only a complete identity. Errors leave initialization retryable.
+    /// The first successful audio use pins both identity and inference bytes.
     pub fn identity(&self) -> Result<&str> {
-        if let Some(identity) = self.identity.get() {
-            return Ok(identity);
-        }
-        let _guard = self.identity_init.lock().map_err(ort_err)?;
-        if let Some(identity) = self.identity.get() {
-            return Ok(identity);
-        }
-        let identity = self.hash_files()?;
-        Ok(self.identity.get_or_init(|| identity))
+        Ok(&self.snapshot()?.identity)
     }
 
-    fn hash_files(&self) -> Result<String> {
-        use std::io::Read;
+    fn snapshot(&self) -> Result<&AudioSnapshot> {
+        self.prepare_with(|_, _| Ok(()))
+    }
+
+    /// Errors publish nothing; the next request can retry the complete capture.
+    fn prepare_with(
+        &self,
+        mut check: impl FnMut(&Path, CapturePoint) -> Result<()>,
+    ) -> Result<&AudioSnapshot> {
+        if let Some(snapshot) = self.snapshot.get() {
+            return Ok(snapshot);
+        }
+        let _guard = self.identity_init.lock().map_err(ort_err)?;
+        if let Some(snapshot) = self.snapshot.get() {
+            return Ok(snapshot);
+        }
         #[cfg(test)]
         self.hash_passes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut hash = blake3::Hasher::new();
         hash.update(FEATURE_POLICY.as_bytes());
-        for name in FILES {
-            hash.update(name.as_bytes());
+        let mut assets = [Vec::new(), Vec::new()];
+        for (name, bytes) in FILES.into_iter().zip(&mut assets) {
             let path = self.dir.join(name);
-            let mut file = regular_audio_file(&path)?;
-            let mut buf = [0; 65536];
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .map_err(|error| io_error(&path, error))?;
-                if n == 0 {
-                    break;
-                }
-                #[cfg(test)]
-                self.bytes_read
-                    .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-                hash.update(&buf[..n]);
-            }
+            *bytes = capture_asset(&path, &mut check)?;
+            #[cfg(test)]
+            self.bytes_read
+                .fetch_add(bytes.len(), std::sync::atomic::Ordering::Relaxed);
+            hash.update(name.as_bytes());
+            hash.update(bytes);
         }
-        Ok(hash.finalize().to_hex().to_string())
+        let [graph, external] = assets;
+        let snapshot = AudioSnapshot {
+            identity: hash.finalize().to_hex().to_string(),
+            graph,
+            external,
+        };
+        Ok(self.snapshot.get_or_init(|| snapshot))
     }
+
+    fn with_session<T>(
+        &self,
+        threads: Option<usize>,
+        run: impl FnOnce(&mut Session) -> Result<T>,
+    ) -> Result<T> {
+        let snapshot = self.snapshot()?;
+        let mut state = self.session.lock().map_err(ort_err)?;
+        if state.is_none() {
+            *state = Some(snapshot.session(threads)?);
+            #[cfg(test)]
+            self.session_loads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        run(state.as_mut().expect("initialized"))
+    }
+}
+
+struct AudioSnapshot {
+    identity: String,
+    graph: Vec<u8>,
+    external: Vec<u8>,
+}
+impl AudioSnapshot {
+    fn session(&self, threads: Option<usize>) -> Result<Session> {
+        let mut builder = Session::builder()
+            .map_err(ort_err)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(ort_err)?;
+        if let Some(threads) = threads {
+            builder = builder.with_intra_threads(threads).map_err(ort_err)?;
+        }
+        // rc.13 owns this Cow in the builder, not in the returned Session.
+        // Keep the snapshot for retry, and the builder alive through commit.
+        // The q8 snapshot retains ~325 MiB; this clone adds ~325 MiB transiently.
+        builder = builder
+            .with_external_initializer_file_in_memory(
+                "audio_encoder_quantized.onnx_data",
+                std::borrow::Cow::Owned(self.external.clone()),
+            )
+            .map_err(ort_err)?;
+        builder.commit_from_memory(&self.graph).map_err(ort_err)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CapturePoint {
+    Opened,
+    Read,
+}
+
+fn capture_asset(
+    path: &Path,
+    check: &mut impl FnMut(&Path, CapturePoint) -> Result<()>,
+) -> Result<Vec<u8>> {
+    let mut file = regular_audio_file(path)?;
+    let before = file.metadata().map_err(|error| io_error(path, error))?;
+    let changed = || Error::Embedding(format!("audio encoder asset changed: {}", path.display()));
+    let capacity = usize::try_from(before.len())
+        .ok()
+        .and_then(|len| len.checked_add(1))
+        .ok_or_else(|| Error::Embedding("audio encoder asset is too large".into()))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|error| Error::Embedding(format!("cannot allocate audio snapshot: {error}")))?;
+    check(path, CapturePoint::Opened)?;
+    // Read at most the original length plus one sentinel byte, even if a
+    // concurrent writer keeps appending. Never publish a partial capture.
+    (&mut file)
+        .take(capacity as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| io_error(path, error))?;
+    check(path, CapturePoint::Read)?;
+    let after = file.metadata().map_err(|error| io_error(path, error))?;
+    if bytes.len() as u64 != before.len()
+        || before.len() != after.len()
+        || before.modified().map_err(|error| io_error(path, error))?
+            != after.modified().map_err(|error| io_error(path, error))?
+    {
+        return Err(changed());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (
+            before.dev(),
+            before.ino(),
+            before.ctime(),
+            before.ctime_nsec(),
+        ) != (after.dev(), after.ino(), after.ctime(), after.ctime_nsec())
+        {
+            return Err(changed());
+        }
+    }
+    Ok(bytes)
 }
 
 fn regular_audio_file(path: &Path) -> Result<std::fs::File> {
@@ -184,43 +289,12 @@ impl EmbeddingGemma2 {
         let audio = self.audio.as_ref().ok_or(Error::UnsupportedModality {
             modality: Modality::Audio,
         })?;
-        let identity = audio.identity()?;
         let mut mask = pre.mask.clone();
         for _ in 0..2 {
             mask = mask.iter().step_by(2).copied().collect();
         }
         let tokens = mask.iter().filter(|x| **x).count();
-        let features = {
-            let mut state = audio.session.lock().map_err(ort_err)?;
-            if state.is_none() {
-                // Recheck the weights identified on first audio use, even when
-                // a local directory changes before lazy session loading.
-                if audio.hash_files()? != identity {
-                    return Err(Error::Embedding(
-                        "audio weights changed; reload the model before indexing".into(),
-                    ));
-                }
-                for name in FILES {
-                    if !audio.dir.join(name).is_file() {
-                        return Err(Error::ModelNotFound(
-                            "audio encoder is missing; run seyk model download --audio".into(),
-                        ));
-                    }
-                }
-                let dir = onnx_files_without_symlinks(
-                    &audio.dir,
-                    FILES.iter().map(|s| s.to_string()).collect(),
-                    identity,
-                )?;
-                *state = Some(
-                    session(
-                        &dir.join("audio_encoder_quantized.onnx"),
-                        self.config.threads,
-                    )
-                    .map_err(|_| Error::Embedding("cannot load audio encoder".into()))?,
-                );
-            }
-            let s = state.as_mut().expect("initialized");
+        let features = audio.with_session(self.config.threads, |s| {
             let out = s.run(ort::inputs![
                 "input_features" => Tensor::from_array(([1usize,pre.mask.len(),128],pre.values)).map_err(ort_err)?,
                 "input_features_mask" => Tensor::from_array(([1usize,pre.mask.len()],pre.mask)).map_err(ort_err)?,
@@ -233,8 +307,8 @@ impl EmbeddingGemma2 {
                     "audio shape mismatch {shape:?} vs {tokens}"
                 )));
             }
-            data.to_vec()
-        };
+            Ok(data.to_vec())
+        })?;
         let ids = self
             .template_token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(tokens)))?
             .into_iter()
@@ -286,16 +360,16 @@ mod identity_tests {
         let dir = tempfile::tempdir().unwrap();
         let encoder = AudioEncoder::new(dir.path());
         assert!(matches!(encoder.identity(), Err(Error::ModelNotFound(_))));
-        assert!(encoder.identity.get().is_none());
+        assert!(encoder.snapshot.get().is_none());
         files(dir.path());
         std::fs::remove_file(dir.path().join(FILES[1])).unwrap();
         assert!(encoder.identity().is_err());
-        assert!(encoder.identity.get().is_none());
+        assert!(encoder.snapshot.get().is_none());
         // A readable graph followed by an unreadable asset must not publish a
         // partial digest. A directory must be rejected before reading.
         std::fs::create_dir(dir.path().join(FILES[1])).unwrap();
         assert!(encoder.identity().is_err());
-        assert!(encoder.identity.get().is_none());
+        assert!(encoder.snapshot.get().is_none());
         std::fs::remove_dir(dir.path().join(FILES[1])).unwrap();
         std::fs::write(dir.path().join(FILES[1]), b"weights-v1").unwrap();
         assert_eq!(encoder.identity().unwrap(), GOLDEN);
@@ -341,7 +415,7 @@ mod identity_tests {
                     assert!(
                         matches!(encoder.identity(), Err(Error::ModelNotFound(message)) if message.contains("not a regular file"))
                     );
-                    assert!(encoder.identity.get().is_none());
+                    assert!(encoder.snapshot.get().is_none());
                     std::fs::remove_file(&fifo).unwrap();
                     let bytes: &[u8] = if name == FILES[0] {
                         b"graph-v1"
@@ -370,7 +444,7 @@ mod identity_tests {
                 assert!(
                     matches!(encoder.identity(), Err(Error::ModelNotFound(message)) if message.contains("not a regular file"))
                 );
-                assert!(encoder.identity.get().is_none());
+                assert!(encoder.snapshot.get().is_none());
             }
         });
     }
@@ -423,8 +497,10 @@ mod identity_tests {
                 assert_eq!(metadata.ino(), after.ino());
             }
             assert_ne!(AudioEncoder::new(dir.path()).identity().unwrap(), GOLDEN);
-            // Keep the existing first-inference recheck against a pinned identity.
-            assert_ne!(original.hash_files().unwrap(), original.identity().unwrap());
+            assert_eq!(original.identity().unwrap(), GOLDEN);
+            let snapshot = original.snapshot().unwrap();
+            assert_eq!(snapshot.graph, b"graph-v1");
+            assert_eq!(snapshot.external, b"weights-v1");
         }
     }
 
@@ -448,6 +524,9 @@ mod identity_tests {
         );
         assert_eq!(audio.hash_passes.load(Ordering::Relaxed), 0);
         assert_eq!(audio.bytes_read.load(Ordering::Relaxed), 0);
-        assert!(audio.identity.get().is_none());
+        assert!(audio.snapshot.get().is_none());
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests;
