@@ -362,7 +362,13 @@ fn snapshot_rss_stages() {
         let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
         // SAFETY: info points to a writable, aligned buffer of exactly size bytes.
         let returned = unsafe {
-            libc::proc_pidinfo(pid, libc::PROC_PIDTASKINFO, 0, info.as_mut_ptr().cast(), size)
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
         };
         if returned != size {
             let error = std::io::Error::last_os_error();
