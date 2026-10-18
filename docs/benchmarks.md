@@ -103,10 +103,16 @@ Run the public retrieval pipeline below for `scifact`, `nfcorpus` and `irpapers`
 with `--dimension 256 --precision q8 --threads 2 --depth 200
 --modes hybrid,semantic,lexical`. Hold the project's shared local-gate lock during
 runs. Score the three files for each dataset together. The chart command defaults
-to `~/.cache/seyk-bench/results`; it picks the newest matching aggregate per
-dataset by modification time, with filename as the tie-breaker, for an explicit
-full commit SHA. It ignores other dimensions, precisions and ranking/depth
-settings, and rejects dirty, incomplete or inconsistent mode provenance.
+to `~/.cache/seyk-bench/results` and selects one aggregate per dataset for an
+explicit full commit SHA. Selection never uses file timestamps: several matching
+files are accepted only when their charted scores agree (the first by relative
+path is used); disagreeing duplicates are an error. It skips other dimensions,
+precisions and ranking/depth settings and older-schema files that lack those
+fields, and rejects dirty, incomplete or inconsistent mode provenance.
+The chart also draws the headline rows of the
+[competitor aggregate](benchmarks/head-to-head.toml) as a separate group labelled
+"measured on Seyk's harness"; diagnostic rows such as QMD's native AND lexical run
+appear as footnotes, not bars. Published scores use dashed bars.
 Use a dedicated result directory to reproduce an exact archived selection:
 
 ```bash
@@ -120,8 +126,9 @@ python3.12 -m unittest discover -s scripts/bench -p test_chart.py
 
 Rendering uses Python 3.11+ and its standard library only. The SVG uses a fixed
 0–1 axis, embeds light/dark styles and contains no timestamp or host-dependent
-content. Given the same selected inputs and caption arguments, output bytes are
-identical.
+content. It is 480 units wide so labels stay legible on a phone-width README.
+Given the same selected inputs and caption arguments, output bytes are
+identical; the test suite regenerates the committed chart and compares bytes.
 
 ## Reproduce
 

@@ -1,106 +1,180 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1190" viewBox="0 0 960 1190" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="1766" viewBox="0 0 480 1766" role="img" aria-labelledby="title desc">
 <title id="title">Seyk retrieval benchmarks: nDCG@10</title>
-<desc id="desc">Full dataset results. Seyk uses segmented documents. Muted bars are published results from different setups, not head-to-head measurements.</desc>
-<style>text{font-family:system-ui,-apple-system,Segoe UI,sans-serif;fill:#17212b;font-size:15px}.bg{fill:#fff}.muted{fill:#526170}.grid{stroke:#dce2e8}.hybrid{fill:#007f78}.semantic{fill:#326bc1}.lexical{fill:#91a9a7}.published{fill:#a0a7b0}.small{font-size:13px}.heading{font-size:20px;font-weight:650}@media(prefers-color-scheme:dark){text{fill:#eef2f6}.bg{fill:#111820}.muted{fill:#bac4ce}.grid{stroke:#35414e}.hybrid{fill:#42c7b9}.semantic{fill:#79a8ef}.lexical{fill:#849e9b}.published{fill:#79838f}}</style>
-<rect class="bg" width="960" height="1190" rx="12"/>
-<text x="28" y="38" class="heading" >Retrieval quality</text>
-<text x="28" y="64" class="muted" >nDCG@10 · higher is better · 0–1 scale</text>
-<text x="28" y="91" class="small" >Seyk 0.1.0 · a4a0eea63f74 · q8 · 256 dims · CPU</text>
-<text x="28" y="113" class="small muted" >Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2 inference threads</text>
-<text x="28" y="155" class="heading" >SciFact</text>
-<text x="28" y="178" class="small muted" >Seyk: segmented documents → resource ranking</text>
-<text x="28" y="221" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="205" width="451.920" height="23" rx="3" class="hybrid"/>
-<text x="916" y="222" class="" text-anchor="end">0.807</text>
-<text x="28" y="255" class="" >Seyk semantic</text>
-<rect x="302" y="239" width="460.275" height="23" rx="3" class="semantic"/>
-<text x="916" y="256" class="" text-anchor="end">0.822</text>
-<text x="28" y="289" class="" >Seyk lexical</text>
-<rect x="302" y="273" width="362.680" height="23" rx="3" class="lexical"/>
-<text x="916" y="290" class="" text-anchor="end">0.648</text>
+<desc id="desc">Full dataset results. Seyk uses segmented documents. Purple bars are other local tools measured on Seyk's harness with their own models and chunking. Dashed bars are published results from different setups, not head-to-head measurements.</desc>
+<style>text{font-family:system-ui,-apple-system,Segoe UI,sans-serif;fill:#17212b;font-size:16px}.bg{fill:#fff}.muted{fill:#526170}.grid{stroke:#dce2e8}.hybrid{fill:#007f78}.semantic{fill:#326bc1}.lexical{fill:#b45f06}.measured{fill:#8e3b8a}.published{fill:#e3e7eb;stroke:#6b7682;stroke-width:1.5;stroke-dasharray:4 3}.small{font-size:15px}.group{font-size:15px;font-weight:650}.heading{font-size:20px;font-weight:650}@media(prefers-color-scheme:dark){text{fill:#eef2f6}.bg{fill:#111820}.muted{fill:#bac4ce}.grid{stroke:#35414e}.hybrid{fill:#42c7b9}.semantic{fill:#79a8ef}.lexical{fill:#f2a65a}.measured{fill:#d68ad0}.published{fill:#2a333d;stroke:#8f99a5}}</style>
+<rect class="bg" width="480" height="1766" rx="12"/>
+<text x="20" y="36" class="heading">Retrieval quality</text>
+<text x="20" y="59" class="muted">nDCG@10 · higher is better · 0–1 scale</text>
+<text x="20" y="83" class="small">Seyk 0.1.0 · a4a0eea63f74 · q8 · 256 dims · CPU ·</text>
+<text x="20" y="103" class="small">segmented documents, ranked per resource</text>
+<text x="20" y="123" class="small muted">Apple M5 Max · 18 cores · 64 GiB · macOS 26.5 · 2</text>
+<text x="20" y="143" class="small muted">inference threads</text>
+<text x="20" y="192" class="heading">SciFact</text>
+<line x1="196" y1="202" x2="196" y2="618" class="grid"/>
+<line x1="249" y1="202" x2="249" y2="618" class="grid"/>
+<line x1="302" y1="202" x2="302" y2="618" class="grid"/>
+<line x1="355" y1="202" x2="355" y2="618" class="grid"/>
+<line x1="408" y1="202" x2="408" y2="618" class="grid"/>
+<text x="20" y="217" class="group">Seyk</text>
+<text x="20" y="240">Seyk hybrid (default)</text>
+<rect x="196" y="226" width="171.084" height="18" rx="3" class="hybrid"/>
+<text x="460" y="240" text-anchor="end">0.807</text>
+<text x="20" y="266">Seyk semantic</text>
+<rect x="196" y="252" width="174.247" height="18" rx="3" class="semantic"/>
+<text x="460" y="266" text-anchor="end">0.822</text>
+<text x="20" y="292">Seyk lexical</text>
+<rect x="196" y="278" width="137.300" height="18" rx="3" class="lexical"/>
+<text x="460" y="292" text-anchor="end">0.648</text>
+<text x="20" y="325" class="group">Other local tools · measured on Seyk&#x27;s harness</text>
+<text x="20" y="348">DigUp hybrid</text>
+<rect x="196" y="334" width="169.756" height="18" rx="3" class="measured"/>
+<text x="460" y="348" text-anchor="end">0.801</text>
+<text x="20" y="374">QMD vector</text>
+<rect x="196" y="360" width="152.331" height="18" rx="3" class="measured"/>
+<text x="460" y="374" text-anchor="end">0.719</text>
+<text x="20" y="400">QMD full (reranker)</text>
+<rect x="196" y="386" width="147.509" height="18" rx="3" class="measured"/>
+<text x="460" y="400" text-anchor="end">0.696</text>
+<text x="20" y="426">QMD hybrid</text>
+<rect x="196" y="412" width="144.128" height="18" rx="3" class="measured"/>
+<text x="460" y="426" text-anchor="end">0.680</text>
+<text x="20" y="452">LEANN Contriever</text>
+<rect x="196" y="438" width="138.122" height="18" rx="3" class="measured"/>
+<text x="460" y="452" text-anchor="end">0.652</text>
+<text x="20" y="479" class="small muted">† QMD BM25 0.045 (diagnostic): 283/300 queries empty</text>
+<text x="20" y="505" class="group">Published · different setup, not rerun</text>
 <a href="https://huggingface.co/BAAI/bge-large-en-v1.5/blob/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md"><title>BAAI/bge-large-en-v1.5 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 1024 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="323" class="muted" >bge-large-en-v1.5</text>
-<rect x="302" y="307" width="417.799" height="23" rx="3" class="published"/>
-<text x="916" y="324" class="" text-anchor="end">0.746</text>
+<text x="20" y="528" class="muted">bge-large-en-v1.5</text>
+<rect x="196" y="514" width="158.167" height="18" rx="3" class="published"/>
+<text x="460" y="528" text-anchor="end">0.746</text>
 </a>
 <a href="https://huggingface.co/BAAI/bge-base-en-v1.5/blob/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md"><title>BAAI/bge-base-en-v1.5 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="357" class="muted" >bge-base-en-v1.5</text>
-<rect x="302" y="341" width="414.618" height="23" rx="3" class="published"/>
-<text x="916" y="358" class="" text-anchor="end">0.740</text>
+<text x="20" y="554" class="muted">bge-base-en-v1.5</text>
+<rect x="196" y="540" width="156.963" height="18" rx="3" class="published"/>
+<text x="460" y="554" text-anchor="end">0.740</text>
 </a>
 <a href="https://huggingface.co/intfloat/e5-base-v2/blob/f52bf8ec8c7124536f0efb74aca902b2995e5bcd/README.md"><title>intfloat/e5-base-v2 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="391" class="muted" >e5-base-v2</text>
-<rect x="302" y="375" width="402.886" height="23" rx="3" class="published"/>
-<text x="916" y="392" class="" text-anchor="end">0.719</text>
+<text x="20" y="580" class="muted">e5-base-v2</text>
+<rect x="196" y="566" width="152.521" height="18" rx="3" class="published"/>
+<text x="460" y="580" text-anchor="end">0.719</text>
 </a>
 <a href="https://arxiv.org/html/2104.08663v4#S5.T2"><title>BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models, Table 2; BEIR test; whole documents, no chunking; Anserini/Lucene BM25 k=0.9, b=0.4; separate title and passage fields</title>
-<text x="28" y="425" class="muted" >BM25 (BEIR)</text>
-<rect x="302" y="409" width="372.400" height="23" rx="3" class="published"/>
-<text x="916" y="426" class="" text-anchor="end">0.665</text>
+<text x="20" y="606" class="muted">BM25 (BEIR)</text>
+<rect x="196" y="592" width="140.980" height="18" rx="3" class="published"/>
+<text x="460" y="606" text-anchor="end">0.665</text>
 </a>
-<text x="302" y="450" class="small muted" text-anchor="middle">0.0</text>
-<text x="414" y="450" class="small muted" text-anchor="middle">0.2</text>
-<text x="526" y="450" class="small muted" text-anchor="middle">0.4</text>
-<text x="638" y="450" class="small muted" text-anchor="middle">0.6</text>
-<text x="750" y="450" class="small muted" text-anchor="middle">0.8</text>
-<text x="862" y="450" class="small muted" text-anchor="middle">1.0</text>
-<text x="28" y="474" class="small muted" >Published · different setup: whole documents, no chunking</text>
-<text x="28" y="523" class="heading" >NFCorpus</text>
-<text x="28" y="546" class="small muted" >Seyk: segmented documents → resource ranking</text>
-<text x="28" y="589" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="573" width="201.441" height="23" rx="3" class="hybrid"/>
-<text x="916" y="590" class="" text-anchor="end">0.360</text>
-<text x="28" y="623" class="" >Seyk semantic</text>
-<rect x="302" y="607" width="189.452" height="23" rx="3" class="semantic"/>
-<text x="916" y="624" class="" text-anchor="end">0.338</text>
-<text x="28" y="657" class="" >Seyk lexical</text>
-<rect x="302" y="641" width="169.233" height="23" rx="3" class="lexical"/>
-<text x="916" y="658" class="" text-anchor="end">0.302</text>
+<text x="196" y="633" class="small muted" text-anchor="middle">0</text>
+<text x="249" y="633" class="small muted" text-anchor="middle">0.25</text>
+<text x="302" y="633" class="small muted" text-anchor="middle">0.5</text>
+<text x="355" y="633" class="small muted" text-anchor="middle">0.75</text>
+<text x="408" y="633" class="small muted" text-anchor="middle">1</text>
+<text x="20" y="682" class="heading">NFCorpus</text>
+<line x1="196" y1="692" x2="196" y2="1108" class="grid"/>
+<line x1="249" y1="692" x2="249" y2="1108" class="grid"/>
+<line x1="302" y1="692" x2="302" y2="1108" class="grid"/>
+<line x1="355" y1="692" x2="355" y2="1108" class="grid"/>
+<line x1="408" y1="692" x2="408" y2="1108" class="grid"/>
+<text x="20" y="707" class="group">Seyk</text>
+<text x="20" y="730">Seyk hybrid (default)</text>
+<rect x="196" y="716" width="76.260" height="18" rx="3" class="hybrid"/>
+<text x="460" y="730" text-anchor="end">0.360</text>
+<text x="20" y="756">Seyk semantic</text>
+<rect x="196" y="742" width="71.721" height="18" rx="3" class="semantic"/>
+<text x="460" y="756" text-anchor="end">0.338</text>
+<text x="20" y="782">Seyk lexical</text>
+<rect x="196" y="768" width="64.067" height="18" rx="3" class="lexical"/>
+<text x="460" y="782" text-anchor="end">0.302</text>
+<text x="20" y="815" class="group">Other local tools · measured on Seyk&#x27;s harness</text>
+<text x="20" y="838">QMD full (reranker)</text>
+<rect x="196" y="824" width="80.766" height="18" rx="3" class="measured"/>
+<text x="460" y="838" text-anchor="end">0.381</text>
+<text x="20" y="864">QMD vector</text>
+<rect x="196" y="850" width="79.819" height="18" rx="3" class="measured"/>
+<text x="460" y="864" text-anchor="end">0.377</text>
+<text x="20" y="890">DigUp hybrid</text>
+<rect x="196" y="876" width="78.578" height="18" rx="3" class="measured"/>
+<text x="460" y="890" text-anchor="end">0.371</text>
+<text x="20" y="916">QMD hybrid</text>
+<rect x="196" y="902" width="78.105" height="18" rx="3" class="measured"/>
+<text x="460" y="916" text-anchor="end">0.368</text>
+<text x="20" y="942">LEANN Contriever</text>
+<rect x="196" y="928" width="67.481" height="18" rx="3" class="measured"/>
+<text x="460" y="942" text-anchor="end">0.318</text>
+<text x="20" y="969" class="small muted">† QMD BM25 0.202 (diagnostic): 136/323 queries empty</text>
+<text x="20" y="995" class="group">Published · different setup, not rerun</text>
 <a href="https://huggingface.co/BAAI/bge-large-en-v1.5/blob/d4aa6901d3a41ba39fb536a557fa166f842b0e09/README.md"><title>BAAI/bge-large-en-v1.5 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 1024 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="691" class="muted" >bge-large-en-v1.5</text>
-<rect x="302" y="675" width="213.522" height="23" rx="3" class="published"/>
-<text x="916" y="692" class="" text-anchor="end">0.381</text>
+<text x="20" y="1018" class="muted">bge-large-en-v1.5</text>
+<rect x="196" y="1004" width="80.833" height="18" rx="3" class="published"/>
+<text x="460" y="1018" text-anchor="end">0.381</text>
 </a>
 <a href="https://huggingface.co/BAAI/bge-base-en-v1.5/blob/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md"><title>BAAI/bge-base-en-v1.5 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="725" class="muted" >bge-base-en-v1.5</text>
-<rect x="302" y="709" width="209.378" height="23" rx="3" class="published"/>
-<text x="916" y="726" class="" text-anchor="end">0.374</text>
+<text x="20" y="1044" class="muted">bge-base-en-v1.5</text>
+<rect x="196" y="1030" width="79.265" height="18" rx="3" class="published"/>
+<text x="460" y="1044" text-anchor="end">0.374</text>
 </a>
 <a href="https://huggingface.co/intfloat/e5-base-v2/blob/f52bf8ec8c7124536f0efb74aca902b2995e5bcd/README.md"><title>intfloat/e5-base-v2 model card, MTEB test results; MTEB/BEIR test; whole documents, no chunking; 768 dimensions; model-specific prompts; inputs truncated at model context limit</title>
-<text x="28" y="759" class="muted" >e5-base-v2</text>
-<rect x="302" y="743" width="198.178" height="23" rx="3" class="published"/>
-<text x="916" y="760" class="" text-anchor="end">0.354</text>
+<text x="20" y="1070" class="muted">e5-base-v2</text>
+<rect x="196" y="1056" width="75.025" height="18" rx="3" class="published"/>
+<text x="460" y="1070" text-anchor="end">0.354</text>
 </a>
 <a href="https://arxiv.org/html/2104.08663v4#S5.T2"><title>BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models, Table 2; BEIR test; whole documents, no chunking; Anserini/Lucene BM25 k=0.9, b=0.4; separate title and passage fields</title>
-<text x="28" y="793" class="muted" >BM25 (BEIR)</text>
-<rect x="302" y="777" width="182.000" height="23" rx="3" class="published"/>
-<text x="916" y="794" class="" text-anchor="end">0.325</text>
+<text x="20" y="1096" class="muted">BM25 (BEIR)</text>
+<rect x="196" y="1082" width="68.900" height="18" rx="3" class="published"/>
+<text x="460" y="1096" text-anchor="end">0.325</text>
 </a>
-<text x="302" y="818" class="small muted" text-anchor="middle">0.0</text>
-<text x="414" y="818" class="small muted" text-anchor="middle">0.2</text>
-<text x="526" y="818" class="small muted" text-anchor="middle">0.4</text>
-<text x="638" y="818" class="small muted" text-anchor="middle">0.6</text>
-<text x="750" y="818" class="small muted" text-anchor="middle">0.8</text>
-<text x="862" y="818" class="small muted" text-anchor="middle">1.0</text>
-<text x="28" y="842" class="small muted" >Published · different setup: whole documents, no chunking</text>
-<text x="28" y="891" class="heading" >IRPAPERS text</text>
-<text x="28" y="914" class="small muted" >Seyk: segmented documents → resource ranking</text>
-<text x="28" y="957" class="" >Seyk hybrid (default)</text>
-<rect x="302" y="941" width="363.726" height="23" rx="3" class="hybrid"/>
-<text x="916" y="958" class="" text-anchor="end">0.650</text>
-<text x="28" y="991" class="" >Seyk semantic</text>
-<rect x="302" y="975" width="330.070" height="23" rx="3" class="semantic"/>
-<text x="916" y="992" class="" text-anchor="end">0.589</text>
-<text x="28" y="1025" class="" >Seyk lexical</text>
-<rect x="302" y="1009" width="352.469" height="23" rx="3" class="lexical"/>
-<text x="916" y="1026" class="" text-anchor="end">0.629</text>
-<text x="302" y="1050" class="small muted" text-anchor="middle">0.0</text>
-<text x="414" y="1050" class="small muted" text-anchor="middle">0.2</text>
-<text x="526" y="1050" class="small muted" text-anchor="middle">0.4</text>
-<text x="638" y="1050" class="small muted" text-anchor="middle">0.6</text>
-<text x="750" y="1050" class="small muted" text-anchor="middle">0.8</text>
-<text x="862" y="1050" class="small muted" text-anchor="middle">1.0</text>
-<text x="28" y="1074" class="small muted" >No sourced published nDCG@10 comparison available</text>
-<text x="28" y="1140" class="small muted" >EmbeddingGemma: no published SciFact/NFCorpus score found.</text>
-<text x="28" y="1164" class="small muted" >Sources and settings: docs/benchmarks.md · Published bars are context, not a controlled comparison.</text>
+<text x="196" y="1123" class="small muted" text-anchor="middle">0</text>
+<text x="249" y="1123" class="small muted" text-anchor="middle">0.25</text>
+<text x="302" y="1123" class="small muted" text-anchor="middle">0.5</text>
+<text x="355" y="1123" class="small muted" text-anchor="middle">0.75</text>
+<text x="408" y="1123" class="small muted" text-anchor="middle">1</text>
+<text x="20" y="1172" class="heading">IRPAPERS text</text>
+<line x1="196" y1="1182" x2="196" y2="1490" class="grid"/>
+<line x1="249" y1="1182" x2="249" y2="1490" class="grid"/>
+<line x1="302" y1="1182" x2="302" y2="1490" class="grid"/>
+<line x1="355" y1="1182" x2="355" y2="1490" class="grid"/>
+<line x1="408" y1="1182" x2="408" y2="1490" class="grid"/>
+<text x="20" y="1197" class="group">Seyk</text>
+<text x="20" y="1220">Seyk hybrid (default)</text>
+<rect x="196" y="1206" width="137.696" height="18" rx="3" class="hybrid"/>
+<text x="460" y="1220" text-anchor="end">0.650</text>
+<text x="20" y="1246">Seyk semantic</text>
+<rect x="196" y="1232" width="124.955" height="18" rx="3" class="semantic"/>
+<text x="460" y="1246" text-anchor="end">0.589</text>
+<text x="20" y="1272">Seyk lexical</text>
+<rect x="196" y="1258" width="133.435" height="18" rx="3" class="lexical"/>
+<text x="460" y="1272" text-anchor="end">0.629</text>
+<text x="20" y="1305" class="group">Other local tools · measured on Seyk&#x27;s harness</text>
+<text x="20" y="1328">DigUp hybrid</text>
+<rect x="196" y="1314" width="144.622" height="18" rx="3" class="measured"/>
+<text x="460" y="1328" text-anchor="end">0.682</text>
+<text x="20" y="1354">LEANN Contriever</text>
+<rect x="196" y="1340" width="120.905" height="18" rx="3" class="measured"/>
+<text x="460" y="1354" text-anchor="end">0.570</text>
+<text x="20" y="1380">QMD full (reranker)</text>
+<rect x="196" y="1366" width="98.623" height="18" rx="3" class="measured"/>
+<text x="460" y="1380" text-anchor="end">0.465</text>
+<text x="20" y="1406">QMD vector</text>
+<rect x="196" y="1392" width="94.953" height="18" rx="3" class="measured"/>
+<text x="460" y="1406" text-anchor="end">0.448</text>
+<text x="20" y="1432">QMD hybrid</text>
+<rect x="196" y="1418" width="94.474" height="18" rx="3" class="measured"/>
+<text x="460" y="1432" text-anchor="end">0.446</text>
+<text x="20" y="1459" class="small muted">† QMD BM25 0.011 (diagnostic): 175/180 queries empty</text>
+<text x="20" y="1485" class="small muted">No sourced published nDCG@10 for this dataset.</text>
+<text x="196" y="1505" class="small muted" text-anchor="middle">0</text>
+<text x="249" y="1505" class="small muted" text-anchor="middle">0.25</text>
+<text x="302" y="1505" class="small muted" text-anchor="middle">0.5</text>
+<text x="355" y="1505" class="small muted" text-anchor="middle">0.75</text>
+<text x="408" y="1505" class="small muted" text-anchor="middle">1</text>
+<text x="20" y="1545" class="small muted">Other tools: DigUp f509c32, LEANN 0.3.8, QMD 2.8.3;</text>
+<text x="20" y="1565" class="small muted">adapter b2c13ec. Same corpora, queries and scorer;</text>
+<text x="20" y="1585" class="small muted">each tool uses its own models and chunking. One pass</text>
+<text x="20" y="1605" class="small muted">each.</text>
+<text x="20" y="1625" class="small muted">† Not charted: pinned QMD BM25 joins query terms</text>
+<text x="20" y="1645" class="small muted">with AND, so most queries return nothing.</text>
+<text x="20" y="1671" class="small muted">EmbeddingGemma: no published SciFact/NFCorpus score.</text>
+<text x="20" y="1691" class="small muted">Dashed bars are published results from different</text>
+<text x="20" y="1711" class="small muted">setups (whole documents, no chunking): context, not</text>
+<text x="20" y="1731" class="small muted">a controlled comparison. Details:</text>
+<text x="20" y="1751" class="small muted">docs/benchmarks.md.</text>
 </svg>

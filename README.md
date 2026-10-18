@@ -42,17 +42,21 @@ image-based retrieval, with [OCR still a follow-up](#pdfs).
 
 ## Benchmarks
 
-![Seyk hybrid, semantic and lexical retrieval compared with sourced published model scores; higher nDCG@10 is better](docs/assets/benchmarks.svg)
+![Seyk hybrid, semantic and lexical retrieval next to QMD, DigUp and LEANN measured on Seyk's harness, and sourced published model scores; higher nDCG@10 is better](docs/assets/benchmarks.svg)
 
 nDCG@10 measures how well the first ten results rank relevant documents, giving
-more credit to relevant results near the top. Scores range from 0 to 1; published
-bars use different models and whole-document setups, so they provide context
-rather than a controlled comparison with Seyk's segmented-document retrieval.
+more credit to relevant results near the top. Scores range from 0 to 1.
+Purple bars are other local search tools (QMD, DigUp, LEANN) run on Seyk's
+harness: same corpora, queries and scorer, but each tool uses its own models and
+chunking. Dashed bars are published scores from different models and
+whole-document setups, so they provide context rather than a controlled
+comparison with Seyk's segmented-document retrieval.
 
-Seyk 0.1.0 at `28814a851ded` · EmbeddingGemma 2 · q8 · 256 dimensions · CPU ·
+Seyk 0.1.0 at `a4a0eea63f74` · EmbeddingGemma 2 · q8 · 256 dimensions · CPU ·
 Apple M5 Max (18 cores, 64 GiB), macOS 26.5 · 2 inference threads.
-Hybrid trails semantic-only on SciFact; fusion tuning is tracked in todo 4542.
-See [full results, sources and reproduction steps](docs/benchmarks.md#published-retrieval-comparison).
+Hybrid (default, RRF k=5) still trails semantic-only on SciFact.
+See [full results, sources and reproduction steps](docs/benchmarks.md#published-retrieval-comparison)
+and the [local competitor runs](docs/benchmarks.md#local-competitor-runs).
 
 ## Why EmbeddingGemma 2
 
