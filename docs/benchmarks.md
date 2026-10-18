@@ -193,24 +193,14 @@ What this shows, with the caveat above:
 
 ## Retrieval smoke test
 
-`examples/eval_corpus.rs` on a 13-segment hand-written corpus. Each target passage
-avoids the query's words, and keyword-bait distractors were planted ("memory card",
-"Father Christmas", "detached house"). This is a smoke test, not a quality benchmark.
+The historical local prose smoke test overlapped private evaluation material.
+Its queries and passages are omitted. These results are not a reproducible
+public benchmark. Use the public retrieval harness for quality comparisons.
 
-| Query | Target rank (q8/256) | Keyword baseline |
-|---|---:|---|
-| becoming like his father | 1 | distractors only |
-| memory becoming unreliable | 9 | distractor first |
-| grief as something physical | 1 | nothing found |
-| repeating parents' behaviour | 1 | distractors only |
-| feeling detached from reality | 2 (after "detached house") | distractor first |
-
-q8 and fp32 ranked identically, and 768 dims did not fix the misses. The misses are
-cases where the passage *shows* the theme (a disputed kitchen colour, a story that
-shifts) without naming it, while a distractor shares a literal word. Expect that
-kind of miss: semantic search surfaces material keyword search cannot, but it
-still favours literal matches.
-
+`tests/retrieval.rs` now checks independent, invented examples about astronomy,
+cooking, caching, gardening, and pottery. Its model-backed tests cover semantic
+retrieval, section locators, and every embedding dimension. They are regression
+checks, not a retrieval benchmark.
 
 ## Paired CPU throughput harness
 
