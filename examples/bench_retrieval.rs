@@ -16,7 +16,9 @@ use seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder};
 use seyk::{Dimension, ResourceLocator, SearchEngine, SearchHit, SearchMode, SqliteCache};
 use seyk::{ResourceId, SkipCode, SyncStats};
 
-const PDF_PROOF: &str = "pdf-policy-miss-v1";
+const PDF_PROOF: &str = "pdf-policy-miss-v2";
+// Immutable cache ownership protocol; independent of evaluation acceptance.
+const PDF_OWNER_PROOF: &str = "pdf-policy-miss-v1";
 const PDF_LIMIT: u64 = 33_554_432;
 const NO_TEXT: &str = if cfg!(feature = "pdf-render") {
     "no usable embedded text; image embedding is disabled"
@@ -201,24 +203,45 @@ fn pdf_diagnostics(
         "incomplete PDF preparation/sync"
     );
     let mut pages = BTreeSet::new();
+    let mut identities = HashSet::new();
     for page in &sync.page_diagnostics {
         let key = eligible
             .get(&page.resource)
             .context("ineligible diagnostic")?;
         ensure!(
-            page.page > 0 && page.code == SkipCode::Other && page.reason == NO_TEXT,
+            page.page > 0 && identities.insert((key, page.page)),
             "fatal PDF page diagnostic"
         );
         ensure!(
             pages.insert(OmittedPage {
                 key: key.clone(),
                 page: page.page,
-                reason: "no_usable_embedded_text".into()
+                reason: pdf_page_reason(page)?.into()
             }),
             "duplicate page diagnostic"
         );
     }
     Ok(pages.into_iter().collect())
+}
+
+fn pdf_page_reason(page: &seyk::PageDiagnostic) -> Result<&'static str> {
+    match page.code {
+        SkipCode::PdfParseFailed => Ok("pdf_parse_failed"),
+        SkipCode::PdfParserPanicked => Ok("pdf_parser_panicked"),
+        SkipCode::Other if page.reason == NO_TEXT => Ok("no_usable_embedded_text"),
+        SkipCode::Other => bail!("fatal PDF page diagnostic"),
+    }
+}
+
+// Only serialize fixed parser codes, never dependency error/panic payloads.
+fn pdf_safe_sync(sync: &SyncStats) -> Result<SyncStats> {
+    let mut safe = sync.clone();
+    for page in &mut safe.page_diagnostics {
+        if page.code != SkipCode::Other {
+            page.reason = pdf_page_reason(page)?.into();
+        }
+    }
+    Ok(safe)
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,7 +264,7 @@ impl PdfOwner {
             dataset: "irpapers-pdf".into(),
             manifest_blake3: blake3::hash(manifest).to_hex().to_string(),
             profile_id: profile_id.into(),
-            proof: PDF_PROOF.into(),
+            proof: PDF_OWNER_PROOF.into(),
         }
     }
 }
@@ -381,6 +404,18 @@ struct Ranked {
     lexical: Option<f32>,
     filename: bool,
     locator: ResourceLocator,
+}
+
+fn pdf_ranked(hit: &Ranked, omitted: &[OmittedPage]) -> Result<()> {
+    let page = match hit.locator {
+        ResourceLocator::PageText { page, .. } | ResourceLocator::Page { page } => page,
+        _ => bail!("PDF hit lacks physical page"),
+    };
+    ensure!(
+        page > 0 && !omitted.iter().any(|p| p.key == hit.key && p.page == page),
+        "omitted/failed PDF page hit"
+    );
+    Ok(())
 }
 
 /// Preserve engine order and the best segment's signals. Do not re-sort scores:
@@ -851,6 +886,10 @@ fn main() -> Result<()> {
     if pdf {
         after_stats.location = None;
     }
+    let mut index_evidence = serde_json::to_value(&index)?;
+    if pdf {
+        index_evidence["sync"] = serde_json::to_value(pdf_safe_sync(&index.sync)?)?;
+    }
     let env = json!({"type":"env", "schema":1, "dataset":args.ds, "dataset_manifest":provenance,
         "manifest_blake3":blake3::hash(&manifest).to_hex().to_string(),
         "git_sha":git_sha, "dirty":dirty, "run_id":run_id, "profile_id":profile_id,
@@ -859,7 +898,7 @@ fn main() -> Result<()> {
         "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
         "logical_cpus":std::thread::available_parallelism().ok().map(|v|v.get()),
         "rust":command("rustc", &["--version"] )?, "load_before":load_before,
-        "load_after_index":load_average(), "index":index,
+        "load_after_index":load_average(), "index":index_evidence,
         "cache_before":before_stats, "cache_after":after_stats,
         "pdf_coverage":pdf_proof.as_ref().map(|(c,_)| c),
         "pdf_cache_session":args.pdf_cache_session});
@@ -908,7 +947,11 @@ fn main() -> Result<()> {
                             "excluded/unknown PDF hit"
                         );
                     }
-                    ranked(hit, &corpus, &keys)
+                    let hit = ranked(hit, &corpus, &keys)?;
+                    if let Some((coverage, _)) = &pdf_proof {
+                        pdf_ranked(&hit, &coverage.omitted_text_pages)?;
+                    }
+                    Ok(hit)
                 })
                 .collect::<Result<Vec<_>>>()?;
             write_row(
@@ -1063,7 +1106,7 @@ mod tests {
         assert_eq!(pdf_diagnostics(&sync, &eligible, true)?[0].page, 2);
         for code in [SkipCode::PdfParseFailed, SkipCode::PdfParserPanicked] {
             sync.page_diagnostics[0].code = code;
-            assert!(pdf_diagnostics(&sync, &eligible, true).is_err());
+            assert_eq!(pdf_diagnostics(&sync, &eligible, true)?.len(), 1);
         }
         sync.page_diagnostics[0].code = SkipCode::Other;
         sync.page_diagnostics[0].reason = "embedded text is not supported by this embedder".into();
@@ -1074,6 +1117,69 @@ mod tests {
         sync.page_diagnostics.clear();
         sync.resources_updated = 0;
         sync.resources_unchanged = 1;
+        assert!(pdf_diagnostics(&sync, &eligible, true).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn pdf_parser_misses_preserve_safe_outcomes_and_receipt() -> Result<()> {
+        let id = ResourceId::from_path("/public/opaque.pdf")?;
+        let eligible = HashMap::from([(id.clone(), "opaque".into())]);
+        let mut sync = SyncStats {
+            resources_discovered: 1,
+            resources_updated: 1,
+            page_diagnostics: vec![
+                seyk::PageDiagnostic {
+                    resource: id.clone(),
+                    page: 2,
+                    code: SkipCode::PdfParseFailed,
+                    reason: "dependency payload".into(),
+                },
+                seyk::PageDiagnostic {
+                    resource: id.clone(),
+                    page: 4,
+                    code: SkipCode::PdfParserPanicked,
+                    reason: "panic payload".into(),
+                },
+                seyk::PageDiagnostic {
+                    resource: id,
+                    page: 5,
+                    code: SkipCode::Other,
+                    reason: NO_TEXT.into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let outcomes = pdf_diagnostics(&sync, &eligible, true)?;
+        assert_eq!(
+            outcomes
+                .iter()
+                .map(|p| (p.page, p.reason.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, "pdf_parse_failed"),
+                (4, "pdf_parser_panicked"),
+                (5, "no_usable_embedded_text")
+            ]
+        );
+        let encoded = serde_json::to_string(&pdf_safe_sync(&sync)?)?;
+        assert!(!encoded.contains("payload"));
+        for page in [2, 4, 5] {
+            assert!(pdf_ranked(&hit("opaque", page), &outcomes).is_err());
+        }
+        pdf_ranked(&hit("opaque", 3), &outcomes)?;
+        assert!(pdf_ranked(&hit("opaque", 0), &outcomes).is_err());
+        let owner = PdfOwner::new("synthetic", b"manifest", "profile");
+        assert_eq!(owner.proof, "pdf-policy-miss-v1");
+        assert_ne!(owner.proof, PDF_PROOF);
+        sync.resources_updated = 0;
+        sync.resources_unchanged = 1;
+        assert_eq!(pdf_diagnostics(&sync, &eligible, false)?, outcomes);
+        sync.page_diagnostics[0].code = SkipCode::PdfParserPanicked;
+        assert_ne!(pdf_diagnostics(&sync, &eligible, false)?, outcomes);
+        sync.resources_updated = 1;
+        sync.resources_unchanged = 0;
+        sync.page_diagnostics[1].page = 2;
         assert!(pdf_diagnostics(&sync, &eligible, true).is_err());
         Ok(())
     }
@@ -1116,6 +1222,12 @@ mod tests {
         ] {
             assert!(PdfSession::open(&root, &wrong, true).is_err());
         }
+        let mut wrong = PdfOwner::new("synthetic", b"manifest", &profile);
+        wrong.proof = PDF_PROOF.into();
+        assert!(PdfSession::open(&root, &wrong, true).is_err());
+        wrong.proof = PDF_OWNER_PROOF.into();
+        wrong.version = 2;
+        assert!(PdfSession::open(&root, &wrong, true).is_err());
         let resumed = PdfSession::open(&root, &owner, true)?;
         let dir = resumed.cache.parent().unwrap().to_owned();
         drop(resumed);
@@ -1165,10 +1277,15 @@ mod tests {
 
     #[cfg(feature = "pdf")]
     #[test]
-    fn pdf_resource_and_partial_page_failures_cannot_certify_coverage() -> Result<()> {
+    fn pdf_resource_failures_reject_but_partial_pages_are_misses() -> Result<()> {
         use pdf_fixture::{Kind, pdf};
         let mut cases = vec![b"not a PDF".to_vec()];
-        for kind in [Kind::Encrypted, Kind::MissingContents, Kind::BrokenSecond] {
+        for kind in [
+            Kind::Encrypted,
+            Kind::MissingContents,
+            Kind::BadFlate,
+            Kind::Panic,
+        ] {
             cases.push(pdf(&["garden first", "basil second"], kind));
         }
         for bytes in cases {
@@ -1181,6 +1298,48 @@ mod tests {
             let report = engine.index().paths([&path]).execute()?;
             let ids = HashMap::from([(ResourceId::from_path(&path)?, "opaque".into())]);
             assert!(pdf_diagnostics(&report.sync, &ids, true).is_err());
+        }
+        // BrokenSecond is a genuine page-local panic; corrupt streams above
+        // remain whole-resource failures under the unchanged parser contract.
+        for (kind, page, reason) in [(Kind::BrokenSecond, 2, "pdf_parser_panicked")] {
+            let tmp = tempfile::tempdir()?;
+            let path = tmp.path().canonicalize()?.join("opaque.pdf");
+            fs::write(
+                &path,
+                pdf(&["garden first", "healthy second", "basil third"], kind),
+            )?;
+            let engine = SearchEngine::builder()
+                .embedder(common::FakeEmbedder::new(Dimension::D256, "partial"))
+                .build()?;
+            let indexed = engine.index().paths([&path]).execute()?;
+            let ids = HashMap::from([(ResourceId::from_path(&path)?, "opaque".into())]);
+            let outcomes = pdf_diagnostics(&indexed.sync, &ids, true)?;
+            assert_eq!(
+                outcomes,
+                vec![OmittedPage {
+                    key: "opaque".into(),
+                    page,
+                    reason: reason.into()
+                }]
+            );
+            for mode in [
+                SearchMode::Hybrid,
+                SearchMode::Semantic,
+                SearchMode::Lexical,
+            ] {
+                let found = engine
+                    .search("garden basil")
+                    .paths([&path])
+                    .mode(mode)
+                    .execute()?;
+                assert_eq!(pdf_diagnostics(&found.stats.sync, &ids, false)?, outcomes);
+                assert!(!found.hits.is_empty());
+                for h in found.hits {
+                    let ranked =
+                        ranked(h, path.parent().unwrap(), &HashSet::from(["opaque".into()]))?;
+                    pdf_ranked(&ranked, &outcomes)?;
+                }
+            }
         }
         Ok(())
     }
@@ -1306,11 +1465,21 @@ mod tests {
             );
             return Ok(());
         }
+        let receipt_path = root.join("cache/irpapers-pdf/tasks/synthetic/owner.json");
+        let prior_receipt = fs::read(&receipt_path).ok();
         let session = PdfSession::open(
             &root,
             &owner,
             matches!(phase.as_str(), "negative" | "reset" | "resume"),
         )?;
+        let receipt = fs::read(&receipt_path)?;
+        assert_eq!(
+            serde_json::from_slice::<PdfOwner>(&receipt)?.proof,
+            "pdf-policy-miss-v1"
+        );
+        if let Some(prior) = prior_receipt {
+            assert_eq!(receipt, prior);
+        }
         let (engine, model) =
             process_engine(&session.cache, Some(root.join("document-input-calls.json")))?;
         let expected: VectorSnapshot = if root.join("expected.json").exists() {
@@ -1380,14 +1549,12 @@ mod tests {
                 serde_json::to_vec(&vectors(&engine, &ids)?)?,
             )?;
         }
-        if root.join("parser-failure").exists() {
-            assert!(pdf_diagnostics(&indexed.sync, &ids, true).is_err());
-            ensure!(
-                !indexed.sync.page_diagnostics.is_empty(),
-                "parser regression fixture did not fail"
-            );
-        } else {
+        {
             let diagnostics = pdf_diagnostics(&indexed.sync, &ids, true)?;
+            if root.join("parser-failure").exists() {
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(diagnostics[0].reason, "pdf_parser_panicked");
+            }
             for mode in [
                 SearchMode::Hybrid,
                 SearchMode::Semantic,
@@ -1411,6 +1578,10 @@ mod tests {
                         .any(|h| matches!(h.locator, ResourceLocator::PageText { page: 3, .. }))
                 );
             }
+            fs::write(
+                root.join(format!("{phase}-proof.json")),
+                serde_json::to_vec(&json!({"proof":PDF_PROOF,"omitted_text_pages":diagnostics}))?,
+            )?;
             if phase != "resume" {
                 assert_eq!(
                     diagnostics.iter().map(|p| p.page).collect::<Vec<_>>(),

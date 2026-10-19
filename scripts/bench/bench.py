@@ -33,7 +33,8 @@ ROOT = Path.home() / ".cache/seyk-bench"
 CONFIG = Path(__file__).with_name("datasets.toml")
 MODES = ("hybrid", "semantic", "lexical")
 METRICS = [ir.nDCG @ 10, ir.RR @ 10, *(ir.R @ k for k in (1, 5, 10, 20, 100))]
-PDF_PROOF = "pdf-policy-miss-v1"
+PDF_PROOF = "pdf-policy-miss-v2"
+PDF_FAILURES = {"pdf_parse_failed", "pdf_parser_panicked"}
 PDF_LIMIT = 33_554_432
 PDF_NO_TEXT = {"no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)",
                "no usable embedded text; image embedding is disabled"}
@@ -292,7 +293,7 @@ def pdf_coverage(env, manifest, docmap, qrels):
         require(set(item) == {"key", "page", "reason"}, "unknown omitted-page fields")
         key, page = item["key"], item["page"]
         require(key in eligible and type(page) is int and page > 0
-                and item.get("reason") == "no_usable_embedded_text"
+                and item.get("reason") in PDF_FAILURES | {"no_usable_embedded_text"}
                 and (key, page) not in pages, "invalid omitted PDF page")
         pages.add((key, page))
     require([(p["key"], p["page"]) for p in omitted] == sorted(pages), "unsorted PDF pages")
@@ -305,22 +306,36 @@ def pdf_coverage(env, manifest, docmap, qrels):
     for item in sync.get("page_diagnostics", []):
         uri = urllib.parse.urlsplit(item["resource"])
         path = Path(urllib.parse.unquote(uri.path))
-        require(uri.scheme == "file" and path.suffix == ".pdf"
-                and item.get("code") == "other" and item.get("reason") in PDF_NO_TEXT,
-                "fatal PDF diagnostic")
-        diagnostics.append((path.stem, item["page"]))
-    require(len(diagnostics) == len(pages) and set(diagnostics) == pages, "PDF diagnostic evidence mismatch")
+        code, reason, page = item.get("code"), item.get("reason"), item.get("page")
+        require(uri.scheme == "file" and not uri.netloc and not uri.query and not uri.fragment
+                and path.suffix == ".pdf" and path.stem in eligible
+                and type(page) is int and page > 0, "invalid PDF diagnostic identity/page")
+        if code == "other":
+            require(reason in PDF_NO_TEXT, "fatal PDF diagnostic")
+            classified = "no_usable_embedded_text"
+        else:
+            require(code in PDF_FAILURES and reason == code, "fatal/unsafe PDF diagnostic")
+            classified = code
+        diagnostics.append((path.stem, page, classified))
+    outcomes = {(p["key"],p["page"],p["reason"]) for p in omitted}
+    require(len(diagnostics) == len(outcomes) and set(diagnostics) == outcomes, "PDF diagnostic evidence mismatch")
     excluded_papers = {docmap[k] for k in excluded}
     affected = [q for q in qrels if q.relevance > 0 and q.doc_id.split("#")[0] in excluded_papers]
     omitted_ids = {page_id(docmap[k], p) for k, p in pages}
     omitted_qrels = [q for q in qrels if q.relevance > 0 and q.doc_id in omitted_ids]
+    failed = [p for p in omitted if p["reason"] in PDF_FAILURES]
+    failed_ids = {page_id(docmap[p["key"]], p["page"]) for p in failed}
+    failed_qrels = [q for q in qrels if q.relevance > 0 and q.doc_id in failed_ids]
     return {"proof":PDF_PROOF, "size_evidence":"runner-observed length and BLAKE3; scorer consistency-checked",
             "original_queries":len({q.query_id for q in qrels}), "original_qrels":len(qrels),
             "full_resources":len(docmap), "eligible_resources":len(eligible), "excluded_resources":len(excluded),
             "exclusions":exclusions, "excluded_physical_pages":None,
             "positive_qrels_targeting_exclusions":len(affected),
             "questions_targeting_exclusions":len({q.query_id for q in affected}),
-            "omitted_text_pages":omitted,
+            "omitted_text_pages":omitted, "parser_failed_pages":failed,
+            "parser_failure_counts":{reason:sum(p["reason"] == reason for p in failed) for reason in sorted(PDF_FAILURES)},
+            "positive_qrels_targeting_parser_failures":len(failed_qrels),
+            "questions_targeting_parser_failures":len({q.query_id for q in failed_qrels}),
             "positive_qrels_targeting_omitted_pages":len(omitted_qrels),
             "questions_targeting_omitted_pages":len({q.query_id for q in omitted_qrels})}, eligible
 
@@ -386,6 +401,13 @@ def score(ds, paths):
                 for view in ("ranked", "ranked_pages"):
                     require(isinstance(row.get(view), list) and all(h["key"] in eligible for h in row[view]),
                             "excluded/unknown PDF hit")
+                    omitted_pages = {(p["key"],p["page"]) for p in checked["omitted_text_pages"]}
+                    for hit in row[view]:
+                        locator = hit.get("locator", {})
+                        page = locator.get("page")
+                        require(locator.get("kind") in ("page_text", "page") and type(page) is int and page > 0,
+                                "invalid PDF hit page")
+                        require((hit["key"],page) not in omitted_pages, "omitted/failed PDF page hit")
         if reference is None:
             reference = identity
         require(identity == reference, "cannot combine different runs/profiles/settings")
@@ -471,6 +493,10 @@ def report(paths):
                               f"positive qrels targeting omitted pages: {coverage['positive_qrels_targeting_omitted_pages']}; "
                               f"distinct questions targeting omitted pages: {coverage['questions_targeting_omitted_pages']}; "
                               "excluded physical pages: unknown")
+            skip_notes.append(f"IRPAPERS PDF parser failures by reason: {json.dumps(coverage['parser_failure_counts'], sort_keys=True)}; "
+                              f"positive qrels targeting parser failures: {coverage['positive_qrels_targeting_parser_failures']}; "
+                              f"distinct questions targeting parser failures: {coverage['questions_targeting_parser_failures']}; "
+                              f"opaque key/physical page/reason: {json.dumps(coverage['parser_failed_pages'], sort_keys=True)}")
         for mode, metrics_ in r["metrics"].items():
             env = r["environment"][mode]
             profile = f"{env.get('precision', '?')}/{env.get('dimension', '?')}"
@@ -501,6 +527,65 @@ class Tests(unittest.TestCase):
                    "page_diagnostics":[{"resource":f"file:///public/{a}.pdf", "page":2, "code":"other",
                                         "reason":sorted(PDF_NO_TEXT)[0]}]}}}
         return env, manifest, docmap, qrels, (a,b,c)
+
+    def test_pdf_parser_failures_are_misses_with_original_denominators(self):
+        import copy
+        env, manifest, docmap, qrels, (a,b,c) = self.pdf_fixture()
+        qrels[:] = [ir.Qrel("q1", "1#2", 1), ir.Qrel("q2", "1#4", 1), ir.Qrel("q3", "2#1", 1)]
+        env["pdf_coverage"]["omitted_text_pages"] = [
+            {"key":a, "page":2, "reason":"pdf_parse_failed"},
+            {"key":a, "page":4, "reason":"pdf_parser_panicked"}]
+        env["index"]["sync"]["page_diagnostics"] = [
+            {"resource":f"file:///public/{a}.pdf", "page":page, "code":reason, "reason":reason}
+            for page,reason in [(2,"pdf_parse_failed"),(4,"pdf_parser_panicked")]]
+        checked, _ = pdf_coverage(env, manifest, docmap, qrels)
+        self.assertEqual(checked["parser_failure_counts"], {"pdf_parse_failed":1,"pdf_parser_panicked":1})
+        self.assertEqual(checked["positive_qrels_targeting_parser_failures"], 2)
+        self.assertEqual(checked["questions_targeting_parser_failures"], 2)
+        self.assertEqual(checked["original_queries"], 3)
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            meta = root/"meta/irpapers-pdf"
+            meta.mkdir(parents=True)
+            data = json.dumps(manifest).encode()
+            (meta/"manifest.json").write_bytes(data)
+            env["manifest_blake3"] = blake3.blake3(data).hexdigest()
+            def runs(hit_page=None, view=None):
+                for mode in MODES:
+                    rows = {q.query_id:{"mode":mode, "ranked":[], "ranked_pages":[]} for q in qrels}
+                    if hit_page is not None:
+                        hit = {"key":a, "rank":1, "locator":{"kind":"page_text", "page":hit_page}}
+                        rows["q1"][view or "ranked"] = [hit]
+                        if view is None: rows["q1"]["ranked_pages"] = [hit]
+                    yield copy.deepcopy(env), rows, {}
+            with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=(manifest,docmap,qrels)), mock.patch("sys.stdout", new_callable=io.StringIO):
+                for page in (None, 3):
+                    with mock.patch(__name__+".read_run", side_effect=runs(page)):
+                        score("irpapers-pdf", list(MODES))
+                    result = json.loads((root/"results/irpapers-pdf/test.json").read_text())
+                    for mode in MODES:
+                        self.assertTrue(all(v == 0 for v in result["metrics"][mode]["page"].values()))
+                        self.assertTrue(all(abs(v - (0 if page is None else 1/3)) < 1e-9 for v in result["metrics"][mode]["resource"].values()))
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+                    report([root/"results/irpapers-pdf/test.json"])
+                self.assertIn('"pdf_parse_failed": 1', printed.getvalue())
+                self.assertIn('"pdf_parser_panicked": 1', printed.getvalue())
+                self.assertIn("positive qrels targeting parser failures: 2; distinct questions targeting parser failures: 2", printed.getvalue())
+                self.assertIn(f'"key": "{a}", "page": 2, "reason": "pdf_parse_failed"', printed.getvalue())
+                for view in ("ranked", "ranked_pages"):
+                    with mock.patch(__name__+".read_run", side_effect=runs(2,view)), self.assertRaisesRegex(ValueError,"omitted/failed"):
+                        score("irpapers-pdf", list(MODES))
+        for mutate in [
+            lambda e:e["pdf_coverage"].update(proof="pdf-policy-miss-v1"),
+            lambda e:e["pdf_coverage"]["omitted_text_pages"].append({"key":a,"page":2,"reason":"no_usable_embedded_text"}),
+            lambda e:e["index"]["sync"]["page_diagnostics"][0].update(code="other"),
+            lambda e:e["index"]["sync"]["page_diagnostics"][0].update(reason="dependency payload"),
+            lambda e:e["index"]["sync"]["page_diagnostics"][0].update(page=True),
+        ]:
+            broken = copy.deepcopy(env)
+            mutate(broken)
+            with self.assertRaises(ValueError): pdf_coverage(broken,manifest,docmap,qrels)
 
     def test_pdf_evidence_refusals_and_affected_original_qrels(self):
         import copy
@@ -828,7 +913,8 @@ class Tests(unittest.TestCase):
             data = json.dumps(manifest).encode()
             (meta/"manifest.json").write_bytes(data)
             env["manifest_blake3"] = blake3.blake3(data).hexdigest()
-            row = {"ranked":[{"key":c, "rank":1}, {"key":a, "rank":2}],
+            row = {"ranked":[{"key":c, "rank":1, "locator":{"kind":"page_text", "page":1}},
+                              {"key":a, "rank":2, "locator":{"kind":"page_text", "page":3}}],
                    "ranked_pages":[{"key":a, "rank":1, "locator":{"kind":"page_text", "page":3}}]}
             runs = [(env, {"q":dict(row, mode=mode)}, {}) for mode in MODES]
             with mock.patch.dict(globals(), ROOT=root), mock.patch(__name__+".gold", return_value=(manifest, docmap, [ir.Qrel("q", "1#3", 1)])), mock.patch(__name__+".read_run", side_effect=runs), mock.patch("sys.stdout", new_callable=io.StringIO):
