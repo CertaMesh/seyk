@@ -388,6 +388,41 @@ source archive (318 MB of uncompressed PDFs). PDF inference disables vision and
 audio and records omitted-page diagnostics; it measures embedded PDF text, not the OCR text track. The image
 track is deferred.
 
+Verified PDF runs keep all 166 resources in the manifest and all 180 original
+questions and qrels in both metric denominators. Only encoded files strictly
+larger than the unchanged 33,554,432-byte discovery default count as policy
+exclusions. The runner observes length and BLAKE3 together and proves the exact
+eligible set through public discovery. The scorer checks that evidence against
+the manifest and fixed `pdf-policy-miss-v2` contract, without remeasuring length.
+Excluded targets and empty results remain misses. Excluded PDFs have unknown
+physical-page counts. Paper-resource and physical-page scores stay separate;
+page retrieval does not establish extraction byte-span validity.
+
+PDF runs require Unix task locking, `--pdf-cache-session <opaque-id>`, and all three modes. A new
+session exclusively creates `cache/irpapers-pdf/tasks/<opaque-id>/cache.sqlite`
+with a private ownership receipt and a held process lock. Explicit
+`--resume-pdf-cache` accepts only that session's matching manifest, profile, and
+immutable v1 ownership protocol. This receipt is not a coverage certificate;
+matching original receipts remain unchanged. Only new v2 evaluation envelopes
+are accepted. Each phase starts a fresh engine, removes only its eligible
+resource bindings through the public cache API, and prepares every eligible PDF
+before querying all modes in that engine. Committed input-keyed vectors can be
+reused, while page diagnostics are freshly recovered. Eligible positive physical-page outcomes are classified as the exact configured
+no-usable-embedded-text reason, `pdf_parse_failed`, or `pdf_parser_panicked`.
+Parser-failed pages are explicit misses with every original query and qrel
+retained. Reports list safe opaque keys/physical pages, per-reason failure totals,
+and affected positive qrels and distinct questions. Healthy pages in the same
+paper remain eligible: resource success cannot satisfy a failed-page qrel.
+Hits claiming any omitted/failed page, duplicate/conflicting outcomes, unknown
+reasons, whole-resource skips (including all-pages-failed PDFs), incomplete
+preparation and replay mismatches abort. Dependency error/panic payloads are
+replaced by fixed parser codes in evaluation provenance. Interrupted phases cannot certify results. Resume preserves committed
+SQLite work, without promising retention of uncommitted work or inputs pruned
+after a failed full pass. Shared and historical caches are never adopted or reset.
+Corpus hashes, identities, and metadata are rechecked after indexing and before
+each mode completes. These checks detect persistent boundary changes and normal
+request-observed changes, without claiming an atomic filesystem snapshot.
+
 IRPAPERS text skips pages whose transcription is empty or whitespace-only, after
 validating their row structure, paper/page identity and PDF join. The declared
 `documents = 3230` validates raw rows, including skipped pages; duplicate IDs,
