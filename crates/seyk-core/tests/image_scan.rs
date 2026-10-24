@@ -478,6 +478,119 @@ fn q4_exact_reranking_handles_mixed_rows_ties_thresholds_queries_and_partial_cov
 }
 
 #[test]
+fn q4_shortlist_truncates_equal_approximate_scores_in_resource_order() {
+    use seyk_embed::quant::{PhotoAnchorQ4, QueryLut};
+
+    for dimension in [Dimension::D256, Dimension::D768] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("images");
+        std::fs::create_dir(&root).unwrap();
+        let ordinary = Embedding::from_raw(vec![1.0; dimension.get()], dimension).unwrap();
+        let mut raw = vec![1.0; dimension.get()];
+        raw[0] += 0.00001;
+        let better = Embedding::from_raw(raw, dimension).unwrap();
+        let mut raw = vec![0.0; dimension.get()];
+        raw[0] = 1.0;
+        let query = Embedding::from_raw(raw, dimension).unwrap();
+        assert!(better.cosine(&query) > ordinary.cosine(&query));
+        let codec = PhotoAnchorQ4::new(dimension.get()).unwrap();
+        let codes = codec.encode(&ordinary).unwrap();
+        assert_eq!(codes, codec.encode(&better).unwrap());
+        let lut = QueryLut::new(&query).unwrap();
+        assert_eq!(
+            lut.score(&codes).unwrap(),
+            lut.score(&codec.encode(&better).unwrap()).unwrap()
+        );
+
+        let mut images = HashMap::new();
+        for id in 0..60 {
+            let input = format!("distinct-image-{id}");
+            std::fs::write(root.join(format!("image-{id:02}.jpg")), &input).unwrap();
+            images.insert(
+                blake3::hash(input.as_bytes()).to_hex().to_string(),
+                if id < 50 {
+                    ordinary.clone()
+                } else {
+                    better.clone()
+                },
+            );
+        }
+        let embedder = Arc::new(PreparedEmbedder {
+            identity: ModelIdentity {
+                model_id: "google/embeddinggemma-2".into(),
+                revision: "synthetic shortlist cutoff".into(),
+                variant: "onnx-q8;text-literals-v1".into(),
+                dimension,
+                normalization: "mean-pool;truncate;l2".into(),
+                query_prompt: String::new(),
+                document_prompt: String::new(),
+                max_tokens: 512,
+            },
+            images,
+            queries: HashMap::from([("query".into(), query)]),
+            documents: AtomicUsize::new(0),
+        });
+        let cache_path = temp.path().join("cache.sqlite");
+        let engine = SearchEngine::builder()
+            .shared_embedder(embedder.clone())
+            .cache(SqliteCache::open(&cache_path).unwrap())
+            .build()
+            .unwrap();
+        engine.index().paths([&root]).execute().unwrap();
+        let run = |scan, limit, sync| {
+            engine
+                .search("query")
+                .paths([&root])
+                .mode(SearchMode::Semantic)
+                .limit(limit)
+                .sync(sync)
+                .previews(None)
+                .image_scan(scan)
+                .execute()
+                .unwrap()
+        };
+        run(ImageScan::PhotoAnchorQ4, 1, true);
+        assert_eq!(
+            SqliteCache::open(&cache_path)
+                .unwrap()
+                .stats()
+                .unwrap()
+                .profiles[0]
+                .image_codes,
+            60
+        );
+        let names = |result: seyk_core::SearchResults| {
+            result
+                .hits
+                .into_iter()
+                .map(|hit| {
+                    hit.resource
+                        .to_file_path()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        for limit in [1, 5] {
+            // All 60 approximate scores tie, including positions 50 and 51.
+            // The final ten have better exact scores but fall outside R=50.
+            // This makes truncation observable rather than asserting exhaustive parity.
+            let expected = (0..limit)
+                .map(|id| format!("image-{id:02}.jpg").into())
+                .collect::<Vec<std::ffi::OsString>>();
+            assert_eq!(names(run(ImageScan::PhotoAnchorQ4, limit, false)), expected);
+            let exact = (50..50 + limit)
+                .map(|id| format!("image-{id:02}.jpg").into())
+                .collect::<Vec<std::ffi::OsString>>();
+            assert_eq!(names(run(ImageScan::Exact, limit, false)), exact);
+        }
+        assert_eq!(embedder.documents.load(Ordering::Relaxed), 60);
+    }
+}
+
+#[test]
 fn explicit_lexical_degradation_does_not_attempt_a_q4_scan() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("files");
