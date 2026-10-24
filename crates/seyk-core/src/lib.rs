@@ -55,7 +55,7 @@ pub use engine::{
     SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
-pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};
+pub use resource::{PDF_TEXT_VERSION, ResourceId, ResourceLocator, ResourceMetadata};
 pub use seyk_embed::{EmbeddingRequest, EmbeddingTask, Modality};
 
 pub use provider::{

@@ -1639,6 +1639,9 @@ IDs receive those fields plus freshly tokenized name/path labels; old path/name
 postings and cleanup metadata are never copied. Foreign-key, vector-reference,
 FTS cardinality and destination FTS integrity checks precede the single commit.
 Fatal errors roll back schema and rows; row-level drops are counted outcomes.
+`CacheImportReport::drops` always lists all five reasons, including zero counts:
+`hash_mismatch`, `missing_hash`, `preparation_changed`, `unavailable_or_unstable`,
+and `unmapped`. Key presence alone does not indicate a drop.
 A failed fresh destination may remain an empty shell suitable for retry.
 
 Synthetic FakeEmbedder tests cover unchanged remaps, exact vector bits, zero new

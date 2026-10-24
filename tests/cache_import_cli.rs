@@ -219,3 +219,67 @@ fn corrupt_locator_rolls_back_cli_import_and_repaired_source_can_retry() {
         .assert()
         .success();
 }
+
+#[test]
+fn missing_mapping_error_includes_its_path() {
+    let f = Fixture::new();
+    fs::remove_file(&f.map).unwrap();
+    let output = f
+        .command()
+        .arg("--cache-path")
+        .arg(&f.destination)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&f.map.display().to_string()));
+    assert!(!f.destination.exists());
+}
+
+#[test]
+fn human_report_formats_drop_counts_without_debug_syntax() {
+    let f = Fixture::new();
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&f.map).unwrap()).unwrap();
+    value["content_hash"] = serde_json::json!("0".repeat(64));
+    fs::write(&f.map, serde_json::to_string(&value).unwrap()).unwrap();
+    let output = Command::cargo_bin("seyk")
+        .unwrap()
+        .args(["cache", "import", "--from"])
+        .arg(&f.source)
+        .arg("--map")
+        .arg(&f.map)
+        .arg("--profile")
+        .arg(&f.profile)
+        .arg("--cache-path")
+        .arg(&f.destination)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("Dropped resources:\n"));
+    assert!(text.contains("hash mismatch: 1"));
+    assert!(text.contains("preparation changed: 0"));
+    assert!(!text.contains('{'));
+}
+
+#[test]
+fn unknown_profile_is_reported_without_sqlite_jargon() {
+    let f = Fixture::new();
+    let output = Command::cargo_bin("seyk")
+        .unwrap()
+        .args(["cache", "import", "--from"])
+        .arg(&f.source)
+        .arg("--map")
+        .arg(&f.map)
+        .args(["--profile", "unknown"])
+        .arg("--cache-path")
+        .arg(&f.destination)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("profile not found in source"));
+    assert!(!f.destination.exists());
+}

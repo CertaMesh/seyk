@@ -547,7 +547,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     .as_deref()
                     .context("cache import requires explicit --cache-path")?;
                 let mappings = seyk::CacheImportMapping::read_jsonl(std::io::BufReader::new(
-                    std::fs::File::open(map)?,
+                    std::fs::File::open(&map)
+                        .with_context(|| format!("opening map {}", map.display()))?,
                 ))?;
                 let selected = SqliteCache::import_profile(&from, &profile)?;
                 let report = SqliteCache::import_from(&from, destination, &selected, &mappings)?;
@@ -555,14 +556,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     println!("{}", serde_json::to_string_pretty(&json_output(&report))?);
                 } else {
                     println!(
-                        "Imported {} resources, {} segments, {} vectors, {} keyword rows; drops: {:?}; unmatched mappings: {}",
+                        "Imported {} resources, {} segments, {} vectors, {} keyword rows; unmatched mappings: {}",
                         report.resources,
                         report.segments,
                         report.vectors,
                         report.fts_rows,
-                        report.drops,
                         report.unmatched_mappings
                     );
+                    println!("Dropped resources:");
+                    for (reason, count) in &report.drops {
+                        println!("  {}: {count}", reason.replace('_', " "));
+                    }
                 }
                 return Ok(ExitCode::SUCCESS);
             }

@@ -15,7 +15,7 @@ use crate::{Error, Modality, ResourceId, ResourceLocator, ResourceMetadata, Resu
 use pdf_extract::{Document, PlainTextOutput};
 use std::io::Write;
 
-pub const TEXT_VERSION: &str = "pdf-extract-0.12.1;plain-v1";
+pub use crate::resource::PDF_TEXT_VERSION as TEXT_VERSION;
 pub const MAX_PAGES: usize = 512;
 pub const MAX_PAGE_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_DOCUMENT_TEXT_BYTES: usize = 32 * 1024 * 1024;

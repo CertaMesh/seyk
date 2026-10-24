@@ -35,14 +35,38 @@ impl CacheImportMapping {
 }
 
 /// Counts only: no source excerpts, terms, paths or vector bytes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheImportReport {
     pub resources: u64,
     pub segments: u64,
     pub vectors: u64,
     pub fts_rows: u64,
+    /// All five reasons are always listed, including zero counts: hash_mismatch,
+    /// missing_hash, preparation_changed, unavailable_or_unstable and unmapped.
     pub drops: BTreeMap<String, u64>,
     pub unmatched_mappings: u64,
+}
+
+impl Default for CacheImportReport {
+    fn default() -> Self {
+        Self {
+            resources: 0,
+            segments: 0,
+            vectors: 0,
+            fts_rows: 0,
+            unmatched_mappings: 0,
+            drops: [
+                "hash_mismatch",
+                "missing_hash",
+                "preparation_changed",
+                "unavailable_or_unstable",
+                "unmapped",
+            ]
+            .into_iter()
+            .map(|reason| (reason.into(), 0))
+            .collect(),
+        }
+    }
 }
 
 impl CacheImportReport {
@@ -133,11 +157,14 @@ fn source_snapshot(source: &Path) -> Result<Connection> {
 }
 
 fn read_profile(conn: &Connection, id: &str) -> Result<CacheProfile> {
-    let (json, dimension): (String, i64) = conn.query_row(
-        "SELECT profile,dimension FROM profiles WHERE id=?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let (json, dimension): (String, i64) = conn
+        .query_row(
+            "SELECT profile,dimension FROM profiles WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| invalid("profile not found in source"))?;
     let profile: CacheProfile =
         serde_json::from_str(&json).map_err(|_| invalid("invalid profile definition"))?;
     let stored: serde_json::Value =
@@ -209,11 +236,13 @@ impl SqliteCache {
                 return Err(invalid("destination must be fresh or empty schema v6"));
             }
         }
-        if has_meta {
-            let extra: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT IN ('meta','profiles','resources','segments','embeddings') AND name NOT LIKE 'sqlite_%')", [], |r| r.get(0))?;
-            if extra {
-                return Err(invalid("destination contains keyword or foreign tables"));
-            }
+        let extra: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'
+             AND NOT (type='table' AND name IN ('meta','profiles','resources','segments','embeddings'))
+             AND NOT (type='index' AND name='segments_by_input' AND tbl_name='segments'))",
+            [], |r| r.get(0))?;
+        if extra {
+            return Err(invalid("destination contains foreign schema objects"));
         }
         Self::initialize_schema(&tx)?;
         for table in ["profiles", "resources", "segments", "embeddings"] {
@@ -265,6 +294,7 @@ impl SqliteCache {
                 report.drop_resource("preparation_changed");
                 continue;
             };
+            validate_resource_type(&modality, media_type.as_deref())?;
             let Some(new_descriptor) = path_descriptor(&mapping.new) else {
                 report.drop_resource("preparation_changed");
                 continue;
@@ -334,6 +364,22 @@ impl SqliteCache {
         checkpoint("commit")?;
         tx.commit()?;
         Ok(report)
+    }
+}
+
+fn validate_resource_type(modality: &str, media_type: Option<&str>) -> Result<()> {
+    if matches!(
+        (modality, media_type),
+        ("text" | "image" | "video", None)
+            | ("document", Some("application/pdf"))
+            | (
+                "audio",
+                Some("audio/wav" | "audio/flac" | "audio/mp4" | "audio/mpeg")
+            )
+    ) {
+        Ok(())
+    } else {
+        Err(invalid("invalid modality or media type"))
     }
 }
 
@@ -435,6 +481,9 @@ fn import_segments(
         validate_locator(&locator, size)?;
         let heading: Option<String> = row.get(3)?;
         let input: String = row.get(4)?;
+        if !valid_hash(&input) {
+            return Err(invalid("invalid input hash"));
+        }
         let vector: Vec<u8> = src.query_row(
             "SELECT vector FROM embeddings WHERE profile=?1 AND input_hash=?2",
             params![id, input],
@@ -461,7 +510,7 @@ fn import_segments(
             params![id, input, vector],
         )? as u64;
         checkpoint("vector")?;
-        tx.execute("INSERT INTO segments(profile,path,ordinal,locator,heading,input_hash) VALUES(?1,?2,?3,?4,?5,?6)",params![id,resource_key(new),ordinal,locator_json,heading,input])?;
+        tx.execute("INSERT INTO segments(profile,path,ordinal,locator,heading,input_hash) VALUES(?1,?2,?3,?4,?5,?6)",params![id,resource_key(new),ordinal,serde_json::to_string(&locator).map_err(json_err)?,heading,input])?;
         checkpoint("segment")?;
         tx.execute(
             &format!(
@@ -508,7 +557,7 @@ fn validate_locator(locator: &ResourceLocator, size: u64) -> Result<()> {
         } => {
             *page > 0
                 && byte_start <= byte_end
-                && !text_version.is_empty()
+                && text_version == crate::resource::PDF_TEXT_VERSION
                 && valid_hash(page_text_hash)
         }
         ResourceLocator::Page { page } => *page > 0,
@@ -556,8 +605,9 @@ mod tests {
         };
         let mut cache = SqliteCache::open(&source).unwrap();
         cache.register_profile(&profile.id(), &profile).unwrap();
+        let input_hash = blake3::hash(b"synthetic model input").to_hex().to_string();
         cache
-            .put_embeddings(&profile.id(), &[("input".into(), vec![0.25; 128])])
+            .put_embeddings(&profile.id(), &[(input_hash.clone(), vec![0.25; 128])])
             .unwrap();
         let segment = CachedSegment {
             locator: ResourceLocator::Text {
@@ -567,7 +617,7 @@ mod tests {
                 line_end: Some(1),
             },
             heading: None,
-            input_hash: "input".into(),
+            input_hash,
         };
         let descriptor = path_descriptor(&mapping.old).unwrap().fingerprint();
         cache
@@ -655,6 +705,50 @@ mod tests {
     }
 
     #[test]
+    fn imported_locator_is_reencoded_in_canonical_form() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (source, destination, profile, mapping) = fixture(&root);
+        let conn = Connection::open(&source).unwrap();
+        let original: String = conn
+            .query_row("SELECT locator FROM segments", [], |r| r.get(0))
+            .unwrap();
+        let locator: ResourceLocator = serde_json::from_str(&original).unwrap();
+        let pretty = serde_json::to_string_pretty(&locator).unwrap();
+        assert_ne!(original, pretty);
+        conn.execute("UPDATE segments SET locator=?1", [&pretty])
+            .unwrap();
+        SqliteCache::import_from(&source, &destination, &profile, &[mapping]).unwrap();
+        let stored: String = Connection::open(destination)
+            .unwrap()
+            .query_row("SELECT locator FROM segments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, serde_json::to_string(&locator).unwrap());
+        assert_ne!(stored, pretty);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_length_mutation_with_restored_mtime_fails_verification() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (_, _, _, mapping) = fixture(&root);
+        let path = mapping.new.to_file_path().unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let result = verify_file_after_read(&mapping.new, || {
+            std::fs::write(&path, b"amber violet violet").unwrap();
+            std::fs::File::open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+                .unwrap();
+        });
+        let after = std::fs::metadata(path).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn source_wal_snapshot_stays_consistent_during_concurrent_commit() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
@@ -679,7 +773,17 @@ mod tests {
     #[test]
     fn pdf_and_audio_keep_composite_descriptors_for_runtime_validation() {
         for (extension, modality, locator) in [
-            ("pdf", "document", ResourceLocator::Page { page: 1 }),
+            (
+                "pdf",
+                "document",
+                ResourceLocator::PageText {
+                    page: 1,
+                    byte_start: 0,
+                    byte_end: 3,
+                    text_version: crate::resource::PDF_TEXT_VERSION.into(),
+                    page_text_hash: blake3::hash(b"synthetic page").to_hex().to_string(),
+                },
+            ),
             (
                 "wav",
                 "audio",
@@ -708,7 +812,7 @@ mod tests {
             let conn = Connection::open(&source).unwrap();
             conn.execute_batch("BEGIN; PRAGMA defer_foreign_keys=ON;")
                 .unwrap();
-            conn.execute("UPDATE resources SET path=?1,modality=?2,descriptor_hash='composite-runtime-identity'",params![resource_key(&mapping.old),modality]).unwrap();
+            conn.execute("UPDATE resources SET path=?1,modality=?2,media_type=?3,descriptor_hash='composite-runtime-identity'",params![resource_key(&mapping.old),modality,if modality == "document" { "application/pdf" } else { "audio/wav" }]).unwrap();
             conn.execute(
                 "UPDATE segments SET path=?1,locator=?2",
                 params![

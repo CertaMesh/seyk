@@ -101,6 +101,17 @@ fn parent_epoch_move_reuses_vectors_and_evidence_without_embedding() {
     fs::remove_file(&f.old).unwrap(); // The old path must never be read.
     let report = f.import().unwrap();
     assert_eq!(report.resources, 1);
+    assert_eq!(
+        report.drops.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            "hash_mismatch",
+            "missing_hash",
+            "preparation_changed",
+            "unavailable_or_unstable",
+            "unmapped"
+        ]
+    );
+    assert!(report.drops.values().all(|count| *count == 0));
     assert_eq!(report.segments, report.fts_rows);
     assert!(report.vectors > 0);
     let imported = SqliteCache::open(&f.destination).unwrap();
@@ -220,9 +231,13 @@ fn changed_hashes_missing_paths_and_preparation_changes_drop_whole_resources() {
             "{change}"
         );
         assert_eq!(r.drops.values().sum::<u64>(), 1, "{change}");
-        if ["expected", "observed", "cached"].contains(&change) {
-            assert_eq!(r.drops["hash_mismatch"], 1);
-        }
+        let reason = match change {
+            "expected" | "observed" | "cached" => "hash_mismatch",
+            "missing" => "unavailable_or_unstable",
+            "unmapped" => "unmapped",
+            _ => "preparation_changed",
+        };
+        assert_eq!(r.drops[reason], 1, "{change}");
         let cache = SqliteCache::open(&f.destination).unwrap();
         assert!(cache.resource_index(&f.profile.id()).unwrap().is_empty());
     }
@@ -235,6 +250,10 @@ fn corrupt_evidence_rolls_back_and_retry_succeeds() {
         "missing_vector",
         "locator",
         "locator_extra",
+        "page_text_version",
+        "input_hash",
+        "modality",
+        "media_type",
         "fts_missing",
         "fts_order",
         "ordinal",
@@ -247,6 +266,10 @@ fn corrupt_evidence_rolls_back_and_retry_succeeds() {
             "missing_vector" => "DELETE FROM embeddings".into(),
             "locator" => "UPDATE segments SET locator='{}'".into(),
             "locator_extra" => "UPDATE segments SET locator=json_set(locator,'$.unexpected','synthetic old epoch source-order sentinel')".into(),
+            "page_text_version" => format!("UPDATE segments SET locator=json_object('kind','page_text','page',1,'byte_start',0,'byte_end',1,'text_version','synthetic source order sentinel','page_text_hash','{}')", "0".repeat(64)),
+            "input_hash" => "UPDATE segments SET input_hash='synthetic source order sentinel'; UPDATE embeddings SET input_hash='synthetic source order sentinel'".into(),
+            "modality" => "UPDATE resources SET modality='synthetic source order sentinel'".into(),
+            "media_type" => "UPDATE resources SET media_type='synthetic source order sentinel'".into(),
             "fts_missing" => format!("DELETE FROM \"{}\"", f.fts()),
             "fts_order" => format!("UPDATE \"{}\" SET body='zulu alpha'", f.fts()),
             "ordinal" => "UPDATE segments SET ordinal=10".into(),
@@ -506,5 +529,41 @@ fn malformed_unversioned_source_is_never_initialized() {
     let before = fs::read(&source).unwrap();
     assert!(SqliteCache::import_from(&source, &f.destination, &f.profile, &[f.mapping()]).is_err());
     assert_eq!(fs::read(source).unwrap(), before);
+    assert!(!f.destination.exists());
+}
+
+#[test]
+fn empty_destination_rejects_views_and_triggers_without_importing() {
+    for object in [
+        "CREATE VIEW unexpected_view AS SELECT 1",
+        "CREATE TRIGGER unexpected_trigger AFTER INSERT ON profiles BEGIN UPDATE profiles SET dimension=1; END",
+    ] {
+        let f = Fixture::new();
+        drop(SqliteCache::open(&f.destination).unwrap());
+        let conn = Connection::open(&f.destination).unwrap();
+        conn.execute_batch(object).unwrap();
+        assert!(
+            f.import()
+                .unwrap_err()
+                .to_string()
+                .contains("foreign schema objects")
+        );
+        f.assert_empty_destination();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM resources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}
+
+#[test]
+fn unknown_profile_has_a_source_specific_error() {
+    let f = Fixture::new();
+    assert!(
+        SqliteCache::import_profile(&f.source, "missing")
+            .unwrap_err()
+            .to_string()
+            .contains("profile not found in source")
+    );
     assert!(!f.destination.exists());
 }

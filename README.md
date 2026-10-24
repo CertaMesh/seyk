@@ -198,7 +198,10 @@ with a `hash_mismatch` count; other verified mappings can still commit. Missing,
 disallowed or unstable files and changes to preparation kind or filename title
 also drop the resource. An empty mapping creates an empty seed. Reports contain
 counts of resources, segments, unique vectors, keyword rows, drop reasons and
-unmatched mappings, with no source excerpts or vector bytes.
+unmatched mappings, with no source excerpts or vector bytes. `report.drops` always
+lists every reason (`hash_mismatch`, `missing_hash`, `preparation_changed`,
+`unavailable_or_unstable`, `unmapped`), including zeros. Check counts rather than
+key presence to detect dropped resources.
 
 The import preserves locators and exact vectors under the same profile, rebuilding
 name/path keyword fields from new identities and retaining only order-free
