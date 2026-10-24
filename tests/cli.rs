@@ -779,3 +779,62 @@ fn q4_rejects_unsupported_modes_before_loading_a_model() {
             ));
     }
 }
+
+#[test]
+fn jsonl_progress_rejects_ambiguous_roots_before_model_loading() {
+    binary()
+        .args(["index", "one", "two", "--json", "--progress", "jsonl"])
+        .env("SEYK_MODEL", "/no-model")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires one root per invocation"));
+}
+
+#[cfg(feature = "watch")]
+#[test]
+fn jsonl_progress_rejects_watch_before_model_loading() {
+    binary()
+        .args(["index", ".", "--watch", "--progress", "jsonl"])
+        .env("SEYK_MODEL", "/no-model")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "only available for standalone indexing",
+        ));
+}
+
+#[test]
+fn jsonl_model_failure_emits_terminal_record_without_resolved_paths() {
+    let temp = TempDir::new().unwrap();
+    let run = |progress: bool| {
+        let mut cmd = binary();
+        cmd.current_dir(temp.path())
+            .args(["index", ".", "--json", "--text-only"])
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .env("HF_HUB_OFFLINE", "1");
+        if progress {
+            cmd.args(["--progress", "jsonl"]);
+        }
+        cmd.output().unwrap()
+    };
+    let plain = run(false);
+    let observed = run(true);
+    assert!(!observed.status.success());
+    assert_eq!(plain.stdout, observed.stdout);
+    let stderr = String::from_utf8(observed.stderr).unwrap();
+    let events: Vec<Value> = stderr
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["phase"], "discovering");
+    assert_eq!(events[1]["phase"], "loading_model");
+    assert_eq!(events[2]["phase"], "failed");
+    for event in events {
+        assert_eq!(event["root"], ".");
+        assert_eq!(event["by_kind"], serde_json::json!({}));
+        assert!(event["total"].is_null());
+        common::assert_json_excludes(&event, temp.path().to_str().unwrap());
+    }
+}
