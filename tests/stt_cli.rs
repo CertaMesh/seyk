@@ -7,6 +7,7 @@ use std::{
     process::{Command, Output},
 };
 fn input(dir: &Path, end_ms: u64, bytes: &[u8]) -> std::path::PathBuf {
+    let dir = dir.canonicalize().unwrap();
     let wav = dir.join("public.wav");
     std::fs::write(&wav, bytes).unwrap();
     let result = SearchResults {
