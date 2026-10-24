@@ -1,6 +1,6 @@
 # Photo Anchor P3 evidence
 
-Opt-in q4 with retained f32 and exact reranking. Timing and the complete local CI/NanoSciFact gate are pending; this report does not yet establish the speed contract.
+Opt-in q4 with retained f32 and exact reranking. All correctness and local CI/NanoSciFact gates passed. Quiet-slot timing is pending; this report does not yet establish the speed contract.
 
 ## Fixture
 
@@ -53,3 +53,21 @@ Provisioned ONNX q8 text/vision graphs, four inference threads. No models, table
 | `onnx/model_quantized.onnx_data` | 313724928 | `278a7ff1248c3618e4bd11a607fc54f7bdc7778854230f3956d3f86bd9db4f3b` |
 | `onnx/vision_encoder_quantized.onnx` | 162495 | `bb0de2df53a2448a32dc7908a187c168c8afd514d4d6f674f7f46024875fa4e3` |
 | `onnx/vision_encoder_quantized.onnx_data` | 195228672 | `3dabd69c0a36e9a8771ad82030dde74daa5a0e02b7047a5d3f3382b1137bab89` |
+
+## Local verification
+
+All 24 sequential stages passed on `007c7fe3bbc55458bde20b53b352c3b26507bef3`: the CI verification commands for default/audio/audio-STT, standalone dependencies/library/CLI/core/PDF, Python chart/metric adapters, the exact `cargo deny --locked --all-features check licenses` form, all Rust 1.89 checks/builds, the requested Windows GNU no-default core all-target clippy check, and fetcher tests. Toolchains and the GNU target were already installed; no toolchain or package downloads were needed. These are native macOS checks plus Windows cross-target linting, not a Windows runtime test.
+
+The final P2 gate was repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved 4714 witness also passes the amended bound. Timing remains gated on `ROOT: SLOT-GO`.
+
+## NanoSciFact default-off regression
+
+Base `515e943eedadb2f3da2a9bd0ff76bb9963af84a1` and candidate `007c7fe3bbc55458bde20b53b352c3b26507bef3` ran the same rank-only harness and task-owned copies of the same warm cache. The base had only the test-harness patch; its production code stayed pinned. All 50 queries in each of semantic, hybrid and lexical mode returned identical ordered rankings and scores. Zero document embeddings were recomputed. All 3,544 retained f32 vectors were byte-identical after v6-to-v7 migration; the candidate had zero image-code rows. No latencies were recorded.
+
+| Mode | Before nDCG@10 | After nDCG@10 |
+|---|---:|---:|
+| Hybrid | 0.891716331 | 0.891716331 |
+| Semantic | 0.896350587 | 0.896350587 |
+| Lexical | 0.714471114 | 0.714471114 |
+
+Environment: Apple M5 Max, 18 logical CPUs, macOS 26.5 (25F71), Rust 1.99.0 (`b940084d7`). The provisioned ORT static library is identified by its path and SHA-256 in the retained raw evidence bundle. Local build/test commands used four build jobs and nice 10, with at least 30% free memory at launch.
