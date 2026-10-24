@@ -106,3 +106,22 @@ impl Embedder for FakeEmbedder {
             .collect()
     }
 }
+
+/// Check decoded fields so JSON escaping cannot hide a leaked Windows path.
+pub fn assert_json_excludes(value: &serde_json::Value, private: &str) {
+    match value {
+        serde_json::Value::String(text) => assert!(!text.contains(private)),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_json_excludes(value, private);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                assert!(!key.contains(private));
+                assert_json_excludes(value, private);
+            }
+        }
+        _ => {}
+    }
+}

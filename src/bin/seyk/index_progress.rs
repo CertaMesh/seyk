@@ -17,6 +17,7 @@ pub(super) enum Format {
 #[serde(rename_all = "snake_case")]
 enum Phase {
     Discovering,
+    LoadingModel,
     Indexing,
     Complete,
     Failed,
@@ -68,6 +69,22 @@ impl<W: Write> JsonlProgress<W> {
         };
         progress.state.lock().unwrap().emit(&progress.root);
         progress
+    }
+
+    pub(super) fn loading_model(&self) {
+        self.set_phase(Phase::LoadingModel);
+    }
+
+    pub(super) fn discovering(&self) {
+        self.set_phase(Phase::Discovering);
+    }
+
+    fn set_phase(&self, phase: Phase) {
+        let mut state = self.state.lock().unwrap();
+        if state.phase != phase && !matches!(state.phase, Phase::Complete | Phase::Failed) {
+            state.phase = phase;
+            state.emit(&self.root);
+        }
     }
 
     pub(super) fn event(&self, event: ProgressEvent) {
@@ -224,6 +241,40 @@ mod tests {
     }
 
     #[test]
+    fn model_loading_and_discovery_changes_bypass_the_throttle() {
+        let progress = JsonlProgress::new(".".into(), Vec::new());
+        progress.loading_model();
+        progress.discovering();
+        progress.event_at(snapshot(0, 1, 0), Duration::ZERO);
+        progress.event_at(snapshot(1, 0, 0), Duration::ZERO);
+        progress.finish(true);
+        let events = lines(&progress);
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| e["phase"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "discovering",
+                "loading_model",
+                "discovering",
+                "indexing",
+                "complete"
+            ]
+        );
+        assert!(events[..3].iter().all(|event| event["total"].is_null()));
+    }
+
+    #[test]
+    #[should_panic]
+    fn privacy_assertion_detects_escaped_windows_paths() {
+        let private = r"C:\Users\private\notes";
+        let serialized = serde_json::to_string(&serde_json::json!({"nested": [private]})).unwrap();
+        let parsed = serde_json::from_str(&serialized).unwrap();
+        common::assert_json_excludes(&parsed, private);
+    }
+
+    #[test]
     fn empty_pass_and_closed_stderr_do_not_interrupt_indexing() {
         let progress = JsonlProgress::new(".".into(), Vec::new());
         progress.event(ProgressEvent::IndexProgress {
@@ -303,14 +354,13 @@ mod tests {
             let done = event["done"].as_u64().unwrap();
             assert!(done >= last_done);
             last_done = done;
-            let serialized = event.to_string();
             for private in [
                 "private-name",
                 "private-image",
                 "private source",
                 temp.path().to_str().unwrap(),
             ] {
-                assert!(!serialized.contains(private));
+                common::assert_json_excludes(event, private);
             }
         }
         assert_eq!(last_done, 6);

@@ -554,6 +554,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 progress.finish(false);
             }
             let paths = paths_result?;
+            if let Some(progress) = &jsonl {
+                progress.loading_model();
+            }
             let engine_result = engine(&model, false);
             if engine_result.is_err()
                 && let Some(progress) = &jsonl
@@ -565,12 +568,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if watch {
                 return watch_and_index(&engine, &paths, &filter.discovery(), json);
             }
-            let progress = Progress::new(jsonl.is_none());
+            if let Some(progress) = &jsonl {
+                progress.discovering();
+            }
+            let terminal_progress = Progress::new(jsonl.is_none());
             let report = |e: ProgressEvent| {
                 if let Some(progress) = &jsonl {
                     progress.event(e);
                 } else {
-                    progress.event(e);
+                    terminal_progress.event(e);
                 }
             };
             let result = engine
@@ -583,7 +589,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 progress.finish(result.is_ok());
             }
             let result = result?;
-            progress.finish();
+            terminal_progress.finish();
             if json {
                 println!("{}", serde_json::to_string_pretty(&json_output(&result))?);
             } else {

@@ -827,13 +827,14 @@ fn jsonl_model_failure_emits_terminal_record_without_resolved_paths() {
         .filter(|line| line.starts_with('{'))
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
     assert_eq!(events[0]["phase"], "discovering");
-    assert_eq!(events[1]["phase"], "failed");
+    assert_eq!(events[1]["phase"], "loading_model");
+    assert_eq!(events[2]["phase"], "failed");
     for event in events {
         assert_eq!(event["root"], ".");
         assert_eq!(event["by_kind"], serde_json::json!({}));
         assert!(event["total"].is_null());
-        assert!(!event.to_string().contains(temp.path().to_str().unwrap()));
+        common::assert_json_excludes(&event, temp.path().to_str().unwrap());
     }
 }

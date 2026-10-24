@@ -24,7 +24,7 @@ seyk index ./notes --text-only --json --progress jsonl >report.json 2>progress.j
 | `v` | Progress protocol version, currently `1`. Independent of stdout `schema_version`. |
 | `type` | Always `"progress"`. |
 | `root` | Caller-supplied root spelling, without tilde expansion or canonicalization. `"."` when omitted. Non-UTF-8 bytes use replacement characters. |
-| `phase` | `"discovering"`, `"indexing"`, `"complete"`, or `"failed"`. |
+| `phase` | `"discovering"`, `"loading_model"`, `"indexing"`, `"complete"`, or `"failed"`. |
 | `by_kind` | Existing `IndexProgress.by_kind` snapshot. Keys are `text`, `pdf`, `image`, and `audio`, present only when discovered. |
 | `done` | Sum of `indexed + skipped` across kinds. Counts resources, not segments or pages. |
 | `total` | Sum of `indexed + skipped + waiting`, or `null` before the first resource snapshot. |
@@ -38,7 +38,9 @@ resources count as done. ETA requires at least two newly indexed resources and
 ## Ordering and completion
 
 The stream starts with `discovering`, with empty `by_kind`, `done: 0`, and unknown
-total and ETA. The first engine resource snapshot changes the phase to `indexing`.
+total and ETA while the root is validated. It changes to `loading_model` before
+model initialization, then back to `discovering` before the engine walks the root.
+The first engine resource snapshot changes the phase to `indexing`.
 Within `indexing`, events are at least 250 ms apart. Phase changes and the terminal
 event bypass this limit. Counts never decrease, and total stays fixed once known.
 There is no heartbeat while the engine has no new resource snapshot.
