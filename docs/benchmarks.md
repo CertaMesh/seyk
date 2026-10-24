@@ -588,6 +588,21 @@ rankings, all per-dimension clipping rates, model/input identity, and the fixtur
 fingerprint. Retain this protected fixture and vector cache for later phases; worktree cleanup
 must not remove them.
 
+### P3 fixture refresh (2026-10-24)
+
+Wikimedia re-rendered one pinned thumbnail after P2: `apple-fruit-06`.
+The explicit re-pin mode accepted only HTTP 200 `image/jpeg` bytes from the same URL,
+with a successful JPEG decode and the URL's 960-pixel width. The source page and
+CC0 licence stayed unchanged; the manifest records the old hash and re-pin date.
+All 280 current files pass offline SHA-256 verification.
+
+The historical P2 numbers below used the previous bytes for that thumbnail.
+P3 uses a fresh full-f32 baseline and q4 comparison on the current fixture;
+the historical P2 rankings are not its acceptance evidence. The current manifest
+SHA-256 is `2fdd0ba135334c13d0bc028189fff34348c766692b589c3377e6cddee278035c`.
+`python3 scripts/fetch_photo_fixture.py --repin` requires explicit operator
+approval to update pins. Normal fetch and `--verify` fail on a mismatch.
+
 ### Definitions and measurement boundaries
 
 nDCG@10 uses gain `2^grade - 1` and log2 rank discount, averaged across queries.
