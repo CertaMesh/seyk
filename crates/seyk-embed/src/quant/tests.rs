@@ -181,14 +181,14 @@ fn independent_scores(query: &[f32], codes: &[u8]) -> (f32, f64) {
 fn assert_independent_contract(query: &Embedding, codes: &[u8]) {
     let actual = QueryLut::new(query).unwrap().score(codes).unwrap();
     let (sequential, double) = independent_scores(query.as_slice(), codes);
-    let tolerance = if query.dim() == 256 { 5e-5 } else { 1.5e-4 };
+    let tolerance: f64 = if query.dim() == 256 { 5e-5 } else { 1.5e-4 };
     assert!(
-        (actual - sequential).abs() <= tolerance,
+        (f64::from(actual) - f64::from(sequential)).abs() <= tolerance,
         "d{} LUT {actual} sequential {sequential}",
         query.dim()
     );
     assert!(
-        (f64::from(actual) - double).abs() <= f64::from(tolerance),
+        (f64::from(actual) - double).abs() <= tolerance,
         "d{} LUT {actual} f64 {double}",
         query.dim()
     );

@@ -160,7 +160,7 @@ fn numeric_contract(
                     * f64::from(q);
             }
             let errors = [
-                f64::from((actual - sequential).abs()),
+                (f64::from(actual) - f64::from(sequential)).abs(),
                 (f64::from(actual) - double).abs(),
             ];
             for i in 0..2 {
