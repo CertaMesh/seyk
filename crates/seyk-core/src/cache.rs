@@ -558,7 +558,8 @@ pub use image_codes::{IMAGE_CODEC_ID, ScanData, ScanVector};
 mod import;
 pub use import::{CacheImportMapping, CacheImportReport};
 
-const SCHEMA_VERSION: &str = "7";
+/// Current SQLite cache schema; independent of CLI JSON protocol versions.
+pub const SCHEMA_VERSION: &str = "7";
 
 /// Injective for arbitrary UTF-8 IDs, including empty IDs. Hex contains no `_`,
 /// so another profile's name cannot collide with an FTS shadow-table suffix.

@@ -20,7 +20,10 @@ fn binary() -> Command {
             .timeout(std::time::Duration::from_secs(120))
             .ok()
             .expect("CLI readiness probe (--version) must succeed within 120 s");
-        assert_eq!(output.stdout, b"seyk 0.1.0\n");
+        assert_eq!(
+            output.stdout,
+            format!("seyk {}\n", env!("SEYK_BUILD_VERSION")).as_bytes()
+        );
     });
     Command::cargo_bin("seyk").unwrap()
 }
@@ -31,7 +34,25 @@ fn version_matches_workspace_package() {
         .arg("--version")
         .assert()
         .success()
-        .stdout("seyk 0.1.0\n");
+        .stdout(format!("seyk {}\n", env!("SEYK_BUILD_VERSION")));
+}
+
+#[test]
+fn human_cache_stats_expose_sqlite_schema() {
+    let temp = TempDir::new().unwrap();
+    binary()
+        .args([
+            "cache",
+            "--cache-path",
+            temp.path().join("cache.sqlite3").to_str().unwrap(),
+            "stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Cache schema: {}\n",
+            seyk::cache::SCHEMA_VERSION
+        )));
 }
 
 #[test]

@@ -41,7 +41,7 @@ fn json_output<T: serde::Serialize>(payload: &T) -> JsonOutput<'_, T> {
 #[derive(Parser)]
 #[command(
     name = "seyk",
-    version,
+    version = env!("SEYK_BUILD_VERSION"),
     about = "Local semantic search over your files with EmbeddingGemma 2"
 )]
 struct Cli {
@@ -1415,7 +1415,7 @@ fn report_scrub(result: seyk::Result<seyk::cache::CacheCleanup>) {
 }
 
 fn format_cache_stats(stats: &CacheStats) -> String {
-    let mut out = String::new();
+    let mut out = format!("Cache schema: {}\n", seyk::cache::SCHEMA_VERSION);
     if let Some(p) = &stats.location {
         out.push_str(&format!("Cache: {}\n", p.display()));
     }
