@@ -126,10 +126,12 @@ fn numeric_contract(
     let dim = queries[0].dim();
     let assets = root.join("crates/seyk-embed/assets/photo-anchor");
     let parse = |path: PathBuf| {
-        std::fs::read(path)
-            .unwrap()
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        let bytes = std::fs::read(path).unwrap();
+        let (chunks, tail) = bytes.as_chunks::<4>();
+        assert!(tail.is_empty());
+        chunks
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect::<Vec<_>>()
     };
     let anchor = parse(assets.join(format!("photo_anchor_{dim}.f32.bin")));
