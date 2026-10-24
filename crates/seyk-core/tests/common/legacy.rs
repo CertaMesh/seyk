@@ -13,7 +13,7 @@ pub fn table(profile: &str) -> String {
 
 pub fn downgrade(conn: &Connection, version: &str) {
     conn.execute_batch(
-        "PRAGMA foreign_keys=OFF; BEGIN;
+        "PRAGMA foreign_keys=OFF; BEGIN; DROP TABLE IF EXISTS image_codes;
         CREATE VIRTUAL TABLE segments_fts USING fts5(name,path,heading,body,
             content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2');",
     )

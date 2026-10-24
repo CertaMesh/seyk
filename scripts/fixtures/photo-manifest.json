@@ -1864,10 +1864,14 @@
     "topic": "apple fruit",
     "title": "Food-water-green-apples (23958292789).jpg",
     "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/73/Food-water-green-apples_%2823958292789%29.jpg/960px-Food-water-green-apples_%2823958292789%29.jpg",
-    "sha256": "2aecdf172e086d04118b45ecec8d993ace04505a589785eee617eaac8c79bce0",
+    "sha256": "053fb9864e08a1f02b3c0a697971536d7e376dee24deb521fdde2497620d14d3",
     "licence": "CC0-1.0",
     "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
-    "source_page": "https://commons.wikimedia.org/wiki/File:Food-water-green-apples_(23958292789).jpg"
+    "source_page": "https://commons.wikimedia.org/wiki/File:Food-water-green-apples_(23958292789).jpg",
+    "repinned": {
+      "date": "2026-10-24",
+      "previous_sha256": "2aecdf172e086d04118b45ecec8d993ace04505a589785eee617eaac8c79bce0"
+    }
   },
   {
     "id": "apple-fruit-07",

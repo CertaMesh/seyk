@@ -383,7 +383,7 @@ fn check_partial_root_migration(version: &str) {
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "6"
+        "7"
     );
 
     let assert_unsynced_search = |engine: &SearchEngine| {

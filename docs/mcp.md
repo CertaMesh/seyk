@@ -64,9 +64,10 @@ and no new text is persisted in the cache. Without a contributing keyword leg,
 the list is empty.
 
 Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
-meaning. Current JSON `schema_version` is **8**. Version 7 added optional result-kind
+meaning. Current JSON `schema_version` is **9**. Version 7 added optional result-kind
 counts, per-root indexing progress and `index_status`; version 8 adds optional
-lexical-only `degraded` metadata and its reason. Extraction accepts versions 2–8.
+lexical-only `degraded` metadata and its reason. Version 9 adds per-profile derived image-code counts to cache statistics.
+Extraction accepts versions 2–9.
 Match provenance does not change existing fields or extraction requirements. Older
 search JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:

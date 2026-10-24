@@ -544,8 +544,12 @@ The q4 scan optimization remains separate work.
 
 The committed `scripts/fixtures/photo-manifest.json` pins 280 public CC0 photos
 from Wikimedia Commons by URL and SHA-256, with each item's source page and
-licence URL. Downloads go only to ignored `tmp/photo-fixture/`. The collection
-began with 300 candidates across 30 subjects; visual review removed two artwork
+licence URL. Photos, prepared vectors and results live in
+`~/.cache/seyk-bench/photo-fixture/`, outside worktrees and protected from cleanup.
+Set `SEYK_PHOTO_FIXTURE` to override this directory for both the fetcher and evaluator.
+The Rust evaluator, latency example and P2 test use `HOME`, then `USERPROFILE`,
+for the home directory, including `~/` overrides. A direct override needs neither.
+The collection began with 300 candidates across 30 subjects; visual review removed two artwork
 reproductions and 18 repeated views before embedding. Photographs of objects,
 including museum artifacts, remain as distractors. No photos are distributed.
 The 60 hand-written queries in `scripts/fixtures/photo-queries.json` contain
@@ -581,12 +585,60 @@ Local runs additionally need the shared gate lock and a separate external
 40-minute timeout for the **whole phase**, including compilation.
 
 `--score-only` checks the current fixture/queries against the prepared cache and
-runs without a model. Output `tmp/photo-fixture/results.json` includes per-query
+runs without a model. Output `~/.cache/seyk-bench/photo-fixture/results.json` includes per-query
 rankings, all per-dimension clipping rates, model/input identity, and the fixture
-fingerprint. Remove photos, intermediate vectors and raw outputs after recording
-the small report; fetching and inference reproduce them when needed.
+fingerprint. Retain this protected fixture and vector cache for later phases; worktree cleanup
+must not remove them.
 
-### Definitions and measurement boundaries
+### P3 correctness and timing commands
+
+`image_quant_eval --prepare-only` prepares resumable f32 image/query vectors without scoring.
+`image_quant_eval --score-only` reports untimed diagnostics, clipping counts/rates and quantization error versus original f32.
+Independent decode-score references and actual engine acceptance are checked separately:
+
+```sh
+cargo test -p seyk-embed --locked quant::tests
+cargo test -p seyk-core --test image_scan --locked -- --ignored
+```
+
+The engine gate checks all 60 queries at d256/d768, semantic and hybrid, and
+k=1/5/10/20/50 plus zero and k>N. It writes paired rankings, independent numerical
+errors, nDCG deltas and matched SQLite snapshot sizes under the protected fixture.
+A parity failure is a stop, with the failing queries reported. R is not tuned.
+
+Before the reserved slot, build `similarity` with `--no-run` and the
+`photo_anchor_latency` release example. Run no timings until `ROOT: SLOT-GO`.
+The single Criterion `photo_anchor_scan` run keeps seed 4517, N=1000,
+30 samples, 500 ms warmup and 2 s measurement. Compare medians independently at
+each dimension against `q4 <= f32 + 2 ms per 1000 vectors`.
+The guarded latency example requires `SEYK_Q4_SLOT_GO=4517-p3` and a dimension
+argument. It uses fixture query 0, k=10, five repetitions per mode/scan and rotated
+exact/q4 order. Its end-to-end requests include real text-query inference, SQLite
+reads, scanning, reranking and fusion. Model loading, image preparation and warmup
+are excluded. The cached query runs use semantic R=50 and hybrid R=200.
+Clipping rates are reported per coordinate without a pass/fail threshold.
+
+NanoSciFact `bench_retrieval --rank-only --cache-session <opaque-id>` omits latency
+measurements and uses a task-owned cache under `cache/nanoscifact/tasks/<opaque-id>`.
+Compare the same fresh queries and ordered rankings on base and candidate, using
+the same warm f32 embeddings. Shared caches stay unchanged.
+
+### P3 fixture refresh (2026-10-24)
+
+Wikimedia re-rendered one pinned thumbnail after P2: `apple-fruit-06`.
+The explicit re-pin mode accepted only HTTP 200 `image/jpeg` bytes from the same URL,
+with a successful JPEG decode and the URL's 960-pixel width. The source page and
+CC0 licence stayed unchanged; the manifest records the old hash and re-pin date.
+All 280 current files pass offline SHA-256 verification.
+
+The historical P2 numbers below used the previous bytes for that thumbnail.
+P3 uses a fresh full-f32 baseline and q4 comparison on the current fixture;
+the historical P2 rankings are not its acceptance evidence. The current manifest
+SHA-256 is `2fdd0ba135334c13d0bc028189fff34348c766692b589c3377e6cddee278035c`.
+`python3 scripts/fetch_photo_fixture.py --repin` requires explicit operator
+approval to update pins. Normal fetch and `--verify` fail on a mismatch.
+
+### Historical P2 definitions and measurement boundaries
 
 nDCG@10 uses gain `2^grade - 1` and log2 rank discount, averaged across queries.
 Recall@1 is the number of relevant images in the first result divided by all
@@ -622,7 +674,7 @@ creates a SQLite image-code table nor changes search behavior, so it cannot
 supply those measurements. This small fixture cannot predict 10k–100k-image
 quality, particularly for the default dimension of 256.
 
-### Measured results and decision
+### Historical P2 measured results and decision
 
 **NO-GO for P3 adoption at both 256 and 768 dimensions.** The table below applies the original pass bar to the vendored Pastel tables only. No local calibration was fitted.
 

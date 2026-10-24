@@ -1599,7 +1599,7 @@ writable cache open. The facade re-exports the mapping and report types. CLI
 requires an explicit destination flag, even when `SEYK_CACHE` is set. No model
 initialization, extraction or download occurs.
 
-Import accepts schema v6 only. It opens a `mode=ro` URI connection and keeps one
+Import accepts schema v6 and v7. Derived `image_codes` are ignored; only retained f32 vectors are imported. It opens a `mode=ro` URI connection and keeps one
 read transaction for a consistent snapshot, including committed WAL frames. It
 never migrates or copies the source database. Older sources must first be opened
 normally with this version; future and unversioned sources fail. Read-only WAL
@@ -1652,3 +1652,11 @@ WAL reads, shared inputs, isolation, aliases and populated destinations. Unit
 failure checkpoints exercise rollback after resource/vector/segment/FTS writes
 and before commit, and deterministic post-read mutations test handle verification.
 CLI tests use synthetic fixtures and no model weights or private data.
+
+## Photo Anchor image scan (v7)
+
+The v6-to-v7 migration adds `image_codes(profile,input_hash,codec_id,codes)` and updates schema metadata in one transaction. It does not rebuild segment IDs or FTS postings and does not re-embed. A composite foreign key cascades embedding deletion into derived-code deletion. Exact f32 vectors and CacheProfile IDs remain unchanged.
+
+Every cache open upgrades to v7, even when q4 is off. The immediately preceding v6 binary rejects v7; older binaries that predate fail-closed schema handling may discard unknown caches. Use separate caches when running mixed versions.
+
+An opted-in sync derives missing standalone-image codes within its write phase. Cached-only queries never write codes. The q4 path reads codes and exact fallback rows, builds one LUT per query, selects the fixed image shortlist and fetches only its retained f32 vectors. It reranks with the same exact dot kernel before thresholds and fusion. SQLite is required; custom caches default to unsupported. Stats count derived image rows separately from f32 embeddings.

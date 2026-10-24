@@ -40,6 +40,12 @@ struct Args {
     modes: Vec<String>,
     #[arg(long, default_value_t = 200)]
     depth: usize,
+    /// Check rankings without recording performance measurements.
+    #[arg(long)]
+    rank_only: bool,
+    /// Isolate a non-PDF regression cache under cache/<dataset>/tasks/<session>.
+    #[arg(long)]
+    cache_session: Option<String>,
     /// Diagnostic only; never changes the engine default.
     #[arg(long)]
     lexical_weight: Option<f32>,
@@ -746,7 +752,13 @@ fn main() -> Result<()> {
             "PDF original question/qrel mismatch"
         );
     }
-    let started = Instant::now();
+    if let Some(session) = &args.cache_session {
+        ensure!(
+            !pdf && opaque_label(session),
+            "cache-session requires a non-PDF dataset and an opaque label"
+        );
+    }
+    let started = (!args.rank_only).then(Instant::now);
     let load_before = load_average();
     let mut config = GemmaConfig::default();
     config.dimension = Dimension::try_from(args.dimension)?;
@@ -786,6 +798,11 @@ fn main() -> Result<()> {
         .transpose()?;
     let cache = if let Some(session) = &pdf_session {
         session.cache.clone()
+    } else if let Some(session) = &args.cache_session {
+        confined(
+            &root,
+            &format!("cache/{}/tasks/{session}/{profile_id}.sqlite", args.ds),
+        )?
     } else {
         confined(&root, &format!("cache/{}/{profile_id}.sqlite", args.ds))?
     };
@@ -890,11 +907,22 @@ fn main() -> Result<()> {
     if pdf {
         index_evidence["sync"] = serde_json::to_value(pdf_safe_sync(&index.sync)?)?;
     }
+    if args.rank_only {
+        index_evidence
+            .as_object_mut()
+            .context("index evidence")?
+            .remove("total_ms");
+        index_evidence["sync"]
+            .as_object_mut()
+            .context("sync evidence")?
+            .remove("embed_ms");
+    }
     let env = json!({"type":"env", "schema":1, "dataset":args.ds, "dataset_manifest":provenance,
         "manifest_blake3":blake3::hash(&manifest).to_hex().to_string(),
         "git_sha":git_sha, "dirty":dirty, "run_id":run_id, "profile_id":profile_id,
         "profile":engine.profile(), "precision":args.precision, "dimension":args.dimension,
         "threads":args.threads, "depth":args.depth, "lexical_weight":args.lexical_weight,
+        "rank_only":args.rank_only,"cache_session":args.cache_session,
         "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
         "logical_cpus":std::thread::available_parallelism().ok().map(|v|v.get()),
         "rust":command("rustc", &["--version"] )?, "load_before":load_before,
@@ -914,7 +942,7 @@ fn main() -> Result<()> {
         let mut writer = BufWriter::new(File::create(&partial)?);
         write_row(&mut writer, &env)?;
         for query in &queries {
-            let start = Instant::now();
+            let start = (!args.rank_only).then(Instant::now);
             let mut request = engine
                 .search(&query.text)
                 .paths([&corpus])
@@ -958,7 +986,7 @@ fn main() -> Result<()> {
                 &mut writer,
                 &json!({"type":"query", "qid":query.qid, "mode":name,
                 "ranked":collapse(&hits, false), "ranked_pages":if pdf {Some(collapse(&hits,true))} else {None},
-                "segments_returned":hits.len(), "query_ms":start.elapsed().as_secs_f64()*1000.0}),
+                "segments_returned":hits.len(), "query_ms":start.map(|s|s.elapsed().as_secs_f64()*1000.0)}),
             )?;
         }
         if let Some((coverage, eligible)) = &pdf_proof {
@@ -979,7 +1007,7 @@ fn main() -> Result<()> {
         }
         write_row(
             &mut writer,
-            &json!({"type":"complete", "queries":queries.len(), "load_after":load_average(), "wall_seconds":started.elapsed().as_secs_f64()}),
+            &json!({"type":"complete", "queries":queries.len(), "load_after":load_average(), "wall_seconds":started.map(|s|s.elapsed().as_secs_f64())}),
         )?;
         writer.flush()?;
         fs::rename(partial, &final_path)?;

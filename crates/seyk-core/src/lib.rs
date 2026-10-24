@@ -49,7 +49,7 @@ pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};
 pub use embedding::{Dimension, Embedding};
 pub use engine::{
-    DegradedMode, DegradedReason, IndexReport, IndexRequest, MatchReason, MatchSignals,
+    DegradedMode, DegradedReason, ImageScan, IndexReport, IndexRequest, MatchReason, MatchSignals,
     PageDiagnostic, ProgressEvent, ProgressFn, SearchDegradation, SearchEngine,
     SearchEngineBuilder, SearchHit, SearchMode, SearchRequest, SearchResults, SearchStats,
     SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,

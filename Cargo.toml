@@ -107,3 +107,7 @@ required-features = ["audio", "onnx"]
 [[example]]
 name = "image_quant_eval"
 required-features = ["onnx", "image"]
+
+[[example]]
+name = "photo_anchor_latency"
+required-features = ["cli", "image"]

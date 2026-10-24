@@ -1,0 +1,956 @@
+{
+  "run": {
+    "source_head": "2d3604a724efcbf77d410bc99d00581c3537ac17",
+    "authorization": "ROOT: SLOT-GO 2026-10-24",
+    "concurrent_work": "Gaze #773 leak-only capture (~1 core), coordinator approved; other projects paused",
+    "commands": [
+      {
+        "name": "criterion",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "target/release/deps/similarity-501a7c1b2396855c",
+          "--bench",
+          "photo_anchor_scan"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "latency-d256",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "target/release/examples/photo_anchor_latency",
+          "256"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "latency-d768",
+        "command": [
+          "nice",
+          "-n",
+          "10",
+          "target/release/examples/photo_anchor_latency",
+          "768"
+        ],
+        "exit_code": 0
+      }
+    ],
+    "start": {
+      "utc": "2026-10-24T17:40:31.474605+00:00",
+      "uptime": "19:40  up 10 days,  9:55, 1 user, load averages: 4.07 5.77 6.33",
+      "load1": 4.07,
+      "memory_pressure": "System-wide memory free percentage: 70%",
+      "memory_free_percent": 70
+    },
+    "criterion-start": {
+      "utc": "2026-10-24T17:40:31.486782+00:00",
+      "uptime": "19:40  up 10 days,  9:55, 1 user, load averages: 4.07 5.77 6.33",
+      "load1": 4.07,
+      "memory_pressure": "System-wide memory free percentage: 70%",
+      "memory_free_percent": 70
+    },
+    "latency-d256-start": {
+      "utc": "2026-10-24T17:40:49.270821+00:00",
+      "uptime": "19:40  up 10 days,  9:55, 1 user, load averages: 4.78 5.84 6.34",
+      "load1": 4.78,
+      "memory_pressure": "System-wide memory free percentage: 70%",
+      "memory_free_percent": 70
+    },
+    "latency-d768-start": {
+      "utc": "2026-10-24T17:40:53.231216+00:00",
+      "uptime": "19:40  up 10 days,  9:55, 1 user, load averages: 4.87 5.84 6.34",
+      "load1": 4.87,
+      "memory_pressure": "System-wide memory free percentage: 70%",
+      "memory_free_percent": 70
+    },
+    "end": {
+      "utc": "2026-10-24T17:40:55.978961+00:00",
+      "uptime": "19:40  up 10 days,  9:55, 1 user, load averages: 5.04 5.86 6.34",
+      "load1": 5.04,
+      "memory_pressure": "System-wide memory free percentage: 70%",
+      "memory_free_percent": 70
+    }
+  },
+  "criterion": {
+    "256/f32": {
+      "benchmark": {
+        "group_id": "photo_anchor_scan/256",
+        "function_id": "f32",
+        "value_str": null,
+        "throughput": {
+          "Elements": 1000
+        },
+        "full_id": "photo_anchor_scan/256/f32",
+        "directory_name": "photo_anchor_scan_256/f32",
+        "title": "photo_anchor_scan/256/f32"
+      },
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          183.0,
+          366.0,
+          549.0,
+          732.0,
+          915.0,
+          1098.0,
+          1281.0,
+          1464.0,
+          1647.0,
+          1830.0,
+          2013.0,
+          2196.0,
+          2379.0,
+          2562.0,
+          2745.0,
+          2928.0,
+          3111.0,
+          3294.0,
+          3477.0,
+          3660.0,
+          3843.0,
+          4026.0,
+          4209.0,
+          4392.0,
+          4575.0,
+          4758.0,
+          4941.0,
+          5124.0,
+          5307.0,
+          5490.0
+        ],
+        "times": [
+          4258167.0,
+          8476125.0,
+          12733833.0,
+          17168708.0,
+          21406916.0,
+          25402083.0,
+          29637875.0,
+          33838791.0,
+          38225542.0,
+          42688917.0,
+          47693625.0,
+          51732042.0,
+          56600125.0,
+          61276042.0,
+          64682042.0,
+          68358958.0,
+          72538791.0,
+          77476333.0,
+          82784250.0,
+          85570042.0,
+          91313542.0,
+          94436417.0,
+          100313083.0,
+          103524542.0,
+          107590417.0,
+          111054000.0,
+          115644458.0,
+          119553042.0,
+          125023875.0,
+          128215625.0
+        ]
+      },
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23369.737626244103,
+            "upper_bound": 23527.89363018057
+          },
+          "point_estimate": 23447.281001128846,
+          "standard_error": 40.455389599196366
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23336.227301387138,
+            "upper_bound": 23538.91863995143
+          },
+          "point_estimate": 23400.30402752479,
+          "standard_error": 56.54938758137928
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 111.02716166380281,
+            "upper_bound": 356.65994139115463
+          },
+          "point_estimate": 233.57159238385628,
+          "standard_error": 58.19561882209593
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23428.20883253125,
+            "upper_bound": 23580.097080750867
+          },
+          "point_estimate": 23498.07946932984,
+          "standard_error": 38.82096242324173
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 170.6252672058712,
+            "upper_bound": 264.1176291997333
+          },
+          "point_estimate": 224.862404328661,
+          "standard_error": 23.80720119716067
+        }
+      }
+    },
+    "256/q4_lut": {
+      "benchmark": {
+        "group_id": "photo_anchor_scan/256",
+        "function_id": "q4_lut",
+        "value_str": null,
+        "throughput": {
+          "Elements": 1000
+        },
+        "full_id": "photo_anchor_scan/256/q4_lut",
+        "directory_name": "photo_anchor_scan_256/q4_lut",
+        "title": "photo_anchor_scan/256/q4_lut"
+      },
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          63.0,
+          126.0,
+          189.0,
+          252.0,
+          315.0,
+          378.0,
+          441.0,
+          504.0,
+          567.0,
+          630.0,
+          693.0,
+          756.0,
+          819.0,
+          882.0,
+          945.0,
+          1008.0,
+          1071.0,
+          1134.0,
+          1197.0,
+          1260.0,
+          1323.0,
+          1386.0,
+          1449.0,
+          1512.0,
+          1575.0,
+          1638.0,
+          1701.0,
+          1764.0,
+          1827.0,
+          1890.0
+        ],
+        "times": [
+          4376916.0,
+          8601917.0,
+          12971417.0,
+          17224750.0,
+          21518375.0,
+          25835791.0,
+          30178458.0,
+          34549333.0,
+          38837875.0,
+          43059167.0,
+          47411458.0,
+          51805625.0,
+          56194917.0,
+          60855167.0,
+          64717000.0,
+          69171958.0,
+          73276250.0,
+          77728167.0,
+          82094084.0,
+          86091500.0,
+          90334417.0,
+          94866708.0,
+          98886833.0,
+          102930166.0,
+          107878167.0,
+          112083916.0,
+          116860583.0,
+          121380625.0,
+          125082833.0,
+          129469584.0
+        ]
+      },
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 68424.23611369295,
+            "upper_bound": 68603.72332532596
+          },
+          "point_estimate": 68506.36975066757,
+          "standard_error": 45.97902548633982
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 68416.66819455056,
+            "upper_bound": 68534.65806878307
+          },
+          "point_estimate": 68473.55400474367,
+          "standard_error": 33.76574767921099
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 88.59907620482416,
+            "upper_bound": 234.25343069599086
+          },
+          "point_estimate": 182.5614530807329,
+          "standard_error": 38.61903706300069
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 68393.62290344795,
+            "upper_bound": 68576.58833461745
+          },
+          "point_estimate": 68486.03560558367,
+          "standard_error": 46.42502427929379
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 131.86812609895148,
+            "upper_bound": 364.1101903040191
+          },
+          "point_estimate": 255.85675199564955,
+          "standard_error": 63.03869668840078
+        }
+      }
+    },
+    "768/f32": {
+      "benchmark": {
+        "group_id": "photo_anchor_scan/768",
+        "function_id": "f32",
+        "value_str": null,
+        "throughput": {
+          "Elements": 1000
+        },
+        "full_id": "photo_anchor_scan/768/f32",
+        "directory_name": "photo_anchor_scan_768/f32",
+        "title": "photo_anchor_scan/768/f32"
+      },
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          59.0,
+          118.0,
+          177.0,
+          236.0,
+          295.0,
+          354.0,
+          413.0,
+          472.0,
+          531.0,
+          590.0,
+          649.0,
+          708.0,
+          767.0,
+          826.0,
+          885.0,
+          944.0,
+          1003.0,
+          1062.0,
+          1121.0,
+          1180.0,
+          1239.0,
+          1298.0,
+          1357.0,
+          1416.0,
+          1475.0,
+          1534.0,
+          1593.0,
+          1652.0,
+          1711.0,
+          1770.0
+        ],
+        "times": [
+          4314500.0,
+          8631250.0,
+          12981917.0,
+          17202458.0,
+          21799917.0,
+          25969917.0,
+          30220125.0,
+          34415125.0,
+          38723750.0,
+          43203000.0,
+          47622042.0,
+          51548750.0,
+          55798334.0,
+          60101458.0,
+          64607583.0,
+          68684334.0,
+          73205042.0,
+          77533584.0,
+          81851542.0,
+          86606166.0,
+          90322500.0,
+          95703916.0,
+          99290583.0,
+          103272583.0,
+          107693041.0,
+          112503083.0,
+          116191084.0,
+          120453875.0,
+          124755708.0,
+          129438375.0
+        ]
+      },
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 73003.57223622708,
+            "upper_bound": 73196.3409388102
+          },
+          "point_estimate": 73095.00695659661,
+          "standard_error": 49.10376040553705
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 72929.34898775895,
+            "upper_bound": 73157.68533529845
+          },
+          "point_estimate": 73009.68621468927,
+          "standard_error": 63.62749229240862
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 98.5875002082941,
+            "upper_bound": 336.13340274430834
+          },
+          "point_estimate": 189.653769819412,
+          "standard_error": 65.27097220059103
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 72972.86326247819,
+            "upper_bound": 73176.00358191322
+          },
+          "point_estimate": 73065.21386765142,
+          "standard_error": 51.85557177716844
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 176.2664841663284,
+            "upper_bound": 350.5978335679803
+          },
+          "point_estimate": 273.57769219201595,
+          "standard_error": 45.14745138434385
+        }
+      }
+    },
+    "768/q4_lut": {
+      "benchmark": {
+        "group_id": "photo_anchor_scan/768",
+        "function_id": "q4_lut",
+        "value_str": null,
+        "throughput": {
+          "Elements": 1000
+        },
+        "full_id": "photo_anchor_scan/768/q4_lut",
+        "directory_name": "photo_anchor_scan_768/q4_lut",
+        "title": "photo_anchor_scan/768/q4_lut"
+      },
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          16.0,
+          32.0,
+          48.0,
+          64.0,
+          80.0,
+          96.0,
+          112.0,
+          128.0,
+          144.0,
+          160.0,
+          176.0,
+          192.0,
+          208.0,
+          224.0,
+          240.0,
+          256.0,
+          272.0,
+          288.0,
+          304.0,
+          320.0,
+          336.0,
+          352.0,
+          368.0,
+          384.0,
+          400.0,
+          416.0,
+          432.0,
+          448.0,
+          464.0,
+          480.0
+        ],
+        "times": [
+          4300583.0,
+          8720709.0,
+          13105083.0,
+          17511291.0,
+          21895500.0,
+          26210209.0,
+          30611125.0,
+          35083959.0,
+          39433292.0,
+          43328291.0,
+          48110208.0,
+          52447125.0,
+          56790875.0,
+          60918750.0,
+          65773208.0,
+          70673583.0,
+          74249000.0,
+          78616250.0,
+          83171083.0,
+          87180833.0,
+          91902500.0,
+          96133167.0,
+          100948584.0,
+          104591416.0,
+          108856167.0,
+          113787791.0,
+          118056375.0,
+          122376666.0,
+          126819750.0,
+          131825000.0
+        ]
+      },
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 272662.6203040823,
+            "upper_bound": 273533.8412839162
+          },
+          "point_estimate": 273123.3087602554,
+          "standard_error": 221.06299859668758
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 273022.7864583334,
+            "upper_bound": 273523.84449404763
+          },
+          "point_estimate": 273220.42336309527,
+          "standard_error": 130.06381791981082
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 281.0934230844513,
+            "upper_bound": 1136.3217617012504
+          },
+          "point_estimate": 564.9921369265961,
+          "standard_error": 221.80273321488457
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 272975.34325368796,
+            "upper_bound": 273740.382704847
+          },
+          "point_estimate": 273351.6324365415,
+          "standard_error": 195.05088060358358
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 634.2923212889002,
+            "upper_bound": 1719.6057818111483
+          },
+          "point_estimate": 1231.1290819801902,
+          "standard_error": 282.6790537565704
+        }
+      }
+    }
+  },
+  "latency": {
+    "256": {
+      "boundary": "warm cached end-to-end engine request, including real text-query inference, SQLite reads, scanning, exact rerank and fusion; excludes model load, fixture preparation, previews and warmup",
+      "dimension": 256,
+      "errors": 0,
+      "fixture_fingerprint": "c2bbf14d318d9cc812941d8216d703f7cba7f2c9d4e067ed09f5460d5d4ce575",
+      "k": 10,
+      "model": {
+        "dimension": 256,
+        "document_prompt": "title: {title} | text: {text}",
+        "max_tokens": 2048,
+        "model_id": "google/embeddinggemma-2",
+        "normalization": "mean-pool;truncate;l2",
+        "query_prompt": "task: search result | query: ",
+        "revision": "local:def8cf823bb929ea",
+        "variant": "onnx-q8;text-literals-v1"
+      },
+      "query": "A photograph of a dog.",
+      "query_index": 0,
+      "repetitions_per_mode_and_scan": 5,
+      "samples": [
+        {
+          "milliseconds": 84.948125,
+          "mode": "Semantic",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 86.713209,
+          "mode": "Semantic",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.89141599999999,
+          "mode": "Semantic",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.523084,
+          "mode": "Semantic",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 89.241,
+          "mode": "Semantic",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.497708,
+          "mode": "Semantic",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 86.881667,
+          "mode": "Semantic",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.723542,
+          "mode": "Semantic",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 86.093875,
+          "mode": "Semantic",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.50975,
+          "mode": "Semantic",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.815167,
+          "mode": "Hybrid",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.505167,
+          "mode": "Hybrid",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.726459,
+          "mode": "Hybrid",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.873541,
+          "mode": "Hybrid",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.246125,
+          "mode": "Hybrid",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.08925,
+          "mode": "Hybrid",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 86.753917,
+          "mode": "Hybrid",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.60475,
+          "mode": "Hybrid",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 86.874416,
+          "mode": "Hybrid",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 87.510208,
+          "mode": "Hybrid",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        }
+      ],
+      "threads": 4
+    },
+    "768": {
+      "boundary": "warm cached end-to-end engine request, including real text-query inference, SQLite reads, scanning, exact rerank and fusion; excludes model load, fixture preparation, previews and warmup",
+      "dimension": 768,
+      "errors": 0,
+      "fixture_fingerprint": "c2bbf14d318d9cc812941d8216d703f7cba7f2c9d4e067ed09f5460d5d4ce575",
+      "k": 10,
+      "model": {
+        "dimension": 768,
+        "document_prompt": "title: {title} | text: {text}",
+        "max_tokens": 2048,
+        "model_id": "google/embeddinggemma-2",
+        "normalization": "mean-pool;truncate;l2",
+        "query_prompt": "task: search result | query: ",
+        "revision": "local:def8cf823bb929ea",
+        "variant": "onnx-q8;text-literals-v1"
+      },
+      "query": "A photograph of a dog.",
+      "query_index": 0,
+      "repetitions_per_mode_and_scan": 5,
+      "samples": [
+        {
+          "milliseconds": 83.809375,
+          "mode": "Semantic",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 83.94770799999999,
+          "mode": "Semantic",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.876625,
+          "mode": "Semantic",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 81.74737499999999,
+          "mode": "Semantic",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.118,
+          "mode": "Semantic",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.096167,
+          "mode": "Semantic",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 83.83541699999999,
+          "mode": "Semantic",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 83.272917,
+          "mode": "Semantic",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 83.247292,
+          "mode": "Semantic",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.227417,
+          "mode": "Semantic",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 83.672167,
+          "mode": "Hybrid",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.04525,
+          "mode": "Hybrid",
+          "repetition": 0,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 85.04549999999999,
+          "mode": "Hybrid",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 82.507625,
+          "mode": "Hybrid",
+          "repetition": 1,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 84.27791699999999,
+          "mode": "Hybrid",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 91.324,
+          "mode": "Hybrid",
+          "repetition": 2,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 90.731042,
+          "mode": "Hybrid",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        },
+        {
+          "milliseconds": 95.163917,
+          "mode": "Hybrid",
+          "repetition": 3,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 97.975042,
+          "mode": "Hybrid",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "Exact",
+          "searched": 280
+        },
+        {
+          "milliseconds": 95.729041,
+          "mode": "Hybrid",
+          "repetition": 4,
+          "returned": 10,
+          "scan": "PhotoAnchorQ4",
+          "searched": 280
+        }
+      ],
+      "threads": 4
+    }
+  }
+}
