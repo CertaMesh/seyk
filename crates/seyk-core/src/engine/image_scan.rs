@@ -81,7 +81,7 @@ pub(super) fn search(
                     score: crate::embedding::dot(query.as_slice(), vector),
                 });
             }
-            scores.retain(|s| s.score >= min_score);
+            scores.retain(|s| s.score.partial_cmp(&min_score) != Some(std::cmp::Ordering::Less));
             scores.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
             scores.truncate(take);
             Ok(scores)

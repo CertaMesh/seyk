@@ -2097,6 +2097,7 @@ impl<'e> SearchRequest<'e> {
                 let mut results = SearchRequest {
                     engine: &lexical,
                     sync: true,
+                    image_scan: ImageScan::Exact,
                     listed: Some(resources),
                     ..self
                 }
@@ -2240,12 +2241,6 @@ impl<'e> SearchRequest<'e> {
                     }
                 }
                 searched = keys.len();
-                let min_score = self.min_score.unwrap_or(f32::MIN);
-                let take = if self.mode == SearchMode::Semantic {
-                    self.limit
-                } else {
-                    depth
-                };
                 semantic = fuse_max(
                     query_vectors
                         .iter()

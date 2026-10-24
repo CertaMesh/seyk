@@ -1345,7 +1345,7 @@ mod tests {
         let server = local_content_server(provider, hub).unwrap();
         assert_eq!(server.get_info().server_info.name, "seyk-local-content-v1");
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 8);
+        assert_eq!(valid.schema_version, 9);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1517,7 +1517,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 8);
+        assert_eq!(response["schema_version"], 9);
         assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
         assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
         assert_eq!(

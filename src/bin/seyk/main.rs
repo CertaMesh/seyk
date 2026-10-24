@@ -384,6 +384,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             filter,
             model,
         } => {
+            if image_scan == ImageScan::PhotoAnchorQ4 && (no_cache || mode == SearchMode::Lexical) {
+                bail!(
+                    "q4 image scan requires a persistent cache and semantic or hybrid mode; --no-cache and lexical-only mode are unsupported"
+                );
+            }
             let paths = default_paths(paths)?;
             let engine = search_engine(&model, no_cache)?;
             let progress = Progress::new(!json);
@@ -1646,7 +1651,7 @@ mod tests {
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            8
+            9
         );
     }
 

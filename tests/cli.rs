@@ -599,7 +599,7 @@ fn extract_round_trip_without_a_model() {
             .output()
             .unwrap()
     };
-    for version in 2..=8 {
+    for version in 2..=9 {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let data = document.to_string();
@@ -615,7 +615,7 @@ fn extract_round_trip_without_a_model() {
         let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
         assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     }
-    for version in [1, 9] {
+    for version in [1, 10] {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let bad = run(&["extract", "--from-json", "-"], &document.to_string());
@@ -760,5 +760,22 @@ fn secret_include_globs_cannot_bypass_cli_policy() {
         if command == "search" {
             assert_eq!(json["hits"], serde_json::json!([]));
         }
+    }
+}
+
+#[test]
+fn q4_rejects_unsupported_modes_before_loading_a_model() {
+    let temp = TempDir::new().unwrap();
+    for flags in [vec!["--no-cache"], vec!["--mode", "lexical"]] {
+        binary()
+            .args(["search", "photo", "--image-scan", "q4"])
+            .args(flags)
+            .env("SEYK_MODEL", temp.path().join("no-model"))
+            .env("HF_HUB_OFFLINE", "1")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "q4 image scan requires a persistent cache",
+            ));
     }
 }

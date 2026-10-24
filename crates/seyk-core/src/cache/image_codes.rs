@@ -34,7 +34,10 @@ pub(crate) fn check_profile(profile: &CacheProfile) -> Result<()> {
     if model.model_id != "google/embeddinggemma-2"
         || !matches!(model.dimension.get(), 256 | 768)
         || model.normalization != "mean-pool;truncate;l2"
-        || !model.variant.starts_with("onnx-")
+        || !matches!(
+            model.variant.as_str(),
+            "onnx-q8" | "onnx-fp32" | "onnx-q8;text-literals-v1" | "onnx-fp32;text-literals-v1"
+        )
     {
         return Err(Error::Config("q4 image scan requires EmbeddingGemma 2, d256/d768 and mean-pool;truncate;l2 normalization".into()));
     }
@@ -42,16 +45,27 @@ pub(crate) fn check_profile(profile: &CacheProfile) -> Result<()> {
 }
 
 impl SqliteCache {
+    fn image_dimension(&self, id: &str) -> Result<usize> {
+        let (json, dimension): (String, u32) = self.conn.query_row(
+            "SELECT profile,dimension FROM profiles WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let profile: CacheProfile = serde_json::from_str(&json).map_err(json_err)?;
+        check_profile(&profile)?;
+        if profile.id() != id || profile.model.dimension.get() != dimension as usize {
+            return Err(Error::Config(
+                "corrupt image profile identifier or dimension".into(),
+            ));
+        }
+        Ok(dimension as usize)
+    }
     pub(super) fn scan_rows(
         &self,
         profile: &str,
         paths: &HashSet<ResourceId>,
     ) -> Result<Vec<ScanVector>> {
-        let dimension: usize = self.conn.query_row(
-            "SELECT dimension FROM profiles WHERE id=?1",
-            [profile],
-            |r| r.get::<_, u32>(0).map(|v| v as usize),
-        )?;
+        let dimension = self.image_dimension(profile)?;
         let whole = serde_json::to_string(&ResourceLocator::WholeResource).map_err(json_err)?;
         let mut stmt = self.conn.prepare_cached(
             "SELECT s.path,s.ordinal,s.locator,s.heading,s.input_hash,
@@ -108,14 +122,7 @@ impl SqliteCache {
         profile: &str,
         paths: &HashSet<ResourceId>,
     ) -> Result<()> {
-        let definition: String =
-            self.conn
-                .query_row("SELECT profile FROM profiles WHERE id=?1", [profile], |r| {
-                    r.get(0)
-                })?;
-        let definition: CacheProfile = serde_json::from_str(&definition).map_err(json_err)?;
-        check_profile(&definition)?;
-        let codec = PhotoAnchorQ4::new(definition.model.dimension.get())
+        let codec = PhotoAnchorQ4::new(self.image_dimension(profile)?)
             .map_err(|e| Error::Config(e.to_string()))?;
         let tx = self
             .conn
@@ -123,8 +130,8 @@ impl SqliteCache {
         let mut items = HashMap::new();
         {
             let whole = serde_json::to_string(&ResourceLocator::WholeResource).map_err(json_err)?;
-            let mut stmt=tx.prepare("SELECT s.path,s.input_hash,e.vector,c.codec_id,c.codes FROM segments s JOIN resources r ON r.profile=s.profile AND r.path=s.path JOIN embeddings e ON e.profile=s.profile AND e.input_hash=s.input_hash LEFT JOIN image_codes c ON c.profile=s.profile AND c.input_hash=s.input_hash WHERE s.profile=?1 AND r.modality='image' AND s.locator=?2")?;
-            let mut rows = stmt.query(params![profile, whole])?;
+            let mut stmt=tx.prepare("SELECT s.path,s.input_hash,CASE WHEN c.codec_id=?3 THEN NULL ELSE e.vector END,c.codec_id,c.codes FROM segments s JOIN resources r ON r.profile=s.profile AND r.path=s.path JOIN embeddings e ON e.profile=s.profile AND e.input_hash=s.input_hash LEFT JOIN image_codes c ON c.profile=s.profile AND c.input_hash=s.input_hash WHERE s.profile=?1 AND r.modality='image' AND s.locator=?2")?;
+            let mut rows = stmt.query(params![profile, whole, IMAGE_CODEC_ID])?;
             while let Some(r) = rows.next()? {
                 if !paths.contains(&key_resource(r.get(0)?)?) {
                     continue;
@@ -173,11 +180,7 @@ impl SqliteCache {
         profile: &str,
         hashes: &HashSet<String>,
     ) -> Result<HashMap<String, Vec<f32>>> {
-        let dimension: usize = self.conn.query_row(
-            "SELECT dimension FROM profiles WHERE id=?1",
-            [profile],
-            |r| r.get::<_, u32>(0).map(|v| v as usize),
-        )?;
+        let dimension = self.image_dimension(profile)?;
         let mut stmt = self
             .conn
             .prepare_cached("SELECT vector FROM embeddings WHERE profile=?1 AND input_hash=?2")?;
@@ -383,5 +386,84 @@ mod tests {
             .unwrap();
         assert!(cache.image_scan_rows(&pid, &paths).is_err());
         assert!(cache.sync_image_codes(&pid, &paths).is_err());
+    }
+    #[test]
+    fn q4_profile_corruption_is_rejected_on_reads_and_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut cache, pid, paths, _) = fixture(&temp.path().join("cache.sqlite"));
+        cache
+            .conn
+            .execute("UPDATE profiles SET dimension=768 WHERE id=?1", [&pid])
+            .unwrap();
+        assert!(cache.image_scan_rows(&pid, &paths).is_err());
+        assert!(cache.sync_image_codes(&pid, &paths).is_err());
+        assert!(
+            cache
+                .selected_image_vectors(&pid, &HashSet::from(["shared".into()]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pdf_pages_with_shared_image_inputs_keep_exact_f32() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut cache, pid, mut paths, _) = fixture(&temp.path().join("cache.sqlite"));
+        let page: ResourceId = "test://fixture/document.pdf".parse().unwrap();
+        let metadata = ResourceMetadata {
+            modality: Modality::Document,
+            media_type: Some("application/pdf".into()),
+            size_bytes: 1,
+            modified_ns: None,
+            content_hash: "hash".into(),
+        };
+        let segment = CachedSegment {
+            locator: ResourceLocator::Page { page: 1 },
+            heading: None,
+            input_hash: "shared".into(),
+        };
+        cache
+            .put_resource(
+                &pid,
+                &page,
+                &ResourceWrite {
+                    metadata: &metadata,
+                    version: &ResourceVersion::unknown(),
+                    descriptor_hash: Some("pdf"),
+                    segments: vec![SegmentWrite {
+                        segment: &segment,
+                        lexical_body: "",
+                    }],
+                },
+            )
+            .unwrap();
+        paths.insert(page.clone());
+        cache.sync_image_codes(&pid, &paths).unwrap();
+        let rows = cache.image_scan_rows(&pid, &paths).unwrap();
+        assert!(
+            rows.iter()
+                .filter(|r| r.resource == page)
+                .all(|r| matches!(r.data, ScanData::Exact(_)))
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r.data, ScanData::PhotoAnchorQ4(_)))
+                .count(),
+            2
+        );
+        assert_eq!(cache.stats().unwrap().profiles[0].image_codes, 1);
+    }
+
+    #[test]
+    fn removing_the_final_segment_reference_prunes_derived_codes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut cache, pid, paths, _) = fixture(&temp.path().join("cache.sqlite"));
+        cache.sync_image_codes(&pid, &paths).unwrap();
+        cache
+            .remove_resources(&pid, &paths.into_iter().collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(cache.prune_orphans(&pid).unwrap(), 1);
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.profiles[0].embeddings, 0);
+        assert_eq!(stats.profiles[0].image_codes, 0);
     }
 }

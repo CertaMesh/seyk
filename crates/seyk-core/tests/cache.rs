@@ -1246,7 +1246,7 @@ fn migration_failure_and_unsupported_metadata_preserve_the_database() {
         let conn = rusqlite::Connection::open(&database).unwrap();
         common::legacy::downgrade(&conn, "5");
         conn.execute_batch(match failure {
-            "future" => "UPDATE meta SET value='7'",
+            "future" => "UPDATE meta SET value='8'",
             "unknown" => "UPDATE meta SET value='garbage'",
             "missing" => "DELETE FROM meta",
             "no_meta" => "DROP TABLE meta",
@@ -1271,7 +1271,7 @@ fn migration_failure_and_unsupported_metadata_preserve_the_database() {
         let before = snapshot();
         let error = SqliteCache::open(&database).err().expect(failure);
         if matches!(failure, "future" | "unknown") {
-            let version = if failure == "future" { "7" } else { "garbage" };
+            let version = if failure == "future" { "8" } else { "garbage" };
             assert!(error.to_string().contains(&format!(
                 "cache schema {version} is newer than this binary supports; use a newer seyk or a separate --cache-path"
             )));

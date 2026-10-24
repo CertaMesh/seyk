@@ -186,7 +186,7 @@ fn evaluate(
     let mut totals = [[0f64; 4]; 4];
     let (mut error_sum, mut error_max) = (0f64, 0f64);
     let mut per_query = Vec::new();
-    for (query_index, (q, relevance)) in queries.iter().zip(labels).enumerate() {
+    for (q, relevance) in queries.iter().zip(labels) {
         let exact: Vec<_> = images.iter().map(|v| q.cosine(v)).collect();
         let lut = QueryLut::new(q)?;
         let approx: Vec<_> = codes
