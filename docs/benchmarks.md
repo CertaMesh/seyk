@@ -546,8 +546,10 @@ The committed `scripts/fixtures/photo-manifest.json` pins 280 public CC0 photos
 from Wikimedia Commons by URL and SHA-256, with each item's source page and
 licence URL. Photos, prepared vectors and results live in
 `~/.cache/seyk-bench/photo-fixture/`, outside worktrees and protected from cleanup.
-Set `SEYK_PHOTO_FIXTURE` to override this directory for both the fetcher and evaluator. The collection
-began with 300 candidates across 30 subjects; visual review removed two artwork
+Set `SEYK_PHOTO_FIXTURE` to override this directory for both the fetcher and evaluator.
+The Rust evaluator, latency example and P2 test use `HOME`, then `USERPROFILE`,
+for the home directory, including `~/` overrides. A direct override needs neither.
+The collection began with 300 candidates across 30 subjects; visual review removed two artwork
 reproductions and 18 repeated views before embedding. Photographs of objects,
 including museum artifacts, remain as distractors. No photos are distributed.
 The 60 hand-written queries in `scripts/fixtures/photo-queries.json` contain

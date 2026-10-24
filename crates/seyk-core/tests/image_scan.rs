@@ -1,5 +1,8 @@
 use seyk_core::{Dimension, EmbeddingCache, ImageScan, MemoryCache, SearchEngine, SqliteCache};
 
+#[path = "../../../examples/support/photo_fixture.rs"]
+mod photo_fixture;
+
 #[test]
 fn q4_requires_a_persistent_cache_and_supported_model() {
     assert!("q4".parse::<ImageScan>().is_ok());
@@ -87,11 +90,7 @@ struct Prepared {
 }
 
 fn fixture_path() -> PathBuf {
-    std::env::var_os("SEYK_PHOTO_FIXTURE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cache/seyk-bench/photo-fixture")
-        })
+    photo_fixture::fixture().expect("fixture directory")
 }
 fn ndcg(hits: &seyk_core::SearchResults, query: &Query) -> f64 {
     let gain = |grade: u8| 2f64.powi(i32::from(grade)) - 1.0;

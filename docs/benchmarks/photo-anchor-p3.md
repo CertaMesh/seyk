@@ -80,6 +80,12 @@ All 24 sequential stages passed on `007c7fe3bbc55458bde20b53b352c3b26507bef3`: t
 
 The final P2 gate was repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved 4714 witness also passes the amended bound. Timed runs started only after explicit `ROOT: SLOT-GO`.
 
+## Review follow-up
+
+Three review findings were addressed separately: a non-ignored 60-code cutoff test at both widths and semantic k=1/5, the actual UTC re-pin date, and one shared Rust fixture resolver using HOME then USERPROFILE with the existing override. The cutoff case ties every approximate score, including positions 50 and 51; the ten excluded rows have better exact scores. The asserted resource-order result therefore proves R=50 truncation, rather than exhaustive reranking. This synthetic collision case is separate from the full P2 parity contract, which passed unchanged.
+
+After these changes, affected core tests passed (7 passed, P2 provisioning test ignored in this focused run), both example test binaries passed (5 and 3 tests), and all 6 offline fetcher tests passed. The re-pin regression first failed against the hardcoded date, then passed with a mocked future UTC date. `cargo fmt --all --check`, workspace/all-target clippy with warnings denied, and the requested no-default core Windows GNU/all-target clippy all passed. Cargo commands ran sequentially at nice 10 with four build jobs and 33–34% free memory at launch. The prior full local gate, P2 correctness and slot measurements remain identified by their original source heads above; search/codec production logic did not change in this follow-up.
+
 ## NanoSciFact default-off regression
 
 Base `515e943eedadb2f3da2a9bd0ff76bb9963af84a1` and candidate `007c7fe3bbc55458bde20b53b352c3b26507bef3` ran the same rank-only harness and task-owned copies of the same warm cache. The base had only the test-harness patch; its production code stayed pinned. All 50 queries in each of semantic, hybrid and lexical mode returned identical ordered rankings and scores. Zero document embeddings were recomputed. All 3,544 retained f32 vectors were byte-identical after v6-to-v7 migration; the candidate had zero image-code rows. No latencies were recorded.

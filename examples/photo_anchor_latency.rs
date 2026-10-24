@@ -9,6 +9,9 @@ use seyk::embedder::{
 use seyk::{Dimension, ImageScan, ModelIdentity, SearchEngine, SearchMode, SqliteCache};
 use std::{fs, path::PathBuf, sync::Arc, time::Instant};
 
+#[path = "support/photo_fixture.rs"]
+mod photo_fixture;
+
 #[derive(Deserialize)]
 struct Photo {
     id: String,
@@ -28,12 +31,7 @@ fn main() -> Result<()> {
         .context("usage: photo_anchor_latency 256|768")?
         .parse()?;
     ensure!(matches!(dim, 256 | 768), "expected d256 or d768");
-    let fixture = std::env::var_os("SEYK_PHOTO_FIXTURE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-                .join(".cache/seyk-bench/photo-fixture")
-        });
+    let fixture = photo_fixture::fixture().map_err(anyhow::Error::msg)?;
     let manifest = fs::read("scripts/fixtures/photo-manifest.json")?;
     let queries = fs::read("scripts/fixtures/photo-queries.json")?;
     let photos: Vec<Photo> = serde_json::from_slice(&manifest)?;

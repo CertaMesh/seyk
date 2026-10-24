@@ -2,7 +2,7 @@
 //! SEYK_MODEL must point at provisioned q8 weights. No download fallback.
 //! Run from the repository root; resumable vectors/results live in ~/.cache/seyk-bench/photo-fixture.
 //! SEYK_PHOTO_FIXTURE overrides the fixture directory for both preparation and verification.
-use std::{collections::BTreeMap, fs, path::PathBuf, process::Command, time::Instant};
+use std::{collections::BTreeMap, fs, process::Command, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -11,21 +11,9 @@ use seyk_embed::{Dimension, Embedder, Embedding, EmbeddingTask, Modality, Resour
 use seyk_embeddinggemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-fn fixture() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("SEYK_PHOTO_FIXTURE") {
-        let path = PathBuf::from(path);
-        if let Ok(relative) = path.strip_prefix("~") {
-            return Ok(
-                PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unset")?).join(relative),
-            );
-        }
-        return Ok(path);
-    }
-    Ok(
-        PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unset")?)
-            .join(".cache/seyk-bench/photo-fixture"),
-    )
-}
+#[path = "support/photo_fixture.rs"]
+mod photo_fixture;
+use photo_fixture::fixture;
 
 #[derive(Deserialize)]
 struct Photo {
