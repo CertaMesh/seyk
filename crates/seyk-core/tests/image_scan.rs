@@ -500,17 +500,24 @@ fn q4_shortlist_truncates_equal_approximate_scores_in_resource_order() {
             lut.score(&codes).unwrap(),
             lut.score(&codec.encode(&better).unwrap()).unwrap()
         );
+        let highest = query.clone();
+        assert!(highest.cosine(&query) > better.cosine(&query));
+        let higher_codes = codec.encode(&highest).unwrap();
+        assert_ne!(higher_codes, codes);
+        assert!(lut.score(&higher_codes).unwrap() > lut.score(&codes).unwrap());
 
         let mut images = HashMap::new();
-        for id in 0..60 {
+        for id in 0..65 {
             let input = format!("distinct-image-{id}");
             std::fs::write(root.join(format!("image-{id:02}.jpg")), &input).unwrap();
             images.insert(
                 blake3::hash(input.as_bytes()).to_hex().to_string(),
                 if id < 50 {
                     ordinary.clone()
-                } else {
+                } else if id < 60 {
                     better.clone()
+                } else {
+                    highest.clone()
                 },
             );
         }
@@ -556,7 +563,7 @@ fn q4_shortlist_truncates_equal_approximate_scores_in_resource_order() {
                 .unwrap()
                 .profiles[0]
                 .image_codes,
-            60
+            65
         );
         let names = |result: seyk_core::SearchResults| {
             result
@@ -572,20 +579,24 @@ fn q4_shortlist_truncates_equal_approximate_scores_in_resource_order() {
                 })
                 .collect::<Vec<_>>()
         };
-        for limit in [1, 5] {
-            // All 60 approximate scores tie, including positions 50 and 51.
-            // The final ten have better exact scores but fall outside R=50.
-            // This makes truncation observable rather than asserting exhaustive parity.
-            let expected = (0..limit)
+        for limit in [1, 5, 10] {
+            // Rows 60..64 lead in both LUT and exact scores. Rows 00..59 tie
+            // under the LUT across the R=50 cutoff; 50..59 have better exact
+            // scores but are excluded. Ascending LUT sorting loses 60..64.
+            let expected = (60..65)
+                .chain(0..5)
+                .take(limit)
                 .map(|id| format!("image-{id:02}.jpg").into())
                 .collect::<Vec<std::ffi::OsString>>();
             assert_eq!(names(run(ImageScan::PhotoAnchorQ4, limit, false)), expected);
-            let exact = (50..50 + limit)
+            let exact = (60..65)
+                .chain(50..55)
+                .take(limit)
                 .map(|id| format!("image-{id:02}.jpg").into())
                 .collect::<Vec<std::ffi::OsString>>();
             assert_eq!(names(run(ImageScan::Exact, limit, false)), exact);
         }
-        assert_eq!(embedder.documents.load(Ordering::Relaxed), 60);
+        assert_eq!(embedder.documents.load(Ordering::Relaxed), 65);
     }
 }
 
