@@ -96,13 +96,13 @@ no dataset text, document maps, per-query rows or per-document hash lists are
 committed. Raw captures stay outside the repository; shared scoring environments
 are retained for concurrent work.
 When datasets are shared with concurrent runs, retain the raw inputs and
-materialized corpora until every consumer finishes; coordinate cleanup with the
-orchestrator. Preserve provisioned model files.
+materialized corpora until every consumer finishes. Preserve provisioned model
+files.
 
 Run the public retrieval pipeline below for `scifact`, `nfcorpus` and `irpapers`,
 with `--dimension 256 --precision q8 --threads 2 --depth 200
---modes hybrid,semantic,lexical`. Hold the project's shared local-gate lock during
-runs. Score the three files for each dataset together. The chart command defaults
+--modes hybrid,semantic,lexical`. Avoid running other heavy jobs on the machine
+at the same time. Score the three files for each dataset together. The chart command defaults
 to `~/.cache/seyk-bench/results` and selects one aggregate per dataset for an
 explicit full commit SHA. Selection never uses file timestamps: several matching
 files are accepted only when their charted scores agree (the first by relative
@@ -200,24 +200,14 @@ What this shows, with the caveat above:
 
 ## Retrieval smoke test
 
-`examples/eval_corpus.rs` on a 13-segment hand-written corpus. Each target passage
-avoids the query's words, and keyword-bait distractors were planted ("memory card",
-"Father Christmas", "detached house"). This is a smoke test, not a quality benchmark.
+The historical local prose smoke test overlapped private evaluation material.
+Its queries and passages are omitted. These results are not a reproducible
+public benchmark. Use the public retrieval harness for quality comparisons.
 
-| Query | Target rank (q8/256) | Keyword baseline |
-|---|---:|---|
-| becoming like his father | 1 | distractors only |
-| memory becoming unreliable | 9 | distractor first |
-| grief as something physical | 1 | nothing found |
-| repeating parents' behaviour | 1 | distractors only |
-| feeling detached from reality | 2 (after "detached house") | distractor first |
-
-q8 and fp32 ranked identically, and 768 dims did not fix the misses. The misses are
-cases where the passage *shows* the theme (a disputed kitchen colour, a story that
-shifts) without naming it, while a distractor shares a literal word. Expect that
-kind of miss: semantic search surfaces material keyword search cannot, but it
-still favours literal matches.
-
+`tests/retrieval.rs` now checks independent, invented examples about astronomy,
+cooking, caching, gardening, and pottery. Its model-backed tests cover semantic
+retrieval, section locators, and every embedding dimension. They are regression
+checks, not a retrieval benchmark.
 
 ## Paired CPU throughput harness
 
@@ -249,7 +239,7 @@ The concurrent-document interval includes joining the query/document workload.
 `cold_index` times a first search including indexing and query embedding;
 `cached_search` repeats it with the same in-memory cache.
 
-A quiet sweep must be coordinated with the user. Compile before the window, use
+A quiet sweep needs a reserved window on an otherwise idle machine. Compile before the window, use
 stable AC/power settings, record hardware/core topology, OS, Rust and ONNX Runtime
 versions, model revision, memory pressure and swap before/after, then wait for idle
 CPU and a stable low load (for example 1-minute load below 2 for two minutes on the
@@ -398,6 +388,41 @@ source archive (318 MB of uncompressed PDFs). PDF inference disables vision and
 audio and records omitted-page diagnostics; it measures embedded PDF text, not the OCR text track. The image
 track is deferred.
 
+Verified PDF runs keep all 166 resources in the manifest and all 180 original
+questions and qrels in both metric denominators. Only encoded files strictly
+larger than the unchanged 33,554,432-byte discovery default count as policy
+exclusions. The runner observes length and BLAKE3 together and proves the exact
+eligible set through public discovery. The scorer checks that evidence against
+the manifest and fixed `pdf-policy-miss-v2` contract, without remeasuring length.
+Excluded targets and empty results remain misses. Excluded PDFs have unknown
+physical-page counts. Paper-resource and physical-page scores stay separate;
+page retrieval does not establish extraction byte-span validity.
+
+PDF runs require Unix task locking, `--pdf-cache-session <opaque-id>`, and all three modes. A new
+session exclusively creates `cache/irpapers-pdf/tasks/<opaque-id>/cache.sqlite`
+with a private ownership receipt and a held process lock. Explicit
+`--resume-pdf-cache` accepts only that session's matching manifest, profile, and
+immutable v1 ownership protocol. This receipt is not a coverage certificate;
+matching original receipts remain unchanged. Only new v2 evaluation envelopes
+are accepted. Each phase starts a fresh engine, removes only its eligible
+resource bindings through the public cache API, and prepares every eligible PDF
+before querying all modes in that engine. Committed input-keyed vectors can be
+reused, while page diagnostics are freshly recovered. Eligible positive physical-page outcomes are classified as the exact configured
+no-usable-embedded-text reason, `pdf_parse_failed`, or `pdf_parser_panicked`.
+Parser-failed pages are explicit misses with every original query and qrel
+retained. Reports list safe opaque keys/physical pages, per-reason failure totals,
+and affected positive qrels and distinct questions. Healthy pages in the same
+paper remain eligible: resource success cannot satisfy a failed-page qrel.
+Hits claiming any omitted/failed page, duplicate/conflicting outcomes, unknown
+reasons, whole-resource skips (including all-pages-failed PDFs), incomplete
+preparation and replay mismatches abort. Dependency error/panic payloads are
+replaced by fixed parser codes in evaluation provenance. Interrupted phases cannot certify results. Resume preserves committed
+SQLite work, without promising retention of uncommitted work or inputs pruned
+after a failed full pass. Shared and historical caches are never adopted or reset.
+Corpus hashes, identities, and metadata are rechecked after indexing and before
+each mode completes. These checks detect persistent boundary changes and normal
+request-observed changes, without claiming an atomic filesystem snapshot.
+
 IRPAPERS text skips pages whose transcription is empty or whitespace-only, after
 validating their row structure, paper/page identity and PDF join. The declared
 `documents = 3230` validates raw rows, including skipped pages; duplicate IDs,
@@ -494,13 +519,13 @@ uv run --locked scripts/bench/bench.py determinism ORIGINAL.jsonl WARM.jsonl
 This compares ranked keys, ranks and locators, excluding timing/environment noise.
 Run paths must remain inside the benchmark root.
 
-After full runs are authorized, use `scifact`, `nfcorpus`, `irpapers`, or
+For full runs, use `scifact`, `nfcorpus`, `irpapers`, or
 `irpapers-pdf` in the same pipeline. Run 768 dimensions on SciFact separately.
 `--lexical-weight FLOAT` is an explicit diagnostic override recorded in provenance,
 not a proposed default. On full SciFact scoring, lexical nDCG@10 outside [.60,.68]
 is an error requiring investigation before any ranking conclusion. This band is
-not applied to NanoSciFact. Full SciFact execution is deferred when only smoke
-runs are authorized; the checked band is not a claim that Seyk meets it yet.
+not applied to NanoSciFact. The published full SciFact run scores lexical
+nDCG@10 0.64764, inside the band.
 The pinned full IRPAPERS CSV contains four empty-transcription pages among its
 3,230 raw rows. Materialization retains the 180 queries and writes 3,226 text
 documents. One qrel targets a skipped page and remains a miss; the manifest and
@@ -513,7 +538,7 @@ full measured results, source links and setup differences.
 
 This offline experiment compares the P1 Photo Anchor codec with exact f32 image
 vectors. It does not change the engine, cache, schema, ranking, or f32 default.
-The q4 scan optimization is a separate task (Solo #4714).
+The q4 scan optimization remains separate work.
 
 ### Reproduce
 
@@ -650,7 +675,7 @@ The machine was shared with unrelated builds/benchmarks (load averages 16.54/20.
 
 All 480 query/variant/dimension metric rows and aggregate shares were independently recomputed from committed labels and result rankings. All five scoring runs produced identical rankings. Each scoring run rechecked every photo hash. The fetcher was also checked for valid cached input, corrupt bytes, missing files and unapproved licences, including zero network access in verification mode.
 
-The P1 scan bar and the per-dimension clipping bar fail at both dimensions. Quality passes on this fixture: re-ranking 20 or 50 reproduces every baseline top-10 list. Keep f32 as the default; this experiment does not authorize P3 integration. Improving scan speed is tracked separately as Solo #4714. Any later adoption decision needs representative library sizes and the deferred engine measurements; this small, single-reviewer fixture provides no large-library guarantee.
+The P1 scan bar and the per-dimension clipping bar fail at both dimensions. Quality passes on this fixture: re-ranking 20 or 50 reproduces every baseline top-10 list. Keep f32 as the default; this experiment does not authorize P3 integration. Scan speed needs further work. Any later adoption decision needs representative library sizes and the deferred engine measurements; this small, single-reviewer fixture provides no large-library guarantee.
 
 ### Local competitor runs
 
@@ -779,8 +804,7 @@ sanity interval does not apply to another engine's lexical score.
 
 After scoring and preserving aggregates/provenance, delete your generated query
 rows, run rows, competitor indexes and harness uv cache. When datasets are shared,
-retain raw downloads, corpora and document maps until the orchestrator confirms
-all consumers are finished. Keep removable tool/model installs until their removal
+retain raw downloads, corpora and document maps until all consumers are finished. Keep removable tool/model installs until their removal
 is authorized. Do not delete another worker's artifacts.
 
 [^qmd-native-and]: **Native AND lexical diagnostic:** scifact: 0.045448, nfcorpus: 0.202307, irpapers: 0.011111. Empty rankings: 283/300, 136/323, 175/180 queries, respectively. Pinned QMD 2.8.3 joins positive query terms with `AND`; these scores are not a headline comparison of lexical quality. Its [documented lexical grammar](https://github.com/tobi/qmd/blob/facd35e01359e59d938bc9418e93fb9318addee3/docs/SYNTAX.md) has no any-term option. The documented natural-query pipeline combines expansion with lexical/vector retrieval and is represented by hybrid/full above. Query terms were not rewritten or removed.

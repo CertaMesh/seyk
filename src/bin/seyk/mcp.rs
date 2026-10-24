@@ -557,6 +557,20 @@ impl Hub {
     }
 }
 
+fn logical_root_paths(roots: &[PolicyRoot]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .map(|root| root.uri_path().to_path_buf())
+        .collect()
+}
+
+fn root_revalidation_into_anyhow(error: RootRevalidationError) -> anyhow::Error {
+    match error {
+        RootRevalidationError::Policy(error) => error.into(),
+        RootRevalidationError::Identity(error) => error.into(),
+    }
+}
+
 impl SeykServer {
     pub fn new(roots: Vec<PathBuf>, hub: Arc<Hub>) -> Result<Self> {
         let roots = roots
@@ -571,10 +585,7 @@ impl SeykServer {
         if roots.is_empty() {
             return Err(anyhow!("no folders to serve"));
         }
-        let paths = roots
-            .iter()
-            .map(|r| r.uri_path().to_path_buf())
-            .collect::<Vec<_>>();
+        let paths = logical_root_paths(&roots);
         let watchers = hub.watch_roots(&paths)?;
         Ok(Self {
             #[cfg(unix)]
@@ -594,10 +605,7 @@ impl SeykServer {
     fn validate_roots(&self) -> Result<()> {
         for root in self.roots.iter() {
             // Preserve the errors exposed before revalidation owned both checks.
-            let current = root.revalidate().map_err(|error| match error {
-                RootRevalidationError::Policy(error) => anyhow::Error::new(error),
-                RootRevalidationError::Identity(error) => anyhow::Error::new(error),
-            })?;
+            let current = root.revalidate().map_err(root_revalidation_into_anyhow)?;
             if !current {
                 return Err(anyhow!(
                     "server root target changed: {}",
@@ -900,6 +908,7 @@ fn paths_overlap(a: &Path, b: &Path) -> bool {
 
 /// Resolve `path` against the first root and refuse anything outside the roots,
 /// so an agent cannot read previews of arbitrary files through this server.
+/// Return an absolute logical path without `..`, retaining policy-bearing aliases.
 fn confine(path: &Path, roots: &[PolicyRoot]) -> Result<PathBuf> {
     let path = seyk::expand_tilde(path);
     let joined = if path.is_absolute() {
@@ -927,7 +936,8 @@ fn confine(path: &Path, roots: &[PolicyRoot]) -> Result<PathBuf> {
                 candidate
             };
             // Keep directory symlinks supplied below a broader server root too.
-            logical.get_or_insert(supplied);
+            let candidate = seyk::discovery::absolute_logical_path(&supplied)?;
+            logical.get_or_insert(candidate);
         }
     }
     if let Some(logical) = logical {
@@ -1122,10 +1132,7 @@ fn local_content_server(
         .iter()
         .map(|root| PolicyRoot::new(root))
         .collect::<seyk::Result<Vec<_>>>()?;
-    let paths = policy_roots
-        .iter()
-        .map(|root| root.uri_path().to_path_buf())
-        .collect::<Vec<_>>();
+    let paths = logical_root_paths(&policy_roots);
     let watchers = hub.watch_roots(&paths)?;
     Ok(SeykServer {
         local_content: Some(provider),
@@ -2848,6 +2855,40 @@ mod tests {
         let root = PolicyRoot::new(&root).unwrap();
         let error = confine(Path::new("id_rsa"), &[root]).unwrap_err();
         assert!(error.to_string().contains("refusing secret file"));
+    }
+
+    #[test]
+    fn confine_normalizes_parent_traversal_in_relative_and_absolute_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("child")).unwrap();
+        let file = root.join("safe.txt");
+        std::fs::write(&file, "safe").unwrap();
+        let roots = vec![PolicyRoot::new(&root).unwrap()];
+        for supplied in [
+            PathBuf::from("child/../safe.txt"),
+            root.join("child/../safe.txt"),
+        ] {
+            assert_eq!(confine(&supplied, &roots).unwrap(), file);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confine_normalizes_parent_traversal_with_filesystem_symlink_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("target/child")).unwrap();
+        std::os::unix::fs::symlink("target/child", root.join("alias")).unwrap();
+        let file = root.join("target/safe.txt");
+        std::fs::write(&file, "safe").unwrap();
+        let roots = vec![PolicyRoot::new(&root).unwrap()];
+        for supplied in [
+            PathBuf::from("alias/../safe.txt"),
+            root.join("alias/../safe.txt"),
+        ] {
+            assert_eq!(confine(&supplied, &roots).unwrap(), file);
+        }
     }
 
     #[test]

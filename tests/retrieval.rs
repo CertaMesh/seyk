@@ -15,15 +15,15 @@ fn write(dir: &Path, name: &str, body: &str) {
     fs::write(p, body).unwrap();
 }
 
+// These examples are invented for this test and use no private source text.
 fn corpus() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     write(
         d,
-        "characters/martin.md",
-        "# Martin\n\nLately Martin catches himself clearing his throat before he speaks, the way the old man did. \
-         He hates it. Every time his voice hardens with the children he hears the house he grew up in, \
-         and he wonders whether the anger was inherited like the shape of his hands.\n",
+        "astronomy/telescope.md",
+        "# Night sky\n\nPoint the telescope toward Saturn after sunset. Its rings become visible \
+         through the eyepiece. A camera records the distant planets and stars.\n",
     );
     write(
         d,
@@ -39,16 +39,16 @@ fn corpus() -> tempfile::TempDir {
     );
     write(
         d,
-        "ideas/memory.md",
-        "# Ideas\n\n## Weather\n\nA chapter that opens with rain on the allotment.\n\n\
-         ## Remembering wrong\n\nShe is certain the argument happened in winter, but the photographs show summer. \
-         Each time she retells it, the story shifts a little, and she can no longer tell which version is hers.\n",
+        "ideas/garden.md",
+        "# Projects\n\n## Tools\n\nKeep the spade and rake in the shed.\n\n\
+         ## Seedlings\n\nPlace the young plants near a bright window. Water their roots gently. \
+         Move them outside only after the last frost.\n",
     );
     write(
         d,
-        "scenes/funeral.md",
-        "After the funeral her chest felt packed with wet sand. She could not lift her arms to hang up her coat; \
-         the loss sat in her shoulders like a yoke.\n",
+        "workshop/clay.md",
+        "Shape the wet clay into a bowl on the wheel. Let the pottery dry before firing it \
+         in the kiln. The heat hardens the ceramic, ready for glazing.\n",
     );
     dir
 }
@@ -84,24 +84,15 @@ fn queries_without_shared_keywords_find_the_right_note() {
         .unwrap();
 
     let cases = [
-        (
-            "Where did I write about the protagonist becoming like his father?",
-            "martin.md",
-        ),
-        (
-            "Which notes deal with somebody repeating their parents' behaviour?",
-            "martin.md",
-        ),
+        ("observing distant planets", "telescope.md"),
+        ("Which notes concern looking into space?", "telescope.md"),
         ("what can I cook for dinner tonight", "soup.txt"),
         ("how to make a slow service respond faster", "caching.md"),
         (
-            "What ideas did I have about memory becoming unreliable?",
-            "memory.md",
+            "caring for young plants before moving them outdoors",
+            "garden.md",
         ),
-        (
-            "Where did I describe grief as something physical?",
-            "funeral.md",
-        ),
+        ("baking ceramic bowls at high temperatures", "clay.md"),
     ];
     for (query, expected) in cases {
         let r = search(&engine, dir.path(), query);
@@ -120,11 +111,11 @@ fn locator_points_at_the_matching_section() {
     let r = search(
         &engine,
         dir.path(),
-        "misremembering when an argument took place",
+        "caring for young plants before moving them outdoors",
     );
     let hit = &r.hits[0];
-    assert_eq!(top_file(&r), "memory.md");
-    assert_eq!(hit.heading.as_deref(), Some("Ideas > Remembering wrong"));
+    assert_eq!(top_file(&r), "garden.md");
+    assert_eq!(hit.heading.as_deref(), Some("Projects > Seedlings"));
     let ResourceLocator::Text {
         byte_start,
         byte_end,
@@ -136,13 +127,13 @@ fn locator_points_at_the_matching_section() {
     };
     let source = fs::read_to_string(hit.resource.to_file_path().expect("file resource")).unwrap();
     let text = &source[byte_start as usize..byte_end as usize];
-    assert!(text.starts_with("## Remembering wrong"), "{text:?}");
+    assert!(text.starts_with("## Seedlings"), "{text:?}");
     assert_eq!(line_start, Some(7));
     assert!(
         hit.preview
             .as_deref()
             .unwrap()
-            .starts_with("She is certain")
+            .starts_with("Place the young")
     );
 }
 
@@ -155,7 +146,7 @@ fn ranking_holds_at_every_dimension() {
             .embedder(model_support::embedder(dim))
             .build()
             .unwrap();
-        let r = search(&engine, dir.path(), "fear of turning into your dad");
-        assert_eq!(top_file(&r), "martin.md", "dimension {dim}");
+        let r = search(&engine, dir.path(), "observing distant planets");
+        assert_eq!(top_file(&r), "telescope.md", "dimension {dim}");
     }
 }

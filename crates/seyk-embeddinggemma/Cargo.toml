@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Local EmbeddingGemma 2 inference"
+repository.workspace = true
+readme.workspace = true
+keywords = ["embeddinggemma", "embeddings", "onnx", "gemma", "local-first"]
+categories = ["science", "text-processing"]
 
 [features]
 default = []
