@@ -171,7 +171,7 @@ def main():
                 raise ValueError("manifest changed during fetch; stopping")
             previous = row["sha256"]
             row["sha256"] = digest
-            row["repinned"] = {"date": "2026-10-24", "previous_sha256": previous}
+            row["repinned"] = {"date": datetime.now(timezone.utc).date().isoformat(), "previous_sha256": previous}
             hashes.remove(previous)
             hashes.add(digest)
         if not path.exists():

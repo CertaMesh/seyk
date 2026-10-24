@@ -100,10 +100,12 @@ class RepinTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
                         fixture.main()
                 self.assertFalse((dest / "pinned-photo.jpg").exists())
-                with patch.object(fixture, "fetch", return_value=download), patch.object(fixture, "jpeg_width", return_value=960), patch("sys.argv", ["fetcher", "--repin"]):
+                with patch.object(fixture, "fetch", return_value=download), patch.object(fixture, "jpeg_width", return_value=960), patch("sys.argv", ["fetcher", "--repin"]), patch.object(fixture, "datetime", wraps=datetime) as clock:
+                    clock.now.return_value = datetime(2031, 1, 2, 0, 5, tzinfo=timezone.utc)
                     fixture.main()
+                    clock.now.assert_called_once_with(timezone.utc)
                 changed = json.loads(manifest.read_text())[0]
-                self.assertEqual(changed.pop("repinned"), {"date": "2026-10-24", "previous_sha256": row["sha256"]})
+                self.assertEqual(changed.pop("repinned"), {"date": "2031-01-02", "previous_sha256": row["sha256"]})
                 self.assertEqual(changed.pop("sha256"), hashlib.sha256(data).hexdigest())
                 self.assertEqual(changed, {k: v for k, v in row.items() if k != "sha256"})
                 with patch.object(fixture, "fetch", side_effect=AssertionError("network forbidden")), patch("sys.argv", ["fetcher", "--verify"]):
