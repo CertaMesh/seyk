@@ -5,6 +5,8 @@ mod daemon;
 #[cfg(feature = "mcp")]
 mod mcp;
 
+mod index_progress;
+
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -197,6 +199,9 @@ enum Command {
         paths: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
+        /// Emit versioned JSONL resource progress to stderr (one root, standalone).
+        #[arg(long, value_enum)]
+        progress: Option<index_progress::Format>,
         /// Keep running and re-index whenever files change.
         #[cfg(feature = "watch")]
         #[arg(long)]
@@ -516,25 +521,68 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Index {
             paths,
             json,
+            progress: progress_format,
             #[cfg(feature = "watch")]
             watch,
             filter,
             model,
         } => {
-            let paths = default_paths(paths)?;
-            let engine = engine(&model, false)?;
+            if progress_format.is_some() {
+                anyhow::ensure!(
+                    paths.len() <= 1,
+                    "--progress jsonl requires one root per invocation"
+                );
+                #[cfg(feature = "watch")]
+                anyhow::ensure!(
+                    !watch,
+                    "--progress jsonl is only available for standalone indexing"
+                );
+            }
+            let jsonl = progress_format.map(|_| {
+                index_progress::JsonlProgress::new(
+                    paths
+                        .first()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| ".".into()),
+                    std::io::stderr(),
+                )
+            });
+            let paths_result = default_paths(paths);
+            if paths_result.is_err()
+                && let Some(progress) = &jsonl
+            {
+                progress.finish(false);
+            }
+            let paths = paths_result?;
+            let engine_result = engine(&model, false);
+            if engine_result.is_err()
+                && let Some(progress) = &jsonl
+            {
+                progress.finish(false);
+            }
+            let engine = engine_result?;
             #[cfg(feature = "watch")]
             if watch {
                 return watch_and_index(&engine, &paths, &filter.discovery(), json);
             }
-            let progress = Progress::new(true);
-            let report = |e: ProgressEvent| progress.event(e);
+            let progress = Progress::new(jsonl.is_none());
+            let report = |e: ProgressEvent| {
+                if let Some(progress) = &jsonl {
+                    progress.event(e);
+                } else {
+                    progress.event(e);
+                }
+            };
             let result = engine
                 .index()
                 .paths(&paths)
                 .discovery(filter.discovery())
                 .progress(&report)
-                .execute()?;
+                .execute();
+            if let Some(progress) = &jsonl {
+                progress.finish(result.is_ok());
+            }
+            let result = result?;
             progress.finish();
             if json {
                 println!("{}", serde_json::to_string_pretty(&json_output(&result))?);

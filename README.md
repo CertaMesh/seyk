@@ -160,6 +160,9 @@ seyk search "query" ./notes --json
 # Optional: embed everything up front so later searches are instant
 seyk index ~/notes
 
+# Live resource progress on stderr, final JSON report on stdout.
+seyk index ~/notes --json --progress jsonl
+
 # Keep the index fresh: index once, then re-index whatever changes
 seyk index --watch ~/notes
 
@@ -174,6 +177,8 @@ seyk cache clear
 # Seed a fresh epoch cache without loading a model
 seyk cache import --from old.sqlite --map mapping.jsonl --profile PROFILE_ID --cache-path new.sqlite --json
 ```
+
+See [the standalone progress protocol](docs/index-progress.md) for the JSONL schema.
 
 To move an indexed collection into a new directory, use `cache import` with an
 explicit destination and profile ID from `seyk cache stats --json`. The destination
