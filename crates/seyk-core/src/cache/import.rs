@@ -109,14 +109,14 @@ fn reject_alias(source: &Path, destination: &Path) -> Result<()> {
     let src = std::fs::canonicalize(source).map_err(|e| Error::io(source, e))?;
     if destination.exists() {
         let dst = std::fs::canonicalize(destination).map_err(|e| Error::io(destination, e))?;
-        let mut alias = src == dst;
+        let alias = src == dst;
         #[cfg(unix)]
-        {
+        let alias = {
             use std::os::unix::fs::MetadataExt;
             let a = std::fs::metadata(source).map_err(|e| Error::io(source, e))?;
             let b = std::fs::metadata(destination).map_err(|e| Error::io(destination, e))?;
-            alias |= (a.dev(), a.ino()) == (b.dev(), b.ino());
-        }
+            alias || (a.dev(), a.ino()) == (b.dev(), b.ino())
+        };
         if alias {
             return Err(invalid("source and destination identify the same file"));
         }
