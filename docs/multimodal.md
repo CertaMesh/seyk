@@ -144,3 +144,13 @@ For every new modality, before it is enabled:
    reason why not;
 4. a ranking test with a text query against generated fixtures, as
    `tests/multimodal.rs` does for images.
+
+## Experimental Photo Anchor scan
+
+`seyk search "red bicycle" ./photos --image-scan q4` opts into Photo Anchor candidate scanning for standalone images with an EmbeddingGemma 2 d256 or d768 profile. Rust callers use `SearchRequest::image_scan(ImageScan::PhotoAnchorQ4)`. A persistent SQLite cache is required. Lexical-only mode and `--no-cache` reject q4.
+
+Exact f32 remains the default. Opted-in sync derives missing codes from retained f32 embeddings without inference. Cached-only searches never backfill: missing or unknown-codec representations use f32. A malformed current-codec row is an error. PDF pages, text and audio continue to use f32.
+
+For each query the image shortlist is `min(image_count, max(50, 4*take))`, with `take=limit` for semantic and `take=max(4*limit,50)` for hybrid. The engine fetches only selected f32 image vectors, reranks with its exact dot kernel, applies the semantic threshold, and merges with exact candidates. Approximate scores never reach results. This bounded shortlist cannot guarantee recall on arbitrary libraries. On the 280-photo fixture hybrid depth is near exhaustive; semantic k=1/5/10 is the stronger test.
+
+Both representations remain on disk, so q4 adds cache storage. Clear, pruning and vector replacement invalidate derived codes through foreign-key cascades. Schema v7 upgrades every cache, even when q4 is off; older binaries cannot reopen v7. Import from v6/v7 copies f32 only and leaves sources unchanged.

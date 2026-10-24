@@ -144,3 +144,120 @@ fn rejects_invalid_inputs_and_corrupted_assets() {
         ));
     }
 }
+
+// These references deliberately parse the pinned files without the production loader.
+fn independent_scores(query: &[f32], codes: &[u8]) -> (f32, f64) {
+    let dim = query.len();
+    let (anchor, table): (&[u8], &[u8]) = match dim {
+        256 => (
+            include_bytes!("../../assets/photo-anchor/photo_anchor_256.f32.bin"),
+            include_bytes!("../../assets/photo-anchor/quant4_256.f32.bin"),
+        ),
+        768 => (
+            include_bytes!("../../assets/photo-anchor/photo_anchor_768.f32.bin"),
+            include_bytes!("../../assets/photo-anchor/quant4_768.f32.bin"),
+        ),
+        _ => panic!("unsupported test dimension"),
+    };
+    let read =
+        |bytes: &[u8], i: usize| f32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
+    let mut sequential = 0.0f32;
+    let mut double = 0.0f64;
+    for (i, &q) in query.iter().enumerate() {
+        let code = if i % 2 == 0 {
+            codes[i / 2] >> 4
+        } else {
+            codes[i / 2] & 15
+        };
+        let a = read(anchor, i);
+        let o = read(table, i);
+        let s = read(table, dim + i);
+        sequential += (a + o + f32::from(code) * s) * q;
+        double += (f64::from(a) + f64::from(o) + f64::from(code) * f64::from(s)) * f64::from(q);
+    }
+    (sequential, double)
+}
+
+fn assert_independent_contract(query: &Embedding, codes: &[u8]) {
+    let actual = QueryLut::new(query).unwrap().score(codes).unwrap();
+    let (sequential, double) = independent_scores(query.as_slice(), codes);
+    let tolerance = if query.dim() == 256 { 5e-5 } else { 1.5e-4 };
+    assert!(
+        (actual - sequential).abs() <= tolerance,
+        "d{} LUT {actual} sequential {sequential}",
+        query.dim()
+    );
+    assert!(
+        (f64::from(actual) - double).abs() <= f64::from(tolerance),
+        "d{} LUT {actual} f64 {double}",
+        query.dim()
+    );
+}
+
+#[test]
+fn absolute_accuracy_against_independent_f32_and_f64_references() {
+    let mut state = 4517u64;
+    let mut random = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((state >> 32) as u32 as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    for dim in [256, 768] {
+        let queries: Vec<_> = (0..8)
+            .map(|seed| {
+                if seed < 4 {
+                    vector(dim, seed)
+                } else {
+                    Embedding::from_raw(
+                        (0..dim).map(|_| random()).collect(),
+                        Dimension::try_from(dim).unwrap(),
+                    )
+                    .unwrap()
+                }
+            })
+            .collect();
+        for query in &queries {
+            for byte in 0..=255u8 {
+                assert_independent_contract(query, &vec![byte; dim / 2]);
+            }
+            for _ in 0..64 {
+                let row: Vec<_> = (0..dim / 2)
+                    .map(|_| (random() * 127.0 + 128.0) as u8)
+                    .collect();
+                assert_independent_contract(query, &row);
+            }
+            for seed in 0..4 {
+                let codes = PhotoAnchorQ4::new(dim)
+                    .unwrap()
+                    .encode(&vector(dim, seed))
+                    .unwrap();
+                assert_independent_contract(query, &codes);
+            }
+        }
+    }
+}
+
+#[test]
+fn preserved_4714_witness_satisfies_the_amended_absolute_contract() {
+    let witness: serde_json::Value =
+        serde_json::from_str(include_str!("../../assets/photo-anchor/witness-4714.json")).unwrap();
+    let values: Vec<f32> = witness["q_bits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap()))
+        .collect();
+    let query: Embedding = serde_json::from_value(serde_json::to_value(values).unwrap()).unwrap();
+    assert!(query.normalized());
+    let hex = witness["row_hex"].as_str().unwrap();
+    let codes: Vec<_> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    let actual = QueryLut::new(&query).unwrap().score(&codes).unwrap();
+    let (sequential, _) = independent_scores(query.as_slice(), &codes);
+    assert_eq!(actual, witness["lut"].as_f64().unwrap() as f32);
+    assert_eq!(sequential, witness["decode"].as_f64().unwrap() as f32);
+    assert_independent_contract(&query, &codes);
+}

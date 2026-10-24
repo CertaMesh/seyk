@@ -683,7 +683,7 @@ fn v3_upgrade_keeps_file_keys_vectors_segments_and_keywords_without_embedding() 
             |r| r.get::<_, String>(0)
         )
         .unwrap(),
-        "6"
+        "7"
     );
     drop(conn);
     let (engine, fake) = shared_engine(SqliteCache::open(&file).unwrap(), Dimension::D128, "r1");

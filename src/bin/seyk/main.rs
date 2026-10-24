@@ -13,14 +13,14 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use seyk::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 use seyk::{
-    CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, IndexReport, MemoryCache,
+    CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, ImageScan, IndexReport, MemoryCache,
     ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchMode, SearchResults,
     SqliteCache, SyncStats, expand_tilde,
 };
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 8;
+const JSON_SCHEMA_VERSION: u32 = 9;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -146,6 +146,9 @@ enum Command {
         /// hybrid (meaning, keywords and file names), semantic or lexical.
         #[arg(long, default_value = "hybrid")]
         mode: SearchMode,
+        /// Experimental image candidate scan with exact f32 reranking (requires cache).
+        #[arg(long, default_value = "exact")]
+        image_scan: ImageScan,
         /// Keyword weight against semantic (1.0) in hybrid mode. For tuning.
         #[arg(long, hide = true)]
         lexical_weight: Option<f32>,
@@ -369,6 +372,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             query,
             also,
             mode,
+            image_scan,
             lexical_weight,
             paths,
             limit,
@@ -388,6 +392,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .into_iter()
                 .fold(engine.search(&query), |r, q| r.query(q))
                 .mode(mode)
+                .image_scan(image_scan)
                 .kind_counts(kind_counts)
                 .paths(&paths)
                 .limit(limit)
@@ -919,9 +924,9 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=8)
+        Some(2..=9)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4, 5, 6, 7 or 8");
+        bail!("expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8 or 9");
     }
     let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
     results
@@ -1614,7 +1619,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 8);
+        assert_eq!(v["schema_version"], 9);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1636,7 +1641,7 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 8);
+        assert_eq!(value["schema_version"], 9);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
@@ -1672,7 +1677,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 8);
+        assert_eq!(value["schema_version"], 9);
         assert!(
             value["hits"]
                 .as_array()

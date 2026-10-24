@@ -25,6 +25,9 @@ use crate::segment::{TextFormat, TextSegmenter};
 use crate::{Embedding, Error, ResourceId, ResourceLocator, ResourceMetadata, Result};
 use crate::{FsProvider, ProvidedResource, ResourceProvider, ResourceScope, ResourceVersion};
 
+mod image_scan;
+pub use image_scan::ImageScan;
+
 /// Bump when the way segments are turned into model inputs changes.
 const INPUT_FORMAT_VERSION: u32 = 2;
 
@@ -654,6 +657,7 @@ impl SearchEngine {
             progress: None,
             sync: true,
             mode: SearchMode::default(),
+            image_scan: ImageScan::Exact,
             lexical_weight: None,
             lexical_fallback: false,
             kind_counts: false,
@@ -1892,6 +1896,7 @@ pub struct SearchRequest<'e> {
     progress: Option<ProgressFn<'e>>,
     sync: bool,
     mode: SearchMode,
+    image_scan: ImageScan,
     lexical_weight: Option<f32>,
     lexical_fallback: bool,
     kind_counts: bool,
@@ -1901,6 +1906,14 @@ pub struct SearchRequest<'e> {
 }
 
 impl<'e> SearchRequest<'e> {
+    /// Opt into experimental Photo Anchor candidate scanning for standalone images.
+    /// Exact f32 reranking preserves returned score semantics. Requires SQLite;
+    /// a bounded shortlist does not guarantee recall on arbitrary libraries.
+    pub fn image_scan(mut self, scan: ImageScan) -> Self {
+        self.image_scan = scan;
+        self
+    }
+
     /// Include counts of returned hits by locator kind; no second search is run.
     pub fn kind_counts(mut self, enabled: bool) -> Self {
         self.kind_counts = enabled;
@@ -2009,6 +2022,19 @@ impl<'e> SearchRequest<'e> {
             self.sync = true;
             self.mode = SearchMode::Lexical;
         }
+        if self.image_scan == ImageScan::PhotoAnchorQ4 {
+            if self.mode == SearchMode::Lexical {
+                return Err(Error::Config(
+                    "q4 image scan is unavailable in lexical-only mode".into(),
+                ));
+            }
+            if !engine.with_cache(|c| Ok(c.supports_image_codes()))? {
+                return Err(Error::Config(
+                    "q4 image scan requires SQLite; --no-cache is unsupported".into(),
+                ));
+            }
+            crate::cache::image_codes::check_profile(&engine.profile)?;
+        }
         if self
             .lexical_weight
             .is_some_and(|w| !w.is_finite() || w < 0.0)
@@ -2082,7 +2108,17 @@ impl<'e> SearchRequest<'e> {
         }
         let mut sync = if self.sync {
             let indexing = engine.acquire_indexing_lease()?;
-            engine.sync(&indexing, &resources, self.progress)?
+            let report = engine.sync(&indexing, &resources, self.progress)?;
+            if self.image_scan == ImageScan::PhotoAnchorQ4 {
+                let skipped: HashSet<_> = report.skipped.iter().map(|s| &s.resource).collect();
+                let paths = resources
+                    .iter()
+                    .filter(|r| r.kind == ResourceKind::Image && !skipped.contains(&r.id))
+                    .map(|r| r.id.clone())
+                    .collect();
+                engine.with_cache(|c| c.sync_image_codes(pid, &paths))?;
+            }
+            report
         } else {
             SyncStats {
                 resources_discovered: resources.len(),
@@ -2144,7 +2180,7 @@ impl<'e> SearchRequest<'e> {
 
         // Each signal contributes a deeper list than asked for, so a hit that is
         // only moderately good on two signals can still surface.
-        let depth = (self.limit * 4).max(50);
+        let depth = self.limit.saturating_mul(4).max(50);
 
         let mut segments = SegmentTable::default();
         let mut semantic: Vec<(SegmentKey, f32, usize)> = Vec::new();
@@ -2162,38 +2198,64 @@ impl<'e> SearchRequest<'e> {
                 }
                 query_vectors.push(v);
             }
-            let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
-            // Vector IDs break cosine ties, including at the top-k cutoff.
-            stored.sort_by_cached_key(|v| (crate::cache::resource_key(&v.resource), v.ordinal));
-            let mut index = BruteForceIndex::with_capacity(dim, stored.len())?;
-            let mut keys = Vec::with_capacity(stored.len());
-            for v in stored {
-                // A wrong-sized vector means a corrupt cache; never compare it.
-                if v.vector.len() == dim
-                    && metadata
-                        .get(&v.resource)
-                        .is_some_and(|m| engine.supports_locator(&m.metadata, &v.segment.locator))
-                {
-                    index.add(&v.vector);
-                    keys.push(segments.insert(v.resource, v.ordinal, v.segment));
-                }
-            }
-            searched = keys.len();
             let min_score = self.min_score.unwrap_or(f32::MIN);
             let take = if self.mode == SearchMode::Semantic {
                 self.limit
             } else {
                 depth
             };
-            semantic = fuse_max(
-                query_vectors
-                    .iter()
-                    .map(|q| index.search(q.as_slice(), take, min_score)),
-                take,
-            )
-            .into_iter()
-            .map(|f| (keys[f.scored.id].clone(), f.scored.score, f.query_index))
-            .collect();
+            if self.image_scan == ImageScan::PhotoAnchorQ4 {
+                let mut rows = engine.with_cache(|c| c.image_scan_rows(pid, &wanted))?;
+                rows.retain(|v| {
+                    metadata
+                        .get(&v.resource)
+                        .is_some_and(|m| engine.supports_locator(&m.metadata, &v.segment.locator))
+                });
+                rows.sort_by_cached_key(|v| (crate::cache::resource_key(&v.resource), v.ordinal));
+                searched = rows.len();
+                let ranked = image_scan::search(engine, &rows, &query_vectors, take, min_score)?;
+                let keys: Vec<_> = rows
+                    .into_iter()
+                    .map(|v| segments.insert(v.resource, v.ordinal, v.segment))
+                    .collect();
+                semantic = fuse_max(ranked.into_iter(), take)
+                    .into_iter()
+                    .map(|f| (keys[f.scored.id].clone(), f.scored.score, f.query_index))
+                    .collect();
+            } else {
+                let mut stored = engine.with_cache(|c| c.vectors_for(pid, &wanted))?;
+                // Vector IDs break cosine ties, including at the top-k cutoff.
+                stored.sort_by_cached_key(|v| (crate::cache::resource_key(&v.resource), v.ordinal));
+                let mut index = BruteForceIndex::with_capacity(dim, stored.len())?;
+                let mut keys = Vec::with_capacity(stored.len());
+                for v in stored {
+                    // A wrong-sized vector means a corrupt cache; never compare it.
+                    if v.vector.len() == dim
+                        && metadata.get(&v.resource).is_some_and(|m| {
+                            engine.supports_locator(&m.metadata, &v.segment.locator)
+                        })
+                    {
+                        index.add(&v.vector);
+                        keys.push(segments.insert(v.resource, v.ordinal, v.segment));
+                    }
+                }
+                searched = keys.len();
+                let min_score = self.min_score.unwrap_or(f32::MIN);
+                let take = if self.mode == SearchMode::Semantic {
+                    self.limit
+                } else {
+                    depth
+                };
+                semantic = fuse_max(
+                    query_vectors
+                        .iter()
+                        .map(|q| index.search(q.as_slice(), take, min_score)),
+                    take,
+                )
+                .into_iter()
+                .map(|f| (keys[f.scored.id].clone(), f.scored.score, f.query_index))
+                .collect();
+            }
         }
 
         let mut lexical: Vec<(SegmentKey, f32)> = Vec::new();

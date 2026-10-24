@@ -122,6 +122,9 @@ pub struct ProfileStats {
     pub resources: u64,
     pub segments: u64,
     pub embeddings: u64,
+    /// Derived image representations, counted separately from retained f32 embeddings.
+    #[serde(default)]
+    pub image_codes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +208,40 @@ pub trait EmbeddingCache: Send {
     fn known_inputs(&self, profile: &str, hashes: &[String]) -> Result<HashSet<String>>;
 
     fn put_embeddings(&mut self, profile: &str, items: &[(String, Vec<f32>)]) -> Result<()>;
+
+    /// Whether persistent Photo Anchor representations are supported.
+    fn supports_image_codes(&self) -> bool {
+        false
+    }
+
+    /// Derive missing image codes from retained f32 during an opted-in sync.
+    fn sync_image_codes(&mut self, _profile: &str, _paths: &HashSet<ResourceId>) -> Result<()> {
+        Err(Error::Config(
+            "q4 image scan requires a persistent SQLite cache; --no-cache is unsupported".into(),
+        ))
+    }
+
+    /// Read representations without writing or loading f32 for coded images.
+    fn image_scan_rows(
+        &self,
+        _profile: &str,
+        _paths: &HashSet<ResourceId>,
+    ) -> Result<Vec<ScanVector>> {
+        Err(Error::Config(
+            "q4 image scan is unsupported by this cache".into(),
+        ))
+    }
+
+    /// Fetch only selected f32 vectors, deduplicated by input hash.
+    fn selected_image_vectors(
+        &self,
+        _profile: &str,
+        _hashes: &HashSet<String>,
+    ) -> Result<HashMap<String, Vec<f32>>> {
+        Err(Error::Config(
+            "q4 image scan is unsupported by this cache".into(),
+        ))
+    }
 
     /// All searchable vectors for the given paths.
     fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>>;
@@ -482,6 +519,7 @@ impl EmbeddingCache for MemoryCache {
                         .map(|r| r.segments.len() as u64)
                         .sum(),
                     embeddings: self.vectors.get(id).map_or(0, |b| b.len() as u64),
+                    image_codes: 0,
                 }
             })
             .collect();
@@ -515,10 +553,12 @@ fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalD
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
+pub(crate) mod image_codes;
+pub use image_codes::{IMAGE_CODEC_ID, ScanData, ScanVector};
 mod import;
 pub use import::{CacheImportMapping, CacheImportReport};
 
-const SCHEMA_VERSION: &str = "6";
+const SCHEMA_VERSION: &str = "7";
 
 /// Injective for arbitrary UTF-8 IDs, including empty IDs. Hex contains no `_`,
 /// so another profile's name cannot collide with an FTS shadow-table suffix.
@@ -862,6 +902,14 @@ impl SqliteCache {
         if version.as_deref() == Some(SCHEMA_VERSION) {
             return Ok(());
         }
+        if version.as_deref() == Some("6") {
+            tx.execute_batch(image_codes::CREATE)?;
+            tx.execute(
+                "UPDATE meta SET value=?1 WHERE key='schema_version'",
+                [SCHEMA_VERSION],
+            )?;
+            return Ok(());
+        }
         if let Some(version) = &version {
             if !matches!(version.as_str(), "1" | "2" | "3" | "4" | "5") {
                 return Err(Error::Config(format!(
@@ -919,6 +967,7 @@ impl SqliteCache {
              );
              ",
         )?;
+        tx.execute_batch(image_codes::CREATE)?;
         let has_media_type: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('resources') WHERE name = 'media_type')",
             [],
@@ -1471,6 +1520,30 @@ impl EmbeddingCache for SqliteCache {
         Ok(())
     }
 
+    fn supports_image_codes(&self) -> bool {
+        true
+    }
+
+    fn sync_image_codes(&mut self, profile: &str, paths: &HashSet<ResourceId>) -> Result<()> {
+        self.backfill_codes(profile, paths)
+    }
+
+    fn image_scan_rows(
+        &self,
+        profile: &str,
+        paths: &HashSet<ResourceId>,
+    ) -> Result<Vec<ScanVector>> {
+        self.scan_rows(profile, paths)
+    }
+
+    fn selected_image_vectors(
+        &self,
+        profile: &str,
+        hashes: &HashSet<String>,
+    ) -> Result<HashMap<String, Vec<f32>>> {
+        self.selected_vectors(profile, hashes)
+    }
+
     fn vectors_for(&self, profile: &str, paths: &HashSet<ResourceId>) -> Result<Vec<StoredVector>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT s.path, s.locator, s.heading, s.input_hash, e.vector, s.ordinal
@@ -1650,7 +1723,8 @@ impl EmbeddingCache for SqliteCache {
             "SELECT p.id, p.profile,
                  (SELECT COUNT(*) FROM resources r WHERE r.profile = p.id),
                  (SELECT COUNT(*) FROM segments s WHERE s.profile = p.id),
-                 (SELECT COUNT(*) FROM embeddings e WHERE e.profile = p.id)
+                 (SELECT COUNT(*) FROM embeddings e WHERE e.profile = p.id),
+                 (SELECT COUNT(*) FROM image_codes c WHERE c.profile = p.id)
              FROM profiles p ORDER BY p.id",
         )?;
         let profiles = stmt
@@ -1661,6 +1735,7 @@ impl EmbeddingCache for SqliteCache {
                     resources: r.get::<_, i64>(2)? as u64,
                     segments: r.get::<_, i64>(3)? as u64,
                     embeddings: r.get::<_, i64>(4)? as u64,
+                    image_codes: r.get::<_, i64>(5)? as u64,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

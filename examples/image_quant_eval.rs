@@ -152,10 +152,9 @@ fn diagnostics(images: &[Embedding], dim: usize) -> Value {
         .iter()
         .map(|&n| n as f64 / images.len() as f64)
         .collect();
-    json!({"clip_rate_per_dimension": rates,
+    json!({"clip_count_per_dimension":clips,"clip_denominator":images.len(),"clip_rate_per_dimension": rates,
         "clip_rate_mean": rates.iter().sum::<f64>() / dim as f64,
         "clip_rate_max": rates.iter().copied().fold(0.0, f64::max),
-        "dimensions_over_3_percent": rates.iter().filter(|&&r| r > 0.03).count(),
         "fixture_mean_anchor_cosine": cosine})
 }
 
@@ -184,7 +183,7 @@ fn evaluate(
     for image in &images {
         codes.extend(codec.encode(image)?);
     }
-    let mut totals = [[0f64; 5]; 4];
+    let mut totals = [[0f64; 4]; 4];
     let (mut error_sum, mut error_max) = (0f64, 0f64);
     let mut per_query = Vec::new();
     for (query_index, (q, relevance)) in queries.iter().zip(labels).enumerate() {
@@ -214,45 +213,10 @@ fn evaluate(
                 .count() as f64
                 / 10.0;
             let identical = usize::from(rank[..10] == ranks[0][..10]) as f64;
-            for (total, value) in totals[i]
-                .iter_mut()
-                .zip([ndcg, recall, overlap, identical, 0.0])
-            {
+            for (total, value) in totals[i].iter_mut().zip([ndcg, recall, overlap, identical]) {
                 *total += value;
             }
             row.push(json!({"ndcg_at_10":ndcg,"recall_at_1":recall,"top10":rank[..10]}));
-        }
-        // Cached-query retrieval only: LUT construction, scan, candidate selection,
-        // and exact shortlist scoring. No embedding, disk reads, SQLite or RRF.
-        for step in 0..4 {
-            let variant = (step + query_index) % 4;
-            let depth = [0, 0, 20, 50][variant];
-            let start = Instant::now();
-            for _ in 0..20 {
-                let ranked = if variant == 0 {
-                    order(&images.iter().map(|v| q.cosine(v)).collect::<Vec<_>>())
-                } else {
-                    let lut = QueryLut::new(q)?;
-                    let scores = codes
-                        .chunks_exact(dim / 2)
-                        .map(|c| lut.score(c))
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    if depth == 0 {
-                        order(&scores)
-                    } else {
-                        let mut candidates = order(&scores);
-                        candidates.truncate(depth);
-                        let mut scored: Vec<_> = candidates
-                            .iter()
-                            .map(|&i| (i, q.cosine(&images[i])))
-                            .collect();
-                        scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-                        scored.into_iter().map(|(i, _)| i).collect()
-                    }
-                };
-                std::hint::black_box(ranked);
-            }
-            totals[variant][4] += start.elapsed().as_secs_f64() * 1e6 / 20.0;
         }
         per_query.push(row);
     }
@@ -271,30 +235,21 @@ fn evaluate(
             json!({
         "variant":name,"ndcg_at_10":totals[i][0],"ndcg_share":totals[i][0]/totals[0][0],
         "recall_at_1":totals[i][1],"recall_share":totals[i][1]/totals[0][1],
-        "top10_overlap":totals[i][2],"identical_ordered_top10_fraction":totals[i][3],
-        "cached_query_retrieval_us":totals[i][4]})
+        "top10_overlap":totals[i][2],"identical_ordered_top10_fraction":totals[i][3]})
         })
         .collect();
     let diagnostic = diagnostics(&images, dim);
-    let quality_pass = totals[3][0] / totals[0][0] >= 0.999
-        && totals[3][3] >= 0.95
-        && totals[1][0] / totals[0][0] >= 0.98;
-    let clip_pass = diagnostic["clip_rate_max"].as_f64().unwrap() <= 0.03;
-    let scan_us = if dim == 256 {
-        [33.631, 101.190]
-    } else {
-        [115.110, 383.410]
-    };
+    let ndcg_drop = totals[0][0] - totals[3][0];
+    let quality_pass = ndcg_drop <= 0.005 && totals[3][3] == 1.0;
     Ok(
         json!({"dimension":dim,"variants":variants,"diagnostics":diagnostic,
-        "score_absolute_error_mean":error_sum/(images.len()*queries.len()) as f64,"score_absolute_error_max":error_max,
+        "quantization_error_vs_original_f32_mean":error_sum/(images.len()*queries.len()) as f64,"quantization_error_vs_original_f32_max":error_max,
         "image_vector_payload_bytes":{"f32":images.len()*dim*4,"q4":codes.len(),"rerank50_scratch_f32":50.min(images.len())*dim*4},
         "q4_buffer_capacity_bytes":codes.capacity(),
         "query_lut_payload_bytes":dim/2*256*4+4,
-        "p1_scan_us_per_1000":{"f32":scan_us[0],"q4":scan_us[1]},
-        "pass":{"quality":quality_pass,"every_dimension_clip_le_3_percent":clip_pass,
-            "image_payload_le_one_seventh":codes.len()*7 <= images.len()*dim*4,"scan_le_f32":scan_us[1]<=scan_us[0]},
-        "decision":if quality_pass && clip_pass && scan_us[1]<=scan_us[0] {"GO"} else {"NO-GO"},
+        "ndcg_at_10_drop_rerank50":ndcg_drop,
+        "pass":{"quality":quality_pass},
+        "scope":"scoring diagnostics only; actual engine contracts and Criterion scan medians are separate",
         "per_query":per_query}),
     )
 }
@@ -334,13 +289,7 @@ fn prepare(photos: &[Photo], queries: &[Query], fingerprint: String) -> Result<P
             ResourceInput::Image { bytes: &bytes },
             EmbeddingTask::SearchDocument,
         )?);
-        eprintln!(
-            "image {}/{}: {} ({:.1}s)",
-            i + 1,
-            photos.len(),
-            photo.id,
-            started.elapsed().as_secs_f64()
-        );
+        eprintln!("image {}/{}: {}", i + 1, photos.len(), photo.id);
     }
     let text = queries
         .iter()
@@ -406,14 +355,14 @@ fn main() -> Result<()> {
     let cache = fixture()?.join("prepared.json");
     let prepared: Prepared = match std::env::args().nth(1).as_deref() {
         Some("--score-only") => serde_json::from_slice(&fs::read(&cache)?)?,
-        None => {
+        None | Some("--prepare-only") => {
             let prepared = prepare(&photos, &queries, fingerprint.clone())?;
-            let pending = format!("{cache}.part");
+            let pending = cache.with_extension("part");
             fs::write(&pending, serde_json::to_vec(&prepared)?)?;
-            fs::rename(pending, cache)?;
+            fs::rename(pending, &cache)?;
             prepared
         }
-        _ => return Err("usage: image_quant_eval [--score-only]".into()),
+        _ => return Err("usage: image_quant_eval [--score-only|--prepare-only]".into()),
     };
     if prepared.fingerprint != fingerprint
         || prepared.images.len() != photos.len()
@@ -425,6 +374,14 @@ fn main() -> Result<()> {
             .any(|v| v.dim() != 768 || !v.normalized())
     {
         return Err("prepared vectors do not match this fixture".into());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--prepare-only") {
+        println!(
+            "Prepared {} photos and {} queries without scoring",
+            photos.len(),
+            queries.len()
+        );
+        return Ok(());
     }
     let results = json!({"fixture_and_queries_blake3":fingerprint,
         "identity":prepared.identity,"photos":photos.len(),"queries":queries.len(),

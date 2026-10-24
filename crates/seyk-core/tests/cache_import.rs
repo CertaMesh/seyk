@@ -326,7 +326,7 @@ fn mappings_reject_duplicates_unknown_fields_versions_and_nonlocal_ids() {
 
 #[test]
 fn source_schema_aliases_and_populated_destination_are_rejected_without_mutation() {
-    for version in ["1", "2", "3", "4", "5", "7", ""] {
+    for version in ["1", "2", "3", "4", "5", "8", ""] {
         let f = Fixture::new();
         f.sql(&format!(
             "UPDATE meta SET value='{version}' WHERE key='schema_version'"
@@ -566,4 +566,45 @@ fn unknown_profile_has_a_source_specific_error() {
             .contains("profile not found in source")
     );
     assert!(!f.destination.exists());
+}
+
+#[test]
+fn v6_and_v7_sources_import_only_f32_and_leave_source_untouched() {
+    for version in ["6", "7"] {
+        let f = Fixture::new();
+        if version == "6" {
+            f.sql("DROP TABLE image_codes; UPDATE meta SET value='6' WHERE key='schema_version';");
+        } else {
+            // Deliberately invalid derived data must not affect an f32-only import.
+            f.sql("INSERT INTO image_codes SELECT profile,input_hash,'unknown-codec',x'ff' FROM embeddings;");
+        }
+        let conn = Connection::open(&f.source).unwrap();
+        let snapshot: Vec<(String, Vec<u8>)> = conn
+            .prepare("SELECT input_hash,vector FROM embeddings ORDER BY input_hash")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(f.import().unwrap().vectors > 0);
+        let dst = SqliteCache::open(&f.destination).unwrap();
+        assert_eq!(dst.stats().unwrap().profiles[0].image_codes, 0);
+        let after: Vec<(String, Vec<u8>)> = conn
+            .prepare("SELECT input_hash,vector FROM embeddings ORDER BY input_hash")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(snapshot, after);
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            version
+        );
+    }
 }

@@ -61,7 +61,7 @@ fn cache_stats_json_and_clear_work_without_a_model() {
         .unwrap();
     assert!(output.status.success());
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stats["schema_version"], 8);
+    assert_eq!(stats["schema_version"], 9);
     assert_eq!(stats["profiles"], serde_json::json!([]));
     assert_eq!(stats["in_synced_folder"], false);
     #[cfg(target_os = "macos")]
@@ -632,7 +632,7 @@ fn extract_round_trip_without_a_model() {
     let json = run(&["extract", "--from-json", "-", "--json"], &input);
     assert!(json.status.success());
     let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(extracted["schema_version"], 8);
+    assert_eq!(extracted["schema_version"], 9);
     assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     assert_eq!(extracted["source"], value["hits"][0]["resource"]);
     assert_eq!(extracted["locator"], value["hits"][0]["locator"]);

@@ -139,7 +139,7 @@ fn source_snapshot(source: &Path) -> Result<Connection> {
         |r| r.get(0),
     )?;
     if !has_meta {
-        return Err(invalid("source requires schema v6"));
+        return Err(invalid("source requires schema v6 or v7"));
     }
     let version: Option<String> = conn
         .query_row(
@@ -148,9 +148,9 @@ fn source_snapshot(source: &Path) -> Result<Connection> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref() != Some(SCHEMA_VERSION) {
+    if !matches!(version.as_deref(), Some("6" | "7")) {
         return Err(invalid(
-            "source requires schema v6; open older caches once with this seyk first",
+            "source requires schema v6 or v7; open older caches once with this seyk first",
         ));
     }
     Ok(conn)
@@ -184,8 +184,8 @@ impl SqliteCache {
         read_profile(&source_snapshot(source)?, id)
     }
 
-    /// Seed an absent or completely empty v6 cache from verified local files.
-    /// Only schema v6 sources are supported. Errors roll back schema and data;
+    /// Seed an absent or completely empty v7 cache from verified local files.
+    /// Schema v6 and v7 sources are supported; derived image codes are ignored. Errors roll back schema and data;
     /// verification failures drop individual resources and are reported as counts.
     /// PDF/audio preparation compatibility is also checked by the runtime on reuse.
     pub fn import_from(
@@ -232,20 +232,28 @@ impl SqliteCache {
                     |r| r.get(0),
                 )
                 .optional()?;
-            if version.as_deref() != Some(SCHEMA_VERSION) {
-                return Err(invalid("destination must be fresh or empty schema v6"));
+            if !matches!(version.as_deref(), Some("6" | "7")) {
+                return Err(invalid(
+                    "destination must be fresh or empty schema v6 or v7",
+                ));
             }
         }
         let extra: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'
-             AND NOT (type='table' AND name IN ('meta','profiles','resources','segments','embeddings'))
+             AND NOT (type='table' AND name IN ('meta','profiles','resources','segments','embeddings','image_codes'))
              AND NOT (type='index' AND name='segments_by_input' AND tbl_name='segments'))",
             [], |r| r.get(0))?;
         if extra {
             return Err(invalid("destination contains foreign schema objects"));
         }
         Self::initialize_schema(&tx)?;
-        for table in ["profiles", "resources", "segments", "embeddings"] {
+        for table in [
+            "profiles",
+            "resources",
+            "segments",
+            "embeddings",
+            "image_codes",
+        ] {
             let count: i64 =
                 tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
             if count != 0 {
@@ -672,7 +680,7 @@ mod tests {
                 assert_eq!(std::fs::read(&source).unwrap(), before_source);
                 let conn = Connection::open(&destination).unwrap();
                 let count: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r| r.get(0)).unwrap();
-                assert_eq!(count, if initialized { 5 } else { 0 }, "{stage}");
+                assert_eq!(count, if initialized { 6 } else { 0 }, "{stage}");
                 drop(conn);
                 assert_eq!(
                     SqliteCache::import_from(&source, &destination, &profile, &[mapping])
