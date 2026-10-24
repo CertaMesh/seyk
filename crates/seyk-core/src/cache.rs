@@ -515,6 +515,9 @@ fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalD
 // SQLite cache (default, persistent)
 // ---------------------------------------------------------------------------
 
+mod import;
+pub use import::{CacheImportMapping, CacheImportReport};
+
 const SCHEMA_VERSION: &str = "6";
 
 /// Injective for arbitrary UTF-8 IDs, including empty IDs. Hex contains no `_`,
@@ -659,6 +662,14 @@ impl SqliteCache {
         path: PathBuf,
         prepare: impl FnOnce(&Path, bool) -> super::cache_guards::GuardStatus,
     ) -> Result<Self> {
+        Self::open_internal(path, prepare, true)
+    }
+
+    fn open_internal(
+        path: PathBuf,
+        prepare: impl FnOnce(&Path, bool) -> super::cache_guards::GuardStatus,
+        initialize: bool,
+    ) -> Result<Self> {
         let dir = super::cache_guards::parent_dir(&path);
         // Only successful creation of the final directory establishes ownership;
         // an existence check followed by create_dir_all would race another creator.
@@ -701,6 +712,9 @@ impl SqliteCache {
             #[cfg(test)]
             after_vector_read: None,
         };
+        if !initialize {
+            return Ok(cache);
+        }
         cache.migrate()?;
         cache.observed_generation = cache
             .conn
@@ -820,10 +834,16 @@ impl SqliteCache {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        // Inspect before writing: an unversioned nonempty database is not a new cache.
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::initialize_schema(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn initialize_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        // Inspect before writing: an unversioned nonempty database is not a new cache.
         let has_meta: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'meta')",
             [],
@@ -953,7 +973,7 @@ impl SqliteCache {
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for profile in &profiles {
-            create_profile_fts(&tx, profile)?;
+            create_profile_fts(tx, profile)?;
         }
         if matches!(version.as_deref(), Some("1" | "2")) {
             // Remove source-order postings and invalidate both metadata and provider fast paths.
@@ -963,7 +983,7 @@ impl SqliteCache {
                  UPDATE resources SET modified_ns = NULL, content_hash = '', version = 'null', descriptor_hash = NULL;",
             )?;
         } else if version.is_some() {
-            migrate_shared_fts(&tx, &profiles)?;
+            migrate_shared_fts(tx, &profiles)?;
         }
         tx.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
@@ -971,9 +991,8 @@ impl SqliteCache {
         )?;
         if version.is_some() {
             tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
-            mark_cleanup(&tx, None)?;
+            mark_cleanup(tx, None)?;
         }
-        tx.commit()?;
         Ok(())
     }
 }

@@ -42,7 +42,8 @@ pub mod segment;
 pub mod watch;
 
 pub use cache::{
-    CacheStats, EmbeddingCache, MemoryCache, ResourceWrite, SegmentWrite, SqliteCache,
+    CacheImportMapping, CacheImportReport, CacheStats, EmbeddingCache, MemoryCache, ResourceWrite,
+    SegmentWrite, SqliteCache,
 };
 pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};
@@ -54,7 +55,7 @@ pub use engine::{
     SkipCode, SkippedCount, SkippedResource, SyncStats, expand_tilde, make_preview,
 };
 pub use error::{Error, Result};
-pub use resource::{ResourceId, ResourceLocator, ResourceMetadata};
+pub use resource::{PDF_TEXT_VERSION, ResourceId, ResourceLocator, ResourceMetadata};
 pub use seyk_embed::{EmbeddingRequest, EmbeddingTask, Modality};
 
 pub use provider::{

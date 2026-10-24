@@ -1056,7 +1056,6 @@ fn to_resource(
     })
 }
 
-#[cfg(any(not(unix), test))]
 pub(crate) fn modified_ns(meta: &std::fs::Metadata) -> Option<i64> {
     let t = meta.modified().ok()?;
     let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;

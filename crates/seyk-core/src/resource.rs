@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use seyk_embed::Modality;
 
+/// Embedded PDF text format used by PageText locators, available without PDF extraction.
+pub const PDF_TEXT_VERSION: &str = "pdf-extract-0.12.1;plain-v1";
+
 /// A canonical absolute URI identifying a resource, serialized as a string.
 /// File URIs preserve non-UTF-8 Unix path bytes through percent encoding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -196,6 +196,14 @@ fn file_path(id: &ResourceId) -> Result<PathBuf> {
     })
 }
 
+impl FsProvider {
+    pub(crate) fn open_verified_handle(id: &ResourceId) -> Result<File> {
+        let path = file_path(id)?;
+        ensure_allowed_path(&path)?;
+        open_local_content(&path)
+    }
+}
+
 impl ResourceProvider for FsProvider {
     fn open(&self, id: &ResourceId) -> Result<Box<dyn ReadSeek>> {
         let path = file_path(id)?;

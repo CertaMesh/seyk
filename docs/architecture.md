@@ -1587,3 +1587,68 @@ the advisory check retains the three pre-existing unmaintained findings:
 number_prefix 0.4.0 (RUSTSEC-2025-0119), paste 1.0.15 (RUSTSEC-2024-0436), and
 ttf-parser 0.25.1 (RUSTSEC-2026-0192). No external dependency version or advisory
 exception changed. Linux/Windows execution remains the CI matrix's responsibility.
+
+
+## Verified cache import for re-staged paths
+
+`SqliteCache::import_from(source, destination, &profile, &mappings)` is separate
+from the ingestion trait. `CacheImportMapping::read_jsonl` parses strict JSONL v1;
+`SqliteCache::import_profile` selects and validates a source profile without a
+writable cache open. The facade re-exports the mapping and report types. CLI
+`seyk cache import --from OLD --map FILE --profile ID --cache-path NEW [--json]`
+requires an explicit destination flag, even when `SEYK_CACHE` is set. No model
+initialization, extraction or download occurs.
+
+Import accepts schema v6 only. It opens a `mode=ro` URI connection and keeps one
+read transaction for a consistent snapshot, including committed WAL frames. It
+never migrates or copies the source database. Older sources must first be opened
+normally with this version; future and unversioned sources fail. Read-only WAL
+access needs existing WAL/SHM sidecars or directory write access; failures are
+surfaced. Canonical paths and, on Unix, device/inode pairs reject same-file aliases.
+Profile JSON, derived profile ID and stored dimension must agree exactly.
+
+Each mapping is one-to-one between local absolute file URIs and includes the
+caller’s full-file BLAKE3. Only the new file is opened, using the filesystem
+provider’s existing policy and no-follow handle access. A bounded 64 KiB buffer
+hashes the complete handle once; fstat metadata before/after must agree, and the
+path identity is checked after reading. Size/mtime never replace hashing. The
+observed hash must equal the old cache content hash; the supplied hash is an
+extra guard. Any mismatch is a `hash_mismatch` drop. Missing hashes/files,
+unstable or disallowed files and absent mappings omit all resource evidence.
+Metadata and freshness tokens come from the verified handle. No re-verification
+occurs before commit; later ordinary extraction still checks the content hash.
+Unix handles are pinned; Windows remains path-based, not pinned. This is not an
+atomic filesystem snapshot.
+
+Preparation fingerprints compare kind and filename-derived title without opening
+the old path. Text descriptors must match the new fingerprint directly. NULL
+descriptors drop. PDF/audio descriptors are composite and cannot be recomputed
+without runtime preparation identities: import preserves them and normal runtime
+checks decide compatibility on reuse. Parent-directory moves preserve inputs;
+changes to kind or title drop conservatively. No ranking, chunking or profile
+format changes are involved.
+
+The destination is absent or a completely empty compatible v6 cache. Existing
+private-cache guards, foreign keys and secure_delete apply. Schema initialization,
+profile registration and every accepted write share one IMMEDIATE transaction.
+Referenced vectors are copied byte-for-byte once per input hash; unrelated vectors
+and profiles are excluded. Missing vectors, bad widths/locators/ordinals and
+missing or non-order-free FTS fields abort. Source FTS heading/body columns are
+read by segment rowid and checked for `order_free_text` idempotence. New segment
+IDs receive those fields plus freshly tokenized name/path labels; old path/name
+postings and cleanup metadata are never copied. Foreign-key, vector-reference,
+FTS cardinality and destination FTS integrity checks precede the single commit.
+Fatal errors roll back schema and rows; row-level drops are counted outcomes.
+`CacheImportReport::drops` always lists all five reasons, including zero counts:
+`hash_mismatch`, `missing_hash`, `preparation_changed`, `unavailable_or_unstable`,
+and `unmapped`. Key presence alone does not indicate a drop.
+A failed fresh destination may remain an empty shell suitable for retry.
+
+Synthetic FakeEmbedder tests cover unchanged remaps, exact vector bits, zero new
+resource embedding calls, extraction verification, metadata, token frequencies,
+old-path/source-order exclusion, mismatches, descriptor changes, missing paths,
+non-UTF-8 identities, mapping validation, schemas/profiles, corrupt evidence,
+WAL reads, shared inputs, isolation, aliases and populated destinations. Unit
+failure checkpoints exercise rollback after resource/vector/segment/FTS writes
+and before commit, and deterministic post-read mutations test handle verification.
+CLI tests use synthetic fixtures and no model weights or private data.
