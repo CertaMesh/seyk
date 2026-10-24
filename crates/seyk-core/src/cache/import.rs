@@ -427,6 +427,11 @@ fn import_segments(
         let locator_json: String = row.get(2)?;
         let locator: ResourceLocator =
             serde_json::from_str(&locator_json).map_err(|_| invalid("malformed locator"))?;
+        let stored_locator: serde_json::Value =
+            serde_json::from_str(&locator_json).map_err(|_| invalid("malformed locator"))?;
+        if stored_locator != serde_json::to_value(&locator).map_err(json_err)? {
+            return Err(invalid("unexpected locator fields"));
+        }
         validate_locator(&locator, size)?;
         let heading: Option<String> = row.get(3)?;
         let input: String = row.get(4)?;
