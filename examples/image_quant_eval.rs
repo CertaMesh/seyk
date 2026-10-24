@@ -1,7 +1,8 @@
 //! Photo Anchor quality gate. Fetch/verify with scripts/fetch_photo_fixture.py first.
 //! SEYK_MODEL must point at provisioned q8 weights. No download fallback.
-//! Run from the repository root; resumable vectors/results live in ignored tmp/.
-use std::{collections::BTreeMap, fs, path::Path, process::Command, time::Instant};
+//! Run from the repository root; resumable vectors/results live in ~/.cache/seyk-bench/photo-fixture.
+//! SEYK_PHOTO_FIXTURE overrides the fixture directory for both preparation and verification.
+use std::{collections::BTreeMap, fs, path::PathBuf, process::Command, time::Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,7 +11,21 @@ use seyk_embed::{Dimension, Embedder, Embedding, EmbeddingTask, Modality, Resour
 use seyk_embeddinggemma::{GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const FIXTURE: &str = "tmp/photo-fixture";
+fn fixture() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SEYK_PHOTO_FIXTURE") {
+        let path = PathBuf::from(path);
+        if let Ok(relative) = path.strip_prefix("~") {
+            return Ok(
+                PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unset")?).join(relative),
+            );
+        }
+        return Ok(path);
+    }
+    Ok(
+        PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unset")?)
+            .join(".cache/seyk-bench/photo-fixture"),
+    )
+}
 
 #[derive(Deserialize)]
 struct Photo {
@@ -43,7 +58,7 @@ fn cached(
         _ => return Err("unsupported fixture modality".into()),
     };
     let key = hash.finalize().to_hex().to_string();
-    let path = Path::new(FIXTURE).join(format!("vectors/{key}.json"));
+    let path = fixture()?.join(format!("vectors/{key}.json"));
     if path.exists() {
         let entry: Cached = serde_json::from_slice(&fs::read(path)?)?;
         if entry.key != key || entry.vector.dim() != 768 || !entry.vector.normalized() {
@@ -293,7 +308,7 @@ struct Prepared {
 }
 
 fn prepare(photos: &[Photo], queries: &[Query], fingerprint: String) -> Result<Prepared> {
-    fs::create_dir_all(format!("{FIXTURE}/vectors"))?;
+    fs::create_dir_all(fixture()?.join("vectors"))?;
     let mut config = GemmaConfig::default();
     config.source = ModelSource::Directory(
         std::env::var("SEYK_MODEL")
@@ -313,7 +328,7 @@ fn prepare(photos: &[Photo], queries: &[Query], fingerprint: String) -> Result<P
         if started.elapsed().as_secs() >= 2100 {
             return Err("35-minute embedding budget reached; cached progress is resumable".into());
         }
-        let bytes = fs::read(format!("{FIXTURE}/{}.jpg", photo.id))?;
+        let bytes = fs::read(fixture()?.join(format!("{}.jpg", photo.id)))?;
         images.push(cached(
             &model,
             ResourceInput::Image { bytes: &bytes },
@@ -388,7 +403,7 @@ fn main() -> Result<()> {
         fingerprint.update(&fs::read(path)?);
     }
     let fingerprint = fingerprint.finalize().to_hex().to_string();
-    let cache = format!("{FIXTURE}/prepared.json");
+    let cache = fixture()?.join("prepared.json");
     let prepared: Prepared = match std::env::args().nth(1).as_deref() {
         Some("--score-only") => serde_json::from_slice(&fs::read(&cache)?)?,
         None => {
@@ -415,7 +430,7 @@ fn main() -> Result<()> {
         "identity":prepared.identity,"photos":photos.len(),"queries":queries.len(),
         "dimensions":[evaluate(&prepared.images,&prepared.text,&labels,256)?,evaluate(&prepared.images,&prepared.text,&labels,768)?]});
     fs::write(
-        format!("{FIXTURE}/results.json"),
+        fixture()?.join("results.json"),
         serde_json::to_vec_pretty(&results)?,
     )?;
     println!("{results}");

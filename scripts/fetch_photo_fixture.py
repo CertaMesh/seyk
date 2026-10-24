@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Fetch the pinned CC0 fixture into ignored tmp/; --verify never uses the network."""
+"""Fetch pinned CC0 photos into ~/.cache/seyk-bench/photo-fixture.
+
+SEYK_PHOTO_FIXTURE overrides the destination; --verify never uses the network."""
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import urllib.parse
@@ -10,7 +13,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "scripts/fixtures/photo-manifest.json"
-DEST = ROOT / "tmp/photo-fixture"
+DEST = Path(os.environ.get("SEYK_PHOTO_FIXTURE", Path.home() / ".cache/seyk-bench/photo-fixture")).expanduser()
 
 
 def main():

@@ -544,7 +544,9 @@ The q4 scan optimization remains separate work.
 
 The committed `scripts/fixtures/photo-manifest.json` pins 280 public CC0 photos
 from Wikimedia Commons by URL and SHA-256, with each item's source page and
-licence URL. Downloads go only to ignored `tmp/photo-fixture/`. The collection
+licence URL. Photos, prepared vectors and results live in
+`~/.cache/seyk-bench/photo-fixture/`, outside worktrees and protected from cleanup.
+Set `SEYK_PHOTO_FIXTURE` to override this directory for both the fetcher and evaluator. The collection
 began with 300 candidates across 30 subjects; visual review removed two artwork
 reproductions and 18 repeated views before embedding. Photographs of objects,
 including museum artifacts, remain as distractors. No photos are distributed.
@@ -581,10 +583,10 @@ Local runs additionally need the shared gate lock and a separate external
 40-minute timeout for the **whole phase**, including compilation.
 
 `--score-only` checks the current fixture/queries against the prepared cache and
-runs without a model. Output `tmp/photo-fixture/results.json` includes per-query
+runs without a model. Output `~/.cache/seyk-bench/photo-fixture/results.json` includes per-query
 rankings, all per-dimension clipping rates, model/input identity, and the fixture
-fingerprint. Remove photos, intermediate vectors and raw outputs after recording
-the small report; fetching and inference reproduce them when needed.
+fingerprint. Retain this protected fixture and vector cache for later phases; worktree cleanup
+must not remove them.
 
 ### Definitions and measurement boundaries
 
