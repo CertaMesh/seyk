@@ -170,7 +170,55 @@ seyk mcp ~/notes
 seyk cache stats
 seyk cache scrub  # erase deleted postings/WAL frames, preserving live records
 seyk cache clear
+
+# Seed a fresh epoch cache without loading a model
+seyk cache import --from old.sqlite --map mapping.jsonl --profile PROFILE_ID --cache-path new.sqlite --json
 ```
+
+To move an indexed collection into a new directory, use `cache import` with an
+explicit destination and profile ID from `seyk cache stats --json`. The destination
+must be absent or a completely empty schema-v6 cache. Import never overwrites or
+merges populated caches, initializes a model, or downloads weights.
+
+The mapping file is JSONL v1 (one object per nonblank line):
+
+```json
+{"version":1,"old":"file:///old-epoch/note.md","new":"file:///new-epoch/note.md","content_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+```
+
+Replace the example hash with the lowercase, 64-character BLAKE3 of the complete
+file. Both identities must be absolute local file URIs; Unix non-UTF-8 paths use
+percent encoding. Unknown fields, versions, duplicate old/new identities and
+malformed hashes are errors. There is no prefix remapping or implicit traversal.
+
+Seyk reads only each new file through its local-file access policy and hashes its
+opened handle in bounded memory. The observed hash must equal the cached hash;
+the supplied hash is an additional guard. Mismatches drop the entire resource
+with a `hash_mismatch` count; other verified mappings can still commit. Missing,
+disallowed or unstable files and changes to preparation kind or filename title
+also drop the resource. An empty mapping creates an empty seed. Reports contain
+counts of resources, segments, unique vectors, keyword rows, drop reasons and
+unmatched mappings, with no source excerpts or vector bytes.
+
+The import preserves locators and exact vectors under the same profile, rebuilding
+name/path keyword fields from new identities and retaining only order-free
+heading/body fields. Unmapped evidence, old path labels, other profiles and orphan
+vectors are excluded. This skips re-extraction of unchanged evidence (including
+PDF parsing and audio transcription); ordinary indexing already reuses vectors
+across paths when its model input is identical. PDF/audio rows retain their
+composite preparation descriptor and rely on the normal runtime compatibility
+check after import. Extraction still verifies content hashes; later changes fail.
+
+Only v6 sources are accepted: open an older cache once with this Seyk first.
+The source is read-only in one SQLite read transaction, including committed WAL
+contents. Keep its `-wal`/`-shm` files together; SQLite read-only WAL access needs
+existing sidecars or directory write access and otherwise fails. Destination
+schema/data writes commit together; cache corruption or SQL errors roll everything
+back. A failed new destination may remain an empty SQLite shell and can be retried.
+Unix access rejects symlink components and checks handle/path identity around the
+single streamed hash. Windows access is path-based and is not pinned. This is not
+an atomic filesystem snapshot; use immutable projections for reliable staging.
+
 
 | Flag | Meaning |
 |---|---|

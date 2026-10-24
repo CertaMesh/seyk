@@ -42,7 +42,8 @@ pub mod segment;
 pub mod watch;
 
 pub use cache::{
-    CacheStats, EmbeddingCache, MemoryCache, ResourceWrite, SegmentWrite, SqliteCache,
+    CacheImportMapping, CacheImportReport, CacheStats, EmbeddingCache, MemoryCache, ResourceWrite,
+    SegmentWrite, SqliteCache,
 };
 pub use discovery::DiscoveryOptions;
 pub use embedder::{Embedder, ModelIdentity, ResourceInput};

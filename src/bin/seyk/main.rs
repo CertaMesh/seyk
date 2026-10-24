@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use seyk::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 use seyk::{
     CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, IndexReport, MemoryCache,
@@ -203,7 +203,7 @@ enum Command {
         #[command(flatten)]
         model: ModelArgs,
     },
-    /// Inspect or clear the embedding cache.
+    /// Inspect, clear or import verified evidence into a fresh cache.
     Cache {
         #[command(subcommand)]
         action: CacheAction,
@@ -251,6 +251,20 @@ enum Command {
 
 #[derive(Subcommand)]
 enum CacheAction {
+    /// Seed an explicit empty cache from a v6 cache. Offline; no model is loaded.
+    Import {
+        /// Read-only source SQLite cache (v6; keep WAL/SHM files alongside it).
+        #[arg(long)]
+        from: PathBuf,
+        /// JSONL v1: old/new local file URIs and lowercase full-file BLAKE3 content_hash.
+        #[arg(long)]
+        map: PathBuf,
+        /// Exact source profile ID (see cache stats --json).
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show what the cache holds.
     Stats {
         #[arg(long)]
@@ -309,7 +323,23 @@ fn main() -> ExitCode {
             eprintln!("seyk: internal failure");
         }
     }));
-    match run(Cli::parse()) {
+    let matches = Cli::command().get_matches();
+    let explicit_cache_path = matches.subcommand_matches("cache").is_some_and(|cache| {
+        cache.value_source("cache_path") == Some(clap::parser::ValueSource::CommandLine)
+    });
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if matches!(
+        &cli.command,
+        Command::Cache {
+            action: CacheAction::Import { .. },
+            ..
+        }
+    ) && !explicit_cache_path
+    {
+        eprintln!("error: cache import requires explicit --cache-path");
+        return ExitCode::FAILURE;
+    }
+    match run(cli) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -506,8 +536,39 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Cache { action, cache_path } => {
+            if let CacheAction::Import {
+                from,
+                map,
+                profile,
+                json,
+            } = action
+            {
+                let destination = cache_path
+                    .as_deref()
+                    .context("cache import requires explicit --cache-path")?;
+                let mappings = seyk::CacheImportMapping::read_jsonl(std::io::BufReader::new(
+                    std::fs::File::open(map)?,
+                ))?;
+                let selected = SqliteCache::import_profile(&from, &profile)?;
+                let report = SqliteCache::import_from(&from, destination, &selected, &mappings)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&json_output(&report))?);
+                } else {
+                    println!(
+                        "Imported {} resources, {} segments, {} vectors, {} keyword rows; drops: {:?}; unmatched mappings: {}",
+                        report.resources,
+                        report.segments,
+                        report.vectors,
+                        report.fts_rows,
+                        report.drops,
+                        report.unmatched_mappings
+                    );
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
             let mut cache = open_cache(cache_path.as_deref())?;
             match action {
+                CacheAction::Import { .. } => unreachable!("handled before writable cache open"),
                 CacheAction::Stats { json } => {
                     let stats = cache.stats()?;
                     if json {
