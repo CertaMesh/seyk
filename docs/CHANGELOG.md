@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix daemon and `seyk mcp` startup under long HOME/cache paths: move only overlong default sockets to a private per-user directory under TMPDIR or `/tmp`, retaining normal cache locks and logs. Reject fallback directories with unsafe ownership, permissions or symlink type. Explicit `SEYK_DAEMON_DIR` overrides remain supported; overlong socket paths report their byte length and platform limit.
+
 - Add `seyk model profile [model options] --json` to report the exact index profile ID and descriptor without loading weights or opening a cache. Reports `model_present` and `missing_files` using metadata checks. Uses the shared model identity and engine profile derivation, with the current JSON schema v9. Adds public `gemma::model_identity`, `gemma::missing_model_files`, and `SearchEngineBuilder::cache_profile` APIs.
 
 - Isolate shared daemons by build version and cache schema as well as JSON schema/model options. A mismatched client starts a matching daemon without interrupting older sessions. Status/stop address only the invoking build; daemon status/logs and MCP server metadata report the build version. JSON schema remains v9 and cache schema v7; incompatible cache versions still require separate cache paths.

@@ -531,6 +531,88 @@ fn mcp_relays_through_a_daemon_it_starts() {
         .stdout(predicate::str::contains("Stopped."));
 }
 
+/// Long sandbox HOME and TMPDIR must not require a daemon directory override.
+#[cfg(all(feature = "mcp", unix))]
+#[test]
+fn mcp_initializes_with_long_home_and_cache_paths() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("sandbox-home-".repeat(12));
+    let cache = home.join("cache");
+    let tmp = home.join("tmp");
+    let notes = home.join("notes");
+    for dir in [&cache, &tmp, &notes] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let env = |cmd: &mut std::process::Command| {
+        cmd.env_remove("SEYK_DAEMON_DIR")
+            .env("HOME", &home)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("TMPDIR", &tmp)
+            .env("SEYK_MODEL", home.join("no-model"))
+            .env("SEYK_CACHE", cache.join("cache.sqlite3"));
+    };
+    // Stop the detached daemon even if the handshake assertion fails.
+    struct StopDaemon(std::process::Command);
+    impl Drop for StopDaemon {
+        fn drop(&mut self) {
+            let _ = self.0.output();
+        }
+    }
+    let mut stop = std::process::Command::new(binary().get_program());
+    env(&mut stop);
+    stop.args(["daemon", "stop"]);
+    let _stop = StopDaemon(stop);
+    let mut relay = std::process::Command::new(binary().get_program());
+    env(&mut relay);
+    relay.arg("mcp").arg(&notes);
+    let [initialized, tools] = mcp_handshake(&mut relay);
+    assert_eq!(initialized["result"]["serverInfo"]["name"], "seyk");
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "search")
+    );
+    let daemon_dir = if cfg!(target_os = "macos") {
+        home.join("Library/Caches/seyk")
+    } else {
+        cache.join("seyk")
+    };
+    let log = std::fs::read_to_string(daemon_dir.join("daemon.log")).unwrap();
+    let socket = PathBuf::from(
+        log.lines()
+            .find_map(|line| line.split_once("listening on ").map(|(_, path)| path))
+            .expect("daemon must report its socket"),
+    );
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    use std::path::PathBuf;
+    // This test gives TMPDIR a deliberately overlong path, forcing /tmp even
+    // on hosts whose normal temporary directory would fit.
+    assert!(socket.starts_with(format!("/tmp/seyk-{}", unsafe { libc::geteuid() })));
+    let metadata = std::fs::symlink_metadata(&socket).unwrap();
+    assert!(metadata.file_type().is_socket());
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+    let directory = std::fs::symlink_metadata(socket.parent().unwrap()).unwrap();
+    assert!(directory.is_dir());
+    assert_eq!(directory.uid(), unsafe { libc::geteuid() });
+    assert_eq!(directory.permissions().mode() & 0o7777, 0o700);
+    assert!(std::fs::read_dir(&daemon_dir).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|ext| ext == "lock")
+    }));
+    assert!(!std::fs::read_dir(&daemon_dir).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|ext| ext == "sock")
+    }));
+}
+
 #[cfg(unix)]
 #[test]
 fn extract_reads_a_hit_found_through_a_symlinked_root() {
