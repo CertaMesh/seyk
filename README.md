@@ -148,8 +148,6 @@ The JSON object uses the current CLI `schema_version` (9), with `profile_id`
 ```json
 {
   "schema_version": 9,
-  "model_present": true,
-  "missing_files": [],
   "profile_id": "<24-character hash>",
   "profile": {
     "model": {
@@ -163,13 +161,14 @@ The JSON object uses the current CLI `schema_version` (9), with `profile_id`
       "max_tokens": 2048
     },
     "segmenter_version": "<segmenter and input-format version>"
-  }
+  },
+  "model_present": true,
+  "missing_files": []
 }
 ```
 
-`model_present` reports whether all required files exist and the `onnx/` directory
-passes the loader's symlink check. `missing_files` lists absent relative file names.
-A rejected symlinked ONNX directory adds `"onnx/"` to this list. These checks use
+`model_present` reports whether the required files checked by model resolution
+exist. `missing_files` lists absent relative file names. These checks use
 filesystem metadata only. They do not validate model contents or run inference.
 The ID is available before download, even when `model_present` is false.
 
