@@ -1,7 +1,31 @@
 # Architecture and roadmap notes
 
-This file records the architecture as audited before each development phase, so
-later phases can see what was deliberately left alone and why.
+The overview below shows the current pipeline and modules. The rest of this
+file records the architecture as audited before each development phase, so
+later phases can see what was deliberately left alone and why. Phase numbers are
+roadmap milestones in delivery order; each heading names what the phase delivered.
+
+## Overview
+
+```text
+paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / ONNX) ─► cache ─► similarity ─► SearchHit
+         (walkdir,      (Markdown,       query: SearchQuery prompt            (SQLite or  (brute-force   (path, locator,
+          globs)         paragraphs,     docs:  Document prompt + title        memory)     cosine,        score, metadata,
+                         images)         truncate → L2-normalise                           VectorIndex)   preview)
+```
+
+| Module | Responsibility |
+|---|---|
+| `discovery` | Walk paths, apply excludes and globs, classify files |
+| `segment` | Turn text into segments with exact byte and line ranges |
+| `embedder` | `Embedder` trait and `ResourceInput`; `embedder::gemma` is the EmbeddingGemma 2 backend |
+| `cache` | `EmbeddingCache` trait, `SqliteCache`, `MemoryCache`, profiles, keyword index |
+| `lexical` | Tokenizer and keyword query (BM25) shared by both caches |
+| `index` | `VectorIndex` trait and `BruteForceIndex` |
+| `engine` | `SearchEngine`: lazy sync, hybrid ranking (rank fusion), previews, `index` |
+| `watch` | Re-index on file changes (`index --watch`, MCP background indexing) |
+| `src/bin/seyk/main.rs` | Argument parsing and formatting only |
+| `src/bin/seyk/mcp.rs` | The MCP server: tool schema, root confinement, background indexing |
 
 ## Embedding crate split: pre-change audit (main @00c1038)
 ### Current embedding architecture

@@ -17,14 +17,14 @@ Find where relevant information is in any collection of unstructured content, an
 
 - Answering questions, summarising or generating text. Seyk returns evidence; reasoning is the caller's job.
 - PII protection or redaction. That belongs to Gaze or the integrator; Seyk never depends on Gaze.
-- Remote connectors, enterprise IAM, HTTP APIs or distributed/vector-database search until the local engine is mature (Vision phases 9-10).
+- Remote connectors, enterprise IAM, HTTP APIs or distributed/vector-database search until the local engine is mature (later roadmap phases).
 - Extracting or transcribing a whole corpus just to make it searchable. Extraction runs on demand, for chosen hits.
 - Building every modality at once. OCR, PDF, audio and video come one proven phase at a time.
 
 ## Hard constraints
 
 - **Tech:** Rust; MSRV 1.89, toolchain pinned to 1.99.0; CPU inference via ONNX Runtime; prebuilt binaries for macOS ARM, Linux x86_64/ARM64 and Windows x86_64.
-- **Legal / privacy:** Content, queries and vectors are never sent to a third-party service. Network use is limited to an explicit model download and, in later phases, sources the operator configures. The cache never stores source text in a readable order. Private content used for evaluation never appears in the repo, PRs, docs or shared pads.
+- **Legal / privacy:** Content, queries and vectors are never sent to a third-party service. Network use is limited to an explicit model download and, in later phases, sources the operator configures. The cache never stores source text in a readable order. Private content used for evaluation never appears in the repo, PRs, docs or shared notes.
 - **Correctness:** A vector is reused only for byte-identical model input under the same profile. Returned text is verified against the content hash; a mismatch is an error, never a guess.
 - **Compatibility:** `seyk search "…" <paths>` keeps working. The EmbeddingGemma 2 parity tests stay green. Cache schema changes migrate and keep embeddings where they are still valid.
 

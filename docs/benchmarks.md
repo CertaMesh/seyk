@@ -607,7 +607,7 @@ errors, nDCG deltas and matched SQLite snapshot sizes under the protected fixtur
 A parity failure is a stop, with the failing queries reported. R is not tuned.
 
 Before the reserved slot, build `similarity` with `--no-run` and the
-`photo_anchor_latency` release example. Run no timings until `ROOT: SLOT-GO`.
+`photo_anchor_latency` release example.
 The single Criterion `photo_anchor_scan` run keeps seed 4517, N=1000,
 30 samples, 500 ms warmup and 2 s measurement. Compare medians independently at
 each dimension against `q4 <= f32 + 2 ms per 1000 vectors`.

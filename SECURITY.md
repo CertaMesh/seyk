@@ -28,5 +28,5 @@ Problems that break Seyk's guarantees, for example:
 
 - Attacks that already require the same user account's access to the cache or
   model directories (see
-  [Where things are stored](README.md#where-things-are-stored)).
+  [Where things are stored](docs/caching-and-storage.md#where-things-are-stored)).
 - PII detection or redaction, which Seyk does not provide.
