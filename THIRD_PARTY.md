@@ -10,7 +10,7 @@ https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate
 Additional scoped exceptions for opt-in audio are listed below.
 
 Allowed dependency licence classes are MIT, Apache-2.0, BSD-3-Clause, ISC,
-Zlib, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0. The MPL-2.0 exceptions
+Zlib, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0. The Rust MPL-2.0 exceptions
 are limited to `option-ext 0.2.0` and the Symphonia 0.5.5 crates listed below;
 `deny.toml` is the authoritative package and version policy. Bundled Photo
 Anchor assets have a separate CC-BY-4.0 exception scoped to `seyk-embed`.
@@ -19,7 +19,7 @@ Every release archive includes `THIRD_PARTY_LICENSES.html`, generated with
 cargo-about 0.8.2 by `scripts/third_party_licenses.sh`. It contains per-crate
 licence texts and copyright notices for the locked workspace across all
 features and platforms (a superset of each release build), plus the ONNX
-Runtime MIT notice. It includes build dependencies; development-only
+Runtime MIT notice and its complete upstream third-party notices. It includes build dependencies; development-only
 dependencies are excluded. The asset notices in this file remain part of the
 release distribution.
 
@@ -48,6 +48,24 @@ ONNX Runtime (MIT) is the native inference dependency; SQLite is bundled by
 rusqlite (SQLite is public domain). Their upstream distributions include notices
 for native/transitive components. PDF support adds no native runtime. Release builders must preserve applicable upstream notices when
 redistributing native artifacts or separately provisioned model assets.
+
+## Native ONNX Runtime dependencies
+
+`ort-sys 2.0.0-rc.13` statically links ONNX Runtime 1.28.0. Its native
+components include abseil, protobuf, ONNX, re2, flatbuffers, cpuinfo, GSL,
+nlohmann/json and Eigen. Their notices are preserved in the vendored
+[ThirdPartyNotices.txt](third_party/onnxruntime/ThirdPartyNotices.txt), verified
+against the upstream `v1.28.0` tag. The [provenance record](third_party/onnxruntime/README.md)
+identifies the resolved commit and SHA-256. The full text is embedded in
+`THIRD_PARTY_LICENSES.html`, and every release archive also includes the
+original file under `third_party/onnxruntime/`.
+
+Eigen is an explicit MPL-2.0 exception for this native ONNX Runtime dependency.
+Source availability: [Eigen source](https://gitlab.com/libeigen/eigen), with the
+corresponding dependency revision and build integration in the
+[ONNX Runtime v1.28.0 source tree](https://github.com/microsoft/onnxruntime/tree/v1.28.0).
+This exception is separate from the version-scoped Rust exceptions in
+`deny.toml`; Cargo licence checks do not inspect statically linked native code.
 
 ## PDF rendering fonts
 

@@ -7,7 +7,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py", "scripts/third_party_licenses.sh", about.toml, about.hbs, THIRD_PARTY.md, "crates/seyk-stt/Cargo.toml", "crates/seyk-embed/Cargo.toml"]
+    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py", "scripts/third_party_licenses.sh", about.toml, about.hbs, "third_party/onnxruntime/**", THIRD_PARTY.md, "crates/seyk-stt/Cargo.toml", "crates/seyk-embed/Cargo.toml"]
   workflow_dispatch:
 
 permissions:
@@ -69,7 +69,7 @@ jobs:
 
       - name: Install pinned licence generator
         shell: bash
-        run: nice -n 10 env CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=$HOME/.cache/seyk-target PATH=$HOME/.cargo/bin:$PATH cargo install cargo-about --version 0.8.2 --locked
+        run: cargo install cargo-about --version 0.8.2 --locked
 
       - name: Generate third-party licence bundle
         shell: bash
@@ -82,6 +82,8 @@ jobs:
           name="seyk-$version-${{ matrix.target }}"
           mkdir "$name"
           cp README.md LICENSE THIRD_PARTY.md THIRD_PARTY_LICENSES.html "$name/"
+          mkdir -p "$name/third_party/onnxruntime"
+          cp third_party/onnxruntime/* "$name/third_party/onnxruntime/"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             cp "target/${{ matrix.target }}/release/seyk.exe" "$name/"
             7z a -bso0 "$name.zip" "$name"
