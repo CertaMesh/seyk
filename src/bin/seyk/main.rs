@@ -5,6 +5,7 @@ mod daemon;
 #[cfg(feature = "mcp")]
 mod mcp;
 
+mod extract_errors;
 mod index_progress;
 
 use std::io::{IsTerminal, Read, Write};
@@ -190,6 +191,9 @@ enum Command {
         /// Emit a versioned extraction JSON document instead of raw text.
         #[arg(long)]
         json: bool,
+        /// Use stable exit codes and privacy-safe runtime error diagnostics.
+        #[arg(long)]
+        typed_errors: bool,
         /// Maximum audio presentation duration in seconds (inclusive).
         #[arg(long, default_value_t = 7200, value_parser = audio_duration)]
         max_audio_duration_secs: u64,
@@ -353,8 +357,20 @@ fn main() -> ExitCode {
         eprintln!("error: cache import requires explicit --cache-path");
         return ExitCode::FAILURE;
     }
+    let typed_errors = matches!(
+        &cli.command,
+        Command::Extract {
+            typed_errors: true,
+            ..
+        }
+    );
     match run(cli) {
         Ok(code) => code,
+        Err(e) if typed_errors => {
+            let failure = extract_errors::Failure::classify(&e);
+            eprintln!("{failure}");
+            ExitCode::from(failure.exit)
+        }
         Err(e) => {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
@@ -451,6 +467,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             hit,
             json,
             max_audio_duration_secs,
+            typed_errors,
         } => {
             let input: Box<dyn Read> = if from_json == Path::new("-") {
                 Box::new(std::io::stdin().lock())
@@ -509,18 +526,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )?
             };
             let mut out = std::io::stdout().lock();
-            if json {
-                serde_json::to_writer_pretty(&mut out, &json_output(&extracted))?;
-                writeln!(out)?;
-            } else {
-                if extracted
-                    .provenance
-                    .as_ref()
-                    .is_some_and(|p| p.speech.is_some())
-                {
-                    writeln!(out, "Machine transcript (may contain errors)")?;
-                }
-                out.write_all(extracted.text.as_bytes())?;
+            write_extracted(&mut out, &extracted, json)?;
+            if typed_errors {
+                out.flush()?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1012,24 +1020,57 @@ fn format_daemon_status(s: &daemon::DaemonStatus) -> String {
     out
 }
 
+fn write_extracted(
+    out: &mut impl Write,
+    extracted: &seyk::ExtractedContent,
+    json: bool,
+) -> Result<()> {
+    if json {
+        serde_json::to_writer_pretty(&mut *out, &json_output(extracted))?;
+        writeln!(out)?;
+    } else {
+        if extracted
+            .provenance
+            .as_ref()
+            .is_some_and(|p| p.speech.is_some())
+        {
+            writeln!(out, "Machine transcript (may contain errors)")?;
+        }
+        out.write_all(extracted.text.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// A search envelope is required so incompatible versions cannot be mistaken
 /// for usable byte locators. Parsing and selection happen before any source read.
 fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
-    let value: serde_json::Value = serde_json::from_reader(input).context("invalid search JSON")?;
+    let value: serde_json::Value = serde_json::from_reader(input).map_err(|error| {
+        if error.is_io() {
+            anyhow::Error::new(error).context("invalid search JSON")
+        } else {
+            anyhow::Error::new(error)
+                .context(extract_errors::InvalidInput("invalid search JSON".into()))
+        }
+    })?;
     if !matches!(
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
         Some(2..=9)
     ) {
-        bail!("expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8 or 9");
+        return Err(extract_errors::InvalidInput(
+            "expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8 or 9".into(),
+        )
+        .into());
     }
-    let results: SearchResults = serde_json::from_value(value).context("invalid search results")?;
+    let results: SearchResults = serde_json::from_value(value).context(
+        extract_errors::InvalidInput("invalid search results".into()),
+    )?;
     results
         .hits
         .into_iter()
         .nth(index)
-        .with_context(|| format!("no hit at index {index}"))
+        .with_context(|| extract_errors::InvalidInput(format!("no hit at index {index}")))
 }
 
 fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
@@ -1900,5 +1941,120 @@ mod tests {
                     .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod extract_contract_tests {
+    use super::*;
+
+    #[test]
+    fn extract_input_reader_io_is_not_invalid_json() {
+        struct BrokenReader;
+        impl Read for BrokenReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("SYNTHETIC_PRIVATE_SENTINEL"))
+            }
+        }
+        let error = read_search_hit(BrokenReader, 0).unwrap_err();
+        let failure = extract_errors::Failure::classify(&error);
+        assert_eq!(failure.exit, 7);
+        assert_eq!(failure.to_string(), "error: io_failed");
+    }
+
+    #[cfg(feature = "audio-stt")]
+    #[test]
+    fn extract_injected_transcriber_preserves_success_and_failure_contract() {
+        use seyk::audio::{AudioExtractor, SpeechToText, Transcript};
+        struct FakeTranscriber {
+            fail: bool,
+        }
+        impl SpeechToText for FakeTranscriber {
+            fn implementation(&self) -> &'static str {
+                "test"
+            }
+            fn manifest_sha256(&self) -> String {
+                String::new()
+            }
+            fn transcribe(&self, _: &[f32], _: Option<&str>) -> seyk::Result<Transcript> {
+                if self.fail {
+                    Err(seyk::Error::SpeechToText {
+                        reason: "SYNTHETIC_PRIVATE_SENTINEL",
+                    })
+                } else {
+                    Ok(Transcript {
+                        text: "Public test transcript".into(),
+                        language: Some("en".into()),
+                        no_speech: false,
+                    })
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("public.wav");
+        let mut bytes = Vec::new();
+        bytes.extend(b"RIFF");
+        bytes.extend(32036u32.to_le_bytes());
+        bytes.extend(b"WAVEfmt ");
+        bytes.extend(16u32.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(16000u32.to_le_bytes());
+        bytes.extend(32000u32.to_le_bytes());
+        bytes.extend(2u16.to_le_bytes());
+        bytes.extend(16u16.to_le_bytes());
+        bytes.extend(b"data");
+        bytes.extend(32000u32.to_le_bytes());
+        bytes.resize(32044, 0);
+        std::fs::write(&path, &bytes).unwrap();
+        let resource = seyk::ResourceId::from_path(path.canonicalize().unwrap()).unwrap();
+        let metadata = seyk::ResourceMetadata {
+            media_type: Some("audio/wav".into()),
+            modality: seyk::Modality::Audio,
+            size_bytes: bytes.len() as u64,
+            modified_ns: None,
+            content_hash: blake3::hash(&bytes).to_hex().to_string(),
+        };
+        let result = AudioExtractor::new(FakeTranscriber { fail: true }).extract(
+            &seyk::FsProvider,
+            &resource,
+            &ResourceLocator::Time {
+                start_ms: 0,
+                end_ms: 1000,
+            },
+            &metadata,
+            7200,
+        );
+        let error = match result {
+            Err(error) => anyhow::Error::new(error),
+            Ok(_) => panic!("transcriber should fail"),
+        };
+        let failure = extract_errors::Failure::classify(&error);
+        assert_eq!(failure.exit, 11);
+        assert_eq!(failure.to_string(), "error: transcription_failed");
+        let extracted = AudioExtractor::new(FakeTranscriber { fail: false })
+            .extract(
+                &seyk::FsProvider,
+                &resource,
+                &ResourceLocator::Time {
+                    start_ms: 0,
+                    end_ms: 1000,
+                },
+                &metadata,
+                7200,
+            )
+            .unwrap();
+        let mut raw = Vec::new();
+        write_extracted(&mut raw, &extracted, false).unwrap();
+        assert_eq!(
+            raw,
+            b"Machine transcript (may contain errors)\nPublic test transcript"
+        );
+        let mut json = Vec::new();
+        write_extracted(&mut json, &extracted, true).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(value["schema_version"], 9);
+        assert_eq!(value["text"], "Public test transcript");
+        assert_eq!(value["provenance"]["method"], "speech_to_text");
     }
 }

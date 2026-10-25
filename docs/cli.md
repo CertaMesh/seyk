@@ -101,11 +101,15 @@ seyk search "planting basil" ./notes --json --no-preview -n 1 |
   seyk extract --from-json - --json
 ```
 
+For stable runtime failure codes, add `--typed-errors` with either raw output or
+`--json`. Without the flag, failures retain exit 1 and prose. See
+[Typed extraction errors](#typed-extraction-errors) for the code table and stream contract.
+
 For raw text, extract writes the exact bytes without an added newline. Text and PDF
 text extraction need no model. Audio speech-to-text (STT) is opt-in and labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4`, `5`, `6`, `7` or `8`, not a bare hit. The extraction document uses
-version 8 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`, not a bare hit. The extraction document uses
+version 9 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 `--no-preview` skips preview reads and sets `preview` to null; indexing still reads
 source content.
@@ -116,6 +120,56 @@ supported in builds with `audio-stt` (see
 whole-resource and other locators return an unsupported-extraction error. MCP has an explicit `extract`
 tool that takes a selected MCP hit, verifies the hash and confines reads to the
 session roots. Search never transcribes.
+
+### Typed extraction errors
+
+`seyk extract --typed-errors --from-json hits.json [--hit INDEX] [--json]`
+enables stable exit codes for runtime failures. Without `--typed-errors`,
+returned failures retain exit code 1 and the existing prose diagnostics.
+Success output is identical in both modes, including raw text, the audio
+transcript label, and versioned JSON. The flag does not change the JSON schema.
+The current schema version is 9, and extract accepts search envelopes from
+versions 2 through 9.
+
+In typed mode, a returned runtime failure writes exactly one stderr line:
+
+```text
+error: <stable_code>
+```
+
+The code is a fixed string from the table below. The line contains no paths,
+filenames, source bytes, hashes, model locations, parser payloads, or free-form
+reasons. There is no JSON error document on either stream.
+
+| Exit | Stable code | Meaning |
+| --- | --- | --- |
+| 0 | None | Success. Help and version also exit 0 but are informational. |
+| 1 | `unknown_failure` | Any unlisted error, including future core variants, configuration, cache, embedding, and general model errors. |
+| 2 | Clap diagnostic | Invalid arguments or usage. Clap retains its own diagnostic format. |
+| 3 | `invalid_input` | Invalid JSON syntax or search results, absent or unsupported schema version, noninteger schema version, or missing selected hit. |
+| 4 | `resource_changed` | `StaleResource` or `ChangedWhileReading`. |
+| 5 | `unsupported_extraction` | `UnsupportedExtraction` or `PdfOcrUnavailable`. |
+| 6 | `invalid_evidence` | `InvalidLocator`, `InvalidText`, or `AudioIntervalTooLong`. |
+| 7 | `io_failed` | Core I/O, input-envelope open/read, or stdout write/flush failure, including broken pipes. |
+| 8 | `policy_denied` | `SecretFile`. |
+| 9 | `invalid_media` | `UnsupportedAudio`, `PdfParse`, `PdfPageDecode`, `ParserPanicked`, or `PdfRender`. |
+| 10 | `stt_model_unavailable` | `SttModel`. |
+| 11 | `transcription_failed` | `SpeechToText`. |
+
+Classification uses typed errors, never their displayed text. An enclosing
+input or core error takes priority over its lower-level I/O source. A PDF
+page-text hash or extraction-version mismatch is an `InvalidLocator`, so it
+exits 6 rather than 4.
+
+Input and extraction failures leave stdout empty. A stdout write or flush
+failure can leave partial output. Consumers must require exit 0 and valid
+expected output before using any bytes.
+
+Clap usage diagnostics may echo arguments and are outside the fixed runtime
+line contract. Signals, aborts, uncaught panics, and failure to write stderr
+are also outside that contract. Consumers must reject nonzero exits or missing
+valid output even when no typed line arrives. No model is downloaded to
+classify an error.
 
 ## Audio (opt-in)
 

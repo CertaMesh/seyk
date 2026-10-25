@@ -154,3 +154,40 @@ fn download_rejects_extraction_only_options() {
         );
     }
 }
+
+#[test]
+fn typed_stt_failures_need_no_weights_or_downloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing-SYNTHETIC_PRIVATE_SENTINEL");
+    let check = |file: &Path, exit, code| {
+        for json in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_seyk"));
+            command
+                .args(["extract", "--typed-errors", "--from-json"])
+                .arg(file)
+                .arg("--stt-model-dir")
+                .arg(&missing)
+                .env("HF_HUB_OFFLINE", "1");
+            if json {
+                command.arg("--json");
+            }
+            let out = command.output().unwrap();
+            assert_eq!(out.status.code(), Some(exit), "{out:?}");
+            assert!(out.stdout.is_empty());
+            assert_eq!(out.stderr, format!("error: {code}\n").as_bytes());
+        }
+    };
+    let file = input(dir.path(), 10000, &chirp());
+    check(&file, 10, "stt_model_unavailable");
+    let file = input(dir.path(), 30001, &chirp());
+    check(&file, 6, "invalid_evidence");
+    let file = input(dir.path(), 10000, &chirp());
+    std::fs::write(dir.path().join("public.wav"), b"changed").unwrap();
+    check(&file, 4, "resource_changed");
+    let file = input(
+        dir.path(),
+        10000,
+        b"SYNTHETIC_PRIVATE_SENTINEL malformed audio",
+    );
+    check(&file, 9, "invalid_media");
+}
