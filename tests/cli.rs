@@ -859,3 +859,202 @@ fn jsonl_model_failure_emits_terminal_record_without_resolved_paths() {
         common::assert_json_excludes(&event, temp.path().to_str().unwrap());
     }
 }
+
+#[test]
+fn model_profile_matches_index_without_weights_or_cache_access() {
+    use seyk::embedder::gemma::{self, GemmaConfig, ModelSource, Precision};
+
+    let temp = TempDir::new().unwrap();
+    let hf_home = temp.path().join("absent-hf-home");
+    let cache = temp.path().join("absent-cache/cache.sqlite3");
+    let fixture = temp.path().join("note.txt");
+    std::fs::write(&fixture, "A tiny profile identity fixture.").unwrap();
+    for precision in [Precision::Q8, Precision::Fp32] {
+        for (local, text_only) in [(false, true), (false, false), (true, true), (true, false)] {
+            let mut config = GemmaConfig::default();
+            config.dimension = seyk::Dimension::D128;
+            config.precision = precision;
+            config.vision = cfg!(feature = "image") && !text_only;
+            let model = if local {
+                let dir = temp
+                    .path()
+                    .join(format!("local-{}-{text_only}", precision.name()));
+                for file in config.files() {
+                    let path = dir.join(file);
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    // Deliberately invalid model files: profile must never load them.
+                    std::fs::write(path, "not model weights").unwrap();
+                }
+                config.source = ModelSource::Directory(dir.clone());
+                dir.to_str().unwrap().to_owned()
+            } else {
+                format!("{}@{}", gemma::ONNX_REPO, gemma::ONNX_REVISION)
+            };
+            let output = binary()
+                .env("HF_HOME", &hf_home)
+                .args([
+                    "model",
+                    "profile",
+                    "--json",
+                    "--model",
+                    &model,
+                    "--precision",
+                    precision.name(),
+                    "--dimension",
+                    "128",
+                    "--cache-path",
+                ])
+                .arg(&cache)
+                .args(if text_only {
+                    vec!["--text-only"]
+                } else {
+                    vec![]
+                })
+                .env("SEYK_CACHE", &cache)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["schema_version"], 9);
+            assert_eq!(value["model_present"], local);
+            assert_eq!(
+                value["missing_files"],
+                if local {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!(config.files())
+                }
+            );
+            assert!(!hf_home.exists());
+            assert!(!cache.parent().unwrap().exists());
+            let identity = gemma::model_identity(&config).unwrap();
+            let engine = seyk::SearchEngine::builder()
+                .embedder(common::FakeEmbedder::with_identity(identity))
+                .build()
+                .unwrap();
+            let report = engine.index().paths([&fixture]).execute().unwrap();
+            assert_eq!(report.sync.resources_updated, 1);
+            assert!(report.sync.segments_embedded > 0);
+            assert_eq!(value["profile_id"], engine.profile_id());
+            assert_eq!(
+                value["profile"],
+                serde_json::to_value(engine.profile()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn model_profile_resolves_local_hf_ref_without_snapshot_or_weights() {
+    let temp = TempDir::new().unwrap();
+    let hf_home = temp.path().join("hf");
+    let refs = hf_home.join("hub/models--example--model/refs");
+    std::fs::create_dir_all(&refs).unwrap();
+    let commit = "1234567890123456789012345678901234567890";
+    std::fs::write(refs.join("main"), format!("{commit}\n")).unwrap();
+    let output = binary()
+        .env("HF_HOME", &hf_home)
+        .env("SEYK_CACHE", temp.path().join("absent-cache/cache.sqlite3"))
+        .args([
+            "model",
+            "profile",
+            "--json",
+            "--model",
+            "example/model@main",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["profile"]["model"]["revision"],
+        format!("example/model@{commit}")
+    );
+    binary()
+        .env("HF_HOME", &hf_home)
+        .env("SEYK_CACHE", temp.path().join("absent-cache/cache.sqlite3"))
+        .args(["model", "profile", "--model", "example/model@main"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Profile {}",
+            value["profile_id"].as_str().unwrap()
+        )))
+        .stdout(predicate::str::contains(
+            "  model:     google/embeddinggemma-2",
+        ))
+        .stdout(predicate::str::contains("  dimension: 256"))
+        .stdout(predicate::str::contains("  segmenter: "))
+        .stdout(predicate::str::contains("  present:   false"));
+    assert!(!temp.path().join("absent-cache").exists());
+    assert!(
+        !hf_home
+            .join("hub/models--example--model/snapshots")
+            .exists()
+    );
+}
+
+#[test]
+#[ignore = "requires local Gemma weights; no downloads"]
+fn model_profile_matches_real_cli_index() {
+    let temp = TempDir::new().unwrap();
+    let notes = temp.path().join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    std::fs::write(notes.join("note.txt"), "A tiny real CLI profile fixture.").unwrap();
+    let cache = temp.path().join("cache.sqlite3");
+    let output = binary()
+        .args([
+            "model",
+            "profile",
+            "--json",
+            "--text-only",
+            "--threads",
+            "2",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let profile: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(profile["model_present"], true);
+    assert_eq!(profile["missing_files"], serde_json::json!([]));
+    binary()
+        .arg("index")
+        .arg(&notes)
+        .args(["--text-only", "--threads", "2", "--cache-path"])
+        .arg(&cache)
+        .assert()
+        .success();
+    let output = binary()
+        .args(["cache", "stats", "--json", "--cache-path"])
+        .arg(&cache)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stats: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(stats["profiles"].as_array().unwrap().len(), 1);
+    assert_eq!(stats["profiles"][0]["resources"], 1);
+    assert_eq!(stats["profiles"][0]["profile_id"], profile["profile_id"]);
+    assert_eq!(stats["profiles"][0]["profile"], profile["profile"]);
+}
+
+#[test]
+fn model_profile_missing_local_files_has_download_hint() {
+    let temp = TempDir::new().unwrap();
+    binary()
+        .args(["model", "profile", "--json", "--text-only", "--model"])
+        .arg(temp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "model is missing; run `seyk model download`",
+        ))
+        .stderr(predicate::str::contains("is missing tokenizer.json"));
+}

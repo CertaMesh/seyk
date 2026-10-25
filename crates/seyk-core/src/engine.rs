@@ -341,6 +341,17 @@ impl SearchEngineBuilder {
         self
     }
 
+    /// Describe vector identity without constructing an engine or opening a cache.
+    pub fn cache_profile(&self, model: crate::embedder::ModelIdentity) -> CacheProfile {
+        CacheProfile {
+            model,
+            segmenter_version: format!(
+                "{}+input-v{INPUT_FORMAT_VERSION}",
+                self.segmenter.version()
+            ),
+        }
+    }
+
     pub fn build(mut self) -> Result<SearchEngine> {
         crate::discovery::audio_byte_limit(self.max_audio_duration_secs)?;
         #[cfg(feature = "pdf")]
@@ -348,14 +359,9 @@ impl SearchEngineBuilder {
         self.extractors.push(Arc::new(TextExtractor));
         let embedder = self
             .embedder
+            .take()
             .ok_or_else(|| Error::Config("SearchEngine needs an embedder".into()))?;
-        let profile = CacheProfile {
-            model: embedder.identity().clone(),
-            segmenter_version: format!(
-                "{}+input-v{INPUT_FORMAT_VERSION}",
-                self.segmenter.version()
-            ),
-        };
+        let profile = self.cache_profile(embedder.identity().clone());
         let profile_id = profile.id();
         let mut cache = self.cache.unwrap_or_else(|| Box::new(MemoryCache::new()));
         cache.register_profile(&profile_id, &profile)?;

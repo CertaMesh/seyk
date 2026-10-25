@@ -191,6 +191,36 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
     Ok(resolve(config)?.dir)
 }
 
+/// Derive cache identity without loading weights, downloading files or creating a cache.
+/// HF sources read local refs when present; local directories use the same file
+/// fingerprint as model loading (graph/config bytes and external weight sizes).
+pub fn model_identity(config: &GemmaConfig) -> Result<ModelIdentity> {
+    let resolved = match &config.source {
+        ModelSource::Directory(_) => resolve(config)?,
+        ModelSource::HuggingFace { repo, revision } => {
+            hf_snapshot(&hf_cache_path()?, repo, revision)
+        }
+    };
+    resolved.identity(config)
+}
+
+/// Required model files that are absent, checked using filesystem metadata only.
+/// Does not load weights, materialize files, download or create a cache.
+pub fn missing_model_files(config: &GemmaConfig) -> Result<Vec<String>> {
+    let dir = match &config.source {
+        ModelSource::Directory(dir) => dir.clone(),
+        ModelSource::HuggingFace { repo, revision } => {
+            hf_snapshot(&hf_cache_path()?, repo, revision).dir
+        }
+    };
+    let missing: Vec<_> = config
+        .files()
+        .into_iter()
+        .filter(|file| !dir.join(file).exists())
+        .collect();
+    Ok(missing)
+}
+
 /// A snapshot and the commit selected in the same cache lookup. Local directories
 /// have no HF revision; their identity is still derived from their files.
 struct ResolvedModel {
@@ -226,14 +256,8 @@ fn resolve_hf(
     repo: &str,
     revision: &str,
 ) -> Result<ResolvedModel> {
-    let repo_dir = cache.join(format!("models--{}", repo.replace('/', "--")));
-    // Branch names resolve through refs/. A pinned commit often has no
-    // refs/ entry (the Python client never writes one), only snapshots/<sha>,
-    // so `hf_hub::CacheRepo::get` cannot be used here.
-    let commit = std::fs::read_to_string(repo_dir.join("refs").join(revision))
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| revision.to_string());
-    let dir = repo_dir.join("snapshots").join(&commit);
+    let resolved = hf_snapshot(cache, repo, revision);
+    let dir = &resolved.dir;
     for f in config.files() {
         if !dir.join(&f).exists() {
             return Err(Error::ModelNotFound(format!(
@@ -242,10 +266,22 @@ fn resolve_hf(
             )));
         }
     }
-    Ok(ResolvedModel {
+    Ok(resolved)
+}
+
+fn hf_snapshot(cache: &Path, repo: &str, revision: &str) -> ResolvedModel {
+    let repo_dir = cache.join(format!("models--{}", repo.replace('/', "--")));
+    // Branch names resolve through refs/. A pinned commit often has no
+    // refs/ entry (the Python client never writes one), only snapshots/<sha>,
+    // so `hf_hub::CacheRepo::get` cannot be used here.
+    let commit = std::fs::read_to_string(repo_dir.join("refs").join(revision))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| revision.to_string());
+    let dir = repo_dir.join("snapshots").join(&commit);
+    ResolvedModel {
         dir,
         revision: Some(commit),
-    })
+    }
 }
 
 impl ResolvedModel {

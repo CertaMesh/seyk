@@ -30,6 +30,13 @@ impl FakeEmbedder {
         }
     }
 
+    pub fn with_identity(identity: ModelIdentity) -> Self {
+        Self {
+            identity,
+            embedded_resources: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
     pub fn resource_count(&self) -> usize {
         self.embedded_resources.load(Ordering::SeqCst)
     }

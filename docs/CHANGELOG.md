@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `seyk model profile [model options] --json` to report the exact index profile ID and descriptor without loading weights or opening a cache. Reports `model_present` and `missing_files` using metadata checks. Uses the shared model identity and engine profile derivation, with the current JSON schema v9. Adds public `gemma::model_identity`, `gemma::missing_model_files`, and `SearchEngineBuilder::cache_profile` APIs.
+
 - Isolate shared daemons by build version and cache schema as well as JSON schema/model options. A mismatched client starts a matching daemon without interrupting older sessions. Status/stop address only the invoking build; daemon status/logs and MCP server metadata report the build version. JSON schema remains v9 and cache schema v7; incompatible cache versions still require separate cache paths.
 
 - Identify non-release builds in `seyk --version` with `+g<short-sha>` and `.dirty` for modified trees. Clean release-tag builds keep the plain version when the tag is present locally; `cargo install --git --tag` may show the SHA suffix. Builds without Git or repository metadata keep the plain version. Untracked files outside the watched source paths update `.dirty` on the next rebuild. Human-readable `seyk cache stats` now reports the SQLite cache schema version.
