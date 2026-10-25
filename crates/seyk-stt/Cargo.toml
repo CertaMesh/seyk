@@ -3,7 +3,8 @@ name = "seyk-stt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# Overrides the workspace licence: the bundled Whisper mel filters are MIT.
+license = "Apache-2.0 AND MIT"
 description = "Offline, on-demand Whisper transcription for Seyk"
 repository.workspace = true
 readme.workspace = true

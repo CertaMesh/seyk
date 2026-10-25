@@ -270,7 +270,7 @@ fn p2_engine_contracts_at_both_dimensions() {
         let cache = SqliteCache::open(&cache_path).unwrap();
         let before = cache.stats().unwrap();
         assert_eq!(before.profiles[0].image_codes, 0);
-        let f32_snapshot = fixture.join(format!("p3-4517-d{}-f32.sqlite", dimension.get()));
+        let f32_snapshot = fixture.join(format!("photo-anchor-d{}-f32.sqlite", dimension.get()));
         snapshot(&cache_path, &f32_snapshot);
         // Cached-only reads use f32 fallback and do not write derived codes.
         let fallback = engine
@@ -305,7 +305,7 @@ fn p2_engine_contracts_at_both_dimensions() {
             280,
             "backfill must not infer"
         );
-        let q4_snapshot = fixture.join(format!("p3-4517-d{}-q4.sqlite", dimension.get()));
+        let q4_snapshot = fixture.join(format!("photo-anchor-d{}-q4.sqlite", dimension.get()));
         snapshot(&cache_path, &q4_snapshot);
         disk.push(serde_json::json!({"dim":dimension.get(),"f32_only_bytes":std::fs::metadata(&f32_snapshot).unwrap().len(),"f32_plus_q4_bytes":std::fs::metadata(&q4_snapshot).unwrap().len(),"image_code_rows":280}));
         drop(engine);

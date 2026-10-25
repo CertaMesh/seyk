@@ -11,7 +11,7 @@ Fixture/query BLAKE3: `c2bbf14d318d9cc812941d8216d703f7cba7f2c9d4e067ed09f5460d5
 
 ## Correctness
 
-Each dimension checks 16,800 query/image score pairs against independent sequential f32 decode-dot and f64 dequantized-dot references parsed directly from the assets. The separate codec suite also covers every byte, mixed nibbles, sparse/sign/random queries, Python goldens and the unchanged 4714 witness.
+Each dimension checks 16,800 query/image score pairs against independent sequential f32 decode-dot and f64 dequantized-dot references parsed directly from the assets. The separate codec suite also covers every byte, mixed nibbles, sparse/sign/random queries, Python goldens and the unchanged rounding witness.
 
 | Width | Max error vs sequential f32 | Max error vs f64 | Tolerance |
 |---:|---:|---:|---:|
@@ -78,7 +78,7 @@ Warm end-to-end cached engine requests include actual text-query inference, SQLi
 
 All 24 sequential stages passed on `007c7fe3bbc55458bde20b53b352c3b26507bef3`: the CI verification commands for default/audio/audio-STT, standalone dependencies/library/CLI/core/PDF, Python chart/metric adapters, the exact `cargo deny --locked --all-features check licenses` form, all Rust 1.89 checks/builds, the requested Windows GNU no-default core all-target clippy check, and fetcher tests. Toolchains and the GNU target were already installed; no toolchain or package downloads were needed. These are native macOS checks plus Windows cross-target linting, not a Windows runtime test.
 
-The final P2 gate was repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved 4714 witness also passes the amended bound. Timed runs started only after explicit `ROOT: SLOT-GO`.
+The final P2 gate was repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved rounding witness also passes the amended bound. Timed runs required explicit opt-in.
 
 ## Review follow-up
 

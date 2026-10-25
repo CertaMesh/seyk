@@ -7,3 +7,6 @@ __pycache__/
 
 # System Voice speech is generated locally in tmp/, never distributed.
 /crates/seyk-stt/tests/fixtures/*.wav
+
+# Generated locally and packaged by the release workflow.
+/THIRD_PARTY_LICENSES.html

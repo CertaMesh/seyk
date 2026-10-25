@@ -9,6 +9,27 @@ transitive dependency of `dirs`. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
 Additional scoped exceptions for opt-in audio are listed below.
 
+Allowed dependency licence classes are MIT, Apache-2.0, BSD-3-Clause, ISC,
+Zlib, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0. The MPL-2.0 exceptions
+are limited to `option-ext 0.2.0` and the Symphonia 0.5.5 crates listed below;
+`deny.toml` is the authoritative package and version policy. Bundled Photo
+Anchor assets have a separate CC-BY-4.0 exception scoped to `seyk-embed`.
+
+Every release archive includes `THIRD_PARTY_LICENSES.html`, generated with
+cargo-about 0.8.2 by `scripts/third_party_licenses.sh`. It contains per-crate
+licence texts and copyright notices for the locked workspace across all
+features and platforms (a superset of each release build), plus the ONNX
+Runtime MIT notice. It includes build dependencies; development-only
+dependencies are excluded. The asset notices in this file remain part of the
+release distribution.
+
+To reproduce the bundle locally, install the pinned generator and run:
+
+```sh
+nice -n 10 env CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=$HOME/.cache/seyk-target PATH=$HOME/.cargo/bin:$PATH cargo install cargo-about --version 0.8.2 --locked
+scripts/third_party_licenses.sh
+```
+
 PDF text extraction uses pdf-extract 0.12.1 (MIT) and lopdf 0.42.0 (MIT), plus
 MIT-licensed Adobe CMap, Type 1 encoding and font parsers. See their packaged
 licences and source notices in the Cargo registry. The `pdf-render` feature adds

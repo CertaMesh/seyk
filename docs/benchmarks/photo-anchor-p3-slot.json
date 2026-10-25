@@ -1,8 +1,6 @@
 {
   "run": {
     "source_head": "2d3604a724efcbf77d410bc99d00581c3537ac17",
-    "authorization": "ROOT: SLOT-GO 2026-10-24",
-    "concurrent_work": "Gaze #773 leak-only capture (~1 core), coordinator approved; other projects paused",
     "commands": [
       {
         "name": "criterion",

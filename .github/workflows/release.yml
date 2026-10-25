@@ -7,7 +7,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py"]
+    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py", "scripts/third_party_licenses.sh", about.toml, about.hbs, THIRD_PARTY.md, "crates/seyk-stt/Cargo.toml", "crates/seyk-embed/Cargo.toml"]
   workflow_dispatch:
 
 permissions:
@@ -67,13 +67,21 @@ jobs:
             *windows*) objdump -p "$binary.exe" | grep "DLL Name" ;;
           esac
 
+      - name: Install pinned licence generator
+        shell: bash
+        run: nice -n 10 env CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=$HOME/.cache/seyk-target PATH=$HOME/.cargo/bin:$PATH cargo install cargo-about --version 0.8.2 --locked
+
+      - name: Generate third-party licence bundle
+        shell: bash
+        run: scripts/third_party_licenses.sh
+
       - name: Package
         shell: bash
         run: |
           version=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
           name="seyk-$version-${{ matrix.target }}"
           mkdir "$name"
-          cp README.md LICENSE THIRD_PARTY.md "$name/"
+          cp README.md LICENSE THIRD_PARTY.md THIRD_PARTY_LICENSES.html "$name/"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             cp "target/${{ matrix.target }}/release/seyk.exe" "$name/"
             7z a -bso0 "$name.zip" "$name"

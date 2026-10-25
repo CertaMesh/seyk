@@ -1,0 +1,48 @@
+# Notice generation uses the same licence choices as deny.toml.
+# cargo deny remains the authoritative version-scoped policy check.
+# No target filter: cover every release platform and optional feature.
+accepted = [
+    "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "CC0-1.0",
+    "CDLA-Permissive-2.0", "Unicode-3.0", "Zlib",
+]
+ignore-dev-dependencies = true
+no-clearly-defined = true
+
+[option-ext]
+accepted = ["MPL-2.0"]
+
+[symphonia]
+accepted = ["MPL-2.0"]
+
+[symphonia-bundle-flac]
+accepted = ["MPL-2.0"]
+
+[symphonia-bundle-mp3]
+accepted = ["MPL-2.0"]
+
+[symphonia-codec-aac]
+accepted = ["MPL-2.0"]
+
+[symphonia-codec-alac]
+accepted = ["MPL-2.0"]
+
+[symphonia-codec-pcm]
+accepted = ["MPL-2.0"]
+
+[symphonia-core]
+accepted = ["MPL-2.0"]
+
+[symphonia-format-isomp4]
+accepted = ["MPL-2.0"]
+
+[symphonia-format-riff]
+accepted = ["MPL-2.0"]
+
+[symphonia-metadata]
+accepted = ["MPL-2.0"]
+
+[symphonia-utils-xiph]
+accepted = ["MPL-2.0"]
+
+[seyk-embed]
+accepted = ["CC-BY-4.0"]
