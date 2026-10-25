@@ -7,9 +7,10 @@
 //! one model's memory instead of five. It exits after a quiet period with no
 //! sessions, so the memory is only held while agents use it.
 //!
-//! The socket name hashes the package version, JSON schema version and model
-//! options. Builds with the same values share an endpoint, even when their
-//! implementation differs.
+//! The socket name hashes the build version, JSON and cache schema versions,
+//! and model options. Mismatched clients start a separate daemon; existing
+//! sessions keep their daemon until normal idle shutdown. Equal identity values
+//! share an endpoint even when the implementation differs.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -47,7 +48,12 @@ impl Endpoint {
         };
         std::fs::create_dir_all(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let id = endpoint_id(&model_args, crate::JSON_SCHEMA_VERSION);
+        let id = endpoint_id(
+            &model_args,
+            env!("SEYK_BUILD_VERSION"),
+            crate::JSON_SCHEMA_VERSION,
+            seyk::cache::SCHEMA_VERSION,
+        );
         let mut spawn_args = vec!["daemon".to_string(), "run".to_string()];
         spawn_args.extend(model_args);
         Ok(Self {
@@ -59,9 +65,19 @@ impl Endpoint {
     }
 }
 
-fn endpoint_id(model_args: &[String], schema_version: u32) -> String {
+fn endpoint_id(
+    model_args: &[String],
+    build_version: &str,
+    schema_version: u32,
+    cache_schema_version: &str,
+) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(b"daemon-build");
+    hasher.update(&(build_version.len() as u64).to_le_bytes());
+    hasher.update(build_version.as_bytes());
+    hasher.update(b"cache-schema");
+    hasher.update(&(cache_schema_version.len() as u64).to_le_bytes());
+    hasher.update(cache_schema_version.as_bytes());
     // A new client must not reconnect to a daemon returning an older JSON shape.
     hasher.update(b"json-schema");
     hasher.update(&schema_version.to_le_bytes());
@@ -193,7 +209,7 @@ async fn serve(endpoint: &Endpoint, hub: Arc<Hub>, idle: Duration) -> Result<()>
     std::fs::set_permissions(&endpoint.socket, std::fs::Permissions::from_mode(0o600))?;
     eprintln!(
         "seyk daemon {} (pid {}) listening on {}",
-        env!("CARGO_PKG_VERSION"),
+        env!("SEYK_BUILD_VERSION"),
         std::process::id(),
         endpoint.socket.display()
     );
@@ -252,7 +268,7 @@ async fn handle(
         Hello::Status => {
             let status = DaemonStatus {
                 pid: std::process::id(),
-                version: env!("CARGO_PKG_VERSION").into(),
+                version: env!("SEYK_BUILD_VERSION").into(),
                 sessions: sessions.active(),
                 folders: hub.watched(),
                 index_progress: hub.root_progress(None),
@@ -666,6 +682,7 @@ mod tests {
             assert!(reply.ok);
             if let Some(status) = reply.status {
                 assert_eq!(status.sessions, 0);
+                assert_eq!(status.version, env!("SEYK_BUILD_VERSION"));
             } else {
                 assert_eq!(stopped.recv().await, Some(()));
             }
@@ -676,20 +693,39 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_changes_with_protocol_and_model_arguments() {
+    fn endpoint_separates_build_cache_protocol_and_model_arguments() {
         let args = vec!["--dimension".into(), "256".into()];
-        assert_eq!(endpoint_id(&args, 2), endpoint_id(&args, 2));
-        assert_ne!(endpoint_id(&args, 1), endpoint_id(&args, 2));
+        let id = endpoint_id(&args, "0.1.0+g123", 9, "7");
+        assert_eq!(id, endpoint_id(&args, "0.1.0+g123", 9, "7"));
+        assert_ne!(id, endpoint_id(&args, "0.1.0+g456", 9, "7"));
+        assert_ne!(id, endpoint_id(&args, "0.1.0+g123.dirty", 9, "7"));
+        assert_ne!(id, endpoint_id(&args, "0.1.0+g123", 9, "8"));
+        assert_ne!(id, endpoint_id(&args, "0.1.0+g123", 10, "7"));
         assert_ne!(
-            endpoint_id(&args, 2),
-            endpoint_id(&["--dimension".into(), "128".into()], 2)
+            id,
+            endpoint_id(&["--dimension".into(), "128".into()], "0.1.0+g123", 9, "7")
         );
+        assert_ne!(
+            endpoint_id(&["ab".into(), "c".into()], "v", 9, "7"),
+            endpoint_id(&["a".into(), "bc".into()], "v", 9, "7")
+        );
+        // An already-running pre-build-identity daemon keeps its own endpoint.
         let mut legacy = blake3::Hasher::new();
         legacy.update(env!("CARGO_PKG_VERSION").as_bytes());
+        legacy.update(b"json-schema");
+        legacy.update(&crate::JSON_SCHEMA_VERSION.to_le_bytes());
         for a in &args {
             legacy.update(&(a.len() as u64).to_le_bytes());
             legacy.update(a.as_bytes());
         }
-        assert_ne!(endpoint_id(&args, 2), &legacy.finalize().to_hex()[..12]);
+        assert_ne!(
+            endpoint_id(
+                &args,
+                env!("SEYK_BUILD_VERSION"),
+                crate::JSON_SCHEMA_VERSION,
+                seyk::cache::SCHEMA_VERSION
+            ),
+            &legacy.finalize().to_hex()[..12]
+        );
     }
 }

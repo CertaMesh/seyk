@@ -1093,7 +1093,7 @@ impl ServerHandler for SeykServer {
             name
         };
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(name, env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(name, env!("SEYK_BUILD_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
 }
@@ -1344,6 +1344,10 @@ mod tests {
         );
         let server = local_content_server(provider, hub).unwrap();
         assert_eq!(server.get_info().server_info.name, "seyk-local-content-v1");
+        assert_eq!(
+            server.get_info().server_info.version,
+            env!("SEYK_BUILD_VERSION")
+        );
         let valid = search(&server, "quartz");
         assert_eq!(valid.schema_version, 9);
         assert_eq!(valid.hits.len(), 1);
