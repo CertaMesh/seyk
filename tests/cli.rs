@@ -587,6 +587,8 @@ fn mcp_initializes_with_long_home_and_cache_paths() {
     );
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
     use std::path::PathBuf;
+    // This test gives TMPDIR a deliberately overlong path, forcing /tmp even
+    // on hosts whose normal temporary directory would fit.
     assert!(socket.starts_with(format!("/tmp/seyk-{}", unsafe { libc::geteuid() })));
     let metadata = std::fs::symlink_metadata(&socket).unwrap();
     assert!(metadata.file_type().is_socket());

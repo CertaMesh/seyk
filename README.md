@@ -535,8 +535,8 @@ Windows `seyk mcp` always runs standalone.
 Daemon sockets normally live at `<cache_dir>/seyk/daemon-<id>.sock`. If that
 path reaches the Unix socket limit (104 bytes on macOS, 108 on Linux, including
 the terminating NUL), only the socket moves to `$TMPDIR/seyk-<uid>/d-<hash>.sock`,
-or `/tmp/seyk-<uid>/d-<hash>.sock` if TMPDIR is unset or too long. The fallback
-directory must be a real directory owned by your uid with mode `0700`. Seyk
+or `/tmp/seyk-<uid>/d-<hash>.sock` if TMPDIR is unset or not absolute, or its
+socket path is too long. The fallback directory must be a real directory owned by your uid with mode `0700`. Seyk
 creates it with that mode and refuses unsafe existing directories. Sockets use
 mode `0600`. Locks and `daemon.log` stay in the cache directory.
 `SEYK_DAEMON_DIR` overrides the normal directory for sockets, locks and logs.

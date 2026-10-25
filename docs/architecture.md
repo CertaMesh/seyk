@@ -336,8 +336,8 @@ normal `<cache_dir>/seyk/daemon-<id>.sock` stays unchanged when its encoded Unix
 path fits `sockaddr_un.sun_path`, reserving one byte for NUL (104 bytes total on
 macOS, 108 on Linux). Otherwise only the socket moves to
 `$TMPDIR/seyk-<uid>/d-<hash>.sock`, falling back to `/tmp/seyk-<uid>/` when the
-TMPDIR candidate is too long or TMPDIR is unset. The filename retains 128 bits
-of a BLAKE3 hash of the normal socket path, including the cache directory and
+TMPDIR candidate is too long or TMPDIR is unset or not absolute. The filename
+retains 128 bits of a BLAKE3 hash of the normal socket path, including the cache directory and
 endpoint identity, so separate lock directories do not share a fallback socket.
 Locks and logs remain in the normal cache directory. `SEYK_DAEMON_DIR` still
 overrides all three locations. Explicit overrides must fit without fallback.

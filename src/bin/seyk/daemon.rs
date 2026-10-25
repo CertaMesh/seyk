@@ -88,6 +88,30 @@ impl Endpoint {
         Ok(())
     }
 
+    fn lock_conflict_error(&self) -> anyhow::Error {
+        anyhow!(
+            "another daemon holds the lock for this cache dir ({}), probably started with a different TMPDIR; no socket at {}; set SEYK_DAEMON_DIR to a common short directory",
+            self.lock.parent().unwrap().display(),
+            self.socket.display()
+        )
+    }
+
+    fn check_lock_for_missing_socket(&self) -> Result<()> {
+        if self.socket.exists() {
+            return Ok(());
+        }
+        let lock = match OpenOptions::new().write(true).open(&self.lock) {
+            Ok(lock) => lock,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).context("checking daemon endpoint lock"),
+        };
+        match lock.try_lock() {
+            Ok(()) => Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => Err(self.lock_conflict_error()),
+            Err(e) => Err(e).context("checking daemon endpoint lock"),
+        }
+    }
+
     fn remove_socket(&self) -> Result<()> {
         self.verify_socket_dir()?;
         match std::fs::remove_file(&self.socket) {
@@ -138,7 +162,7 @@ fn select_socket_path(
     let id = blake3::hash(normal.as_os_str().as_bytes()).to_hex();
     let name = format!("d-{}.sock", &id[..32]);
     let socket_in = |base: &Path| base.join(format!("seyk-{uid}")).join(&name);
-    if let Some(tmpdir) = tmpdir {
+    if let Some(tmpdir) = tmpdir.filter(|p| p.is_absolute()) {
         let socket = socket_in(tmpdir);
         if check_socket_path(&socket, limit).is_ok() {
             return Ok(socket);
@@ -151,7 +175,13 @@ fn select_socket_path(
 
 fn ensure_socket_dir(dir: &Path, uid: u32) -> Result<()> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-        Ok(()) => {}
+        Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| {
+                format!(
+                    "setting private daemon socket directory mode {}",
+                    dir.display()
+                )
+            })?,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => {
             return Err(e).with_context(|| {
@@ -299,6 +329,9 @@ pub fn run(endpoint: &Endpoint, factory: EngineFactory, idle: Duration) -> Resul
         .mode(0o600)
         .open(&endpoint.lock)?;
     if lock.try_lock().is_err() {
+        if !endpoint.socket.exists() {
+            return Err(endpoint.lock_conflict_error());
+        }
         eprintln!("seyk daemon: already running for this configuration");
         return Ok(());
     }
@@ -544,6 +577,7 @@ async fn connect_or_spawn(endpoint: &Endpoint) -> Result<UnixStream> {
         match UnixStream::connect(&endpoint.socket).await {
             Ok(s) => return Ok(s),
             Err(e) if Instant::now() >= deadline => {
+                endpoint.check_lock_for_missing_socket()?;
                 return Err(anyhow!(
                     "seyk daemon did not start ({e}); see {}",
                     endpoint.log.display()
@@ -653,6 +687,72 @@ mod tests {
     }
 
     #[test]
+    fn socket_selection_ignores_empty_tmpdir() {
+        let normal = PathBuf::from(format!("/{}", "long".repeat(40)));
+        let socket = select_socket_path(
+            &normal,
+            false,
+            Some(Path::new("")),
+            Path::new("/tmp"),
+            42,
+            socket_path_limit(),
+        )
+        .unwrap();
+        assert_eq!(socket.parent().unwrap(), Path::new("/tmp/seyk-42"));
+    }
+
+    #[test]
+    fn socket_selection_ignores_relative_tmpdir() {
+        let normal = PathBuf::from(format!("/{}", "long".repeat(40)));
+        let socket = select_socket_path(
+            &normal,
+            false,
+            Some(Path::new("tmp")),
+            Path::new("/tmp"),
+            42,
+            socket_path_limit(),
+        )
+        .unwrap();
+        assert_eq!(socket.parent().unwrap(), Path::new("/tmp/seyk-42"));
+    }
+
+    #[test]
+    fn held_lock_without_expected_socket_explains_tmpdir_conflict() {
+        let temp = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint {
+            socket: temp.path().join("missing.sock"),
+            private_socket_dir: false,
+            lock: temp.path().join("daemon.lock"),
+            log: temp.path().join("daemon.log"),
+            spawn_args: vec![],
+        };
+        endpoint.check_lock_for_missing_socket().unwrap();
+        let lock = File::create(&endpoint.lock).unwrap();
+        lock.try_lock().unwrap();
+        let error = endpoint
+            .check_lock_for_missing_socket()
+            .unwrap_err()
+            .to_string();
+        for expected in [
+            "another daemon holds the lock for this cache dir",
+            "different TMPDIR",
+            "SEYK_DAEMON_DIR",
+        ] {
+            assert!(error.contains(expected), "{error}");
+        }
+        let error = run(&endpoint, Box::new(|| bail!("must not load a model")), IDLE)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("different TMPDIR"));
+        let _socket = std::os::unix::net::UnixListener::bind(&endpoint.socket).unwrap();
+        endpoint.check_lock_for_missing_socket().unwrap();
+        std::fs::remove_file(&endpoint.socket).unwrap();
+        lock.unlock().unwrap();
+        drop(lock);
+        endpoint.check_lock_for_missing_socket().unwrap();
+    }
+
+    #[test]
     fn socket_selection_reports_length_for_override_and_exhausted_fallbacks() {
         let normal = PathBuf::from(format!("/{}", "long".repeat(40)));
         let limit = socket_path_limit();
@@ -700,6 +800,36 @@ mod tests {
         assert!(metadata.is_dir());
         assert_eq!(metadata.mode() & 0o7777, 0o700);
         assert_eq!(metadata.uid(), current_uid());
+    }
+
+    #[test]
+    fn private_socket_directory_creation_restores_owner_bits_after_umask() {
+        const CHILD_DIR: &str = "SEYK_TEST_SOCKET_UMASK_DIR";
+        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+            ensure_socket_dir(Path::new(&dir), current_uid()).unwrap();
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("private");
+        // umask is process-wide. Set it in a shell after exec has closed the
+        // test runner's inherited descriptors, then replace the shell with the test.
+        let mut child = Command::new("/bin/sh");
+        child
+            .args(["-c", "umask 0277\nexec \"$@\"", "seyk-umask-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::tests::private_socket_directory_creation_restores_owner_bits_after_umask",
+                "--nocapture",
+            ])
+            .env(CHILD_DIR, &dir);
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o7777, 0o700);
     }
 
     #[test]
