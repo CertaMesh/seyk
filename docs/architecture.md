@@ -314,8 +314,22 @@ and optional local path. Parse `resource` as a URI and percent-decode its file
 path; never strip the `file://` prefix. Confinement checks must compare decoded,
 canonical filesystem paths, not URI strings. Human CLI output for existing files
 is unchanged.
-The daemon endpoint hash includes the JSON protocol version, so new clients
-do not reuse a daemon serving the old output shape.
+The daemon endpoint hash includes `SEYK_BUILD_VERSION`, the JSON protocol
+version, SQLite cache schema version and model arguments. A mismatched client
+selects a separate socket/lock and starts its matching daemon instead of reusing
+or terminating the older daemon. Existing clients keep their sessions; old
+daemons exit under their normal idle policy. `daemon status` and `daemon stop`
+address only the invoking build/configuration; use the matching older binary to
+stop an older daemon explicitly. Startup logs, status `version`, and MCP
+`serverInfo.version` report the build version. One small `.lock` file remains
+per build/configuration in the daemon cache directory after shutdown. The daemon
+keeps it to preserve mutual exclusion when another same-build daemon starts.
+
+This identity change keeps JSON schema v9, cache schema v7 and the hello protocol
+unchanged: no fields or storage layouts change. Build tokens inherit the
+`--version` limits: distinct dirty trees and metadata-free builds can have equal
+tokens. Endpoint separation does not make mixed cache schemas safe; use separate
+cache paths when running incompatible binaries.
 
 Public Rust API breaks:
 
