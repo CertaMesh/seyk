@@ -242,3 +242,88 @@ fn real_binary_cmap_panics_have_no_hook_stderr_spam() {
         assert_eq!(stderr.lines().count(), 1);
     }
 }
+
+#[test]
+fn typed_pdf_denials_are_static_and_preserve_locator_categories() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.pdf");
+    let json = dir.path().join("hit.json");
+    let original = pdf(&[fixture::PUBLIC], Kind::Plain);
+    std::fs::write(&path, &original).unwrap();
+    let engine = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "typed-pdf"))
+        .build()
+        .unwrap();
+    let result = engine.search("basil").paths([&path]).execute().unwrap();
+    let mut original_hit = serde_json::to_value(result).unwrap();
+    original_hit["schema_version"] = 9.into();
+    let check = |mut envelope: serde_json::Value, bytes: &[u8], exit, code| {
+        std::fs::write(&path, bytes).unwrap();
+        envelope["hits"][0]["metadata"]["content_hash"] =
+            blake3::hash(bytes).to_hex().to_string().into();
+        envelope["hits"][0]["metadata"]["size_bytes"] = (bytes.len() as u64).into();
+        std::fs::write(&json, envelope.to_string()).unwrap();
+        for format in [None, Some("--json")] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_seyk"));
+            command
+                .args(["extract", "--typed-errors", "--from-json"])
+                .arg(&json);
+            if let Some(flag) = format {
+                command.arg(flag);
+            }
+            let output = command.output().unwrap();
+            no_leak(&output);
+            assert_eq!(output.status.code(), Some(exit), "{output:?}");
+            assert!(output.stdout.is_empty());
+            assert_eq!(output.stderr, format!("error: {code}\n").as_bytes());
+        }
+    };
+    // A scan has no readable page text; no vision/OCR model is needed.
+    let mut scan = original_hit.clone();
+    scan["hits"][0]["locator"] =
+        serde_json::to_value(seyk::ResourceLocator::Page { page: 1 }).unwrap();
+    check(scan, &pdf(&[""], Kind::Plain), 5, "unsupported_extraction");
+    for kind in [
+        Kind::InvalidUtf8,
+        Kind::Panic,
+        Kind::MissingContents,
+        Kind::MissingArrayContents,
+        Kind::TruncatedContents,
+        Kind::BadFlate,
+    ] {
+        check(
+            original_hit.clone(),
+            &pdf(&[fixture::PUBLIC], kind),
+            9,
+            "invalid_media",
+        );
+    }
+    check(
+        original_hit.clone(),
+        b"malformed PDF SYNTHETIC_PRIVATE_SENTINEL",
+        9,
+        "invalid_media",
+    );
+    for bad_length in [false, true] {
+        check(
+            original_hit.clone(),
+            &fixture::malformed_cmap(bad_length),
+            9,
+            "invalid_media",
+        );
+    }
+    let mut missing_page = original_hit.clone();
+    missing_page["hits"][0]["locator"]["page"] = 999999.into();
+    check(missing_page, &original, 9, "invalid_media");
+    for field in ["byte_end", "page_text_hash", "text_version"] {
+        let mut invalid = original_hit.clone();
+        let locator = &mut invalid["hits"][0]["locator"];
+        // Field names follow the serialized PageText locator.
+        locator[field] = if field == "byte_end" {
+            999999.into()
+        } else {
+            "SYNTHETIC_PRIVATE_SENTINEL".into()
+        };
+        check(invalid, &original, 6, "invalid_evidence");
+    }
+}
