@@ -4,8 +4,21 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 cargo_about() {
-  nice -n 10 env CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR="$HOME/.cache/seyk-target" PATH="$HOME/.cargo/bin:$PATH" cargo about "$@"
+  if [[ -n "${CI:-}" ]]; then
+    cargo about "$@"
+  else
+    nice -n 10 env CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR="$HOME/.cache/seyk-target" PATH="$HOME/.cargo/bin:$PATH" cargo about "$@"
+  fi
 }
+
+if command -v python3 >/dev/null 2>&1; then
+  python_command=python3
+elif command -v python >/dev/null 2>&1; then
+  python_command=python
+else
+  echo 'Python is required to embed native notices; install python3 or python.' >&2
+  exit 1
+fi
 
 if [[ "$(cargo_about --version)" != "cargo-about 0.8.2" ]]; then
   echo 'Install cargo-about 0.8.2 with --locked (see THIRD_PARTY.md).' >&2
@@ -19,7 +32,7 @@ temporary=$(mktemp "${output}.tmp.XXXXXX")
 trap 'rm -f "$temporary"' EXIT
 cargo_about generate --locked --workspace --all-features \
   --fail --config about.toml --output-file "$temporary" about.hbs
-python3 - "$temporary" <<'PY'
+"$python_command" - "$temporary" <<'PY'
 from pathlib import Path
 import hashlib
 import html

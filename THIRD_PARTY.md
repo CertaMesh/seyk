@@ -19,9 +19,9 @@ Every release archive includes `THIRD_PARTY_LICENSES.html`, generated with
 cargo-about 0.8.2 by `scripts/third_party_licenses.sh`. It contains per-crate
 licence texts and copyright notices for the locked workspace across all
 features and platforms (a superset of each release build), plus the ONNX
-Runtime MIT notice and its complete upstream third-party notices. It includes build dependencies; development-only
-dependencies are excluded. The asset notices in this file remain part of the
-release distribution.
+Runtime MIT notice and its complete upstream third-party notices. It includes
+build dependencies; development-only dependencies are excluded. The asset
+notices in this file remain part of the release distribution.
 
 To reproduce the bundle locally, install the pinned generator and run:
 
