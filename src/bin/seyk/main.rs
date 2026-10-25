@@ -315,6 +315,12 @@ enum ModelAction {
     },
     /// Show where the model files are and whether they are present.
     Info,
+    /// Show the index cache profile without loading a model or opening a cache.
+    Profile {
+        /// Print the versioned profile descriptor and ID as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -778,6 +784,30 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         gemma::download(&config)?
                     };
                     println!("Model files are in {}", dir.display());
+                }
+                ModelAction::Profile { json } => {
+                    let profile =
+                        SearchEngine::builder().cache_profile(gemma::model_identity(&config)?);
+                    let profile_id = profile.id();
+                    if json {
+                        #[derive(serde::Serialize)]
+                        struct ProfileOutput {
+                            profile_id: String,
+                            profile: seyk::cache::CacheProfile,
+                        }
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json_output(&ProfileOutput {
+                                profile_id,
+                                profile,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "Profile {profile_id}\n{}",
+                            serde_json::to_string_pretty(&profile)?
+                        );
+                    }
                 }
                 ModelAction::Info => match gemma::locate(&config) {
                     Ok(dir) => println!(

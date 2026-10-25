@@ -859,3 +859,116 @@ fn jsonl_model_failure_emits_terminal_record_without_resolved_paths() {
         common::assert_json_excludes(&event, temp.path().to_str().unwrap());
     }
 }
+
+#[test]
+fn model_profile_matches_index_without_weights_or_cache_access() {
+    use seyk::embedder::gemma::{self, GemmaConfig, ModelSource, Precision};
+
+    let temp = TempDir::new().unwrap();
+    let hf_home = temp.path().join("absent-hf-home");
+    let cache = temp.path().join("absent-cache/cache.sqlite3");
+    let fixture = temp.path().join("note.txt");
+    std::fs::write(&fixture, "A tiny profile identity fixture.").unwrap();
+    for precision in [Precision::Q8, Precision::Fp32] {
+        for local in [false, true] {
+            let mut config = GemmaConfig::default();
+            config.dimension = seyk::Dimension::D128;
+            config.precision = precision;
+            config.vision = false;
+            let model = if local {
+                let dir = temp.path().join(format!("local-{}", precision.name()));
+                for file in config.files() {
+                    let path = dir.join(file);
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    // Deliberately invalid model files: profile must never load them.
+                    std::fs::write(path, "not model weights").unwrap();
+                }
+                config.source = ModelSource::Directory(dir.clone());
+                dir.to_str().unwrap().to_owned()
+            } else {
+                format!("{}@{}", gemma::ONNX_REPO, gemma::ONNX_REVISION)
+            };
+            let output = binary()
+                .env("HF_HOME", &hf_home)
+                .args([
+                    "model",
+                    "profile",
+                    "--json",
+                    "--text-only",
+                    "--model",
+                    &model,
+                    "--precision",
+                    precision.name(),
+                    "--dimension",
+                    "128",
+                    "--cache-path",
+                ])
+                .arg(&cache)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["schema_version"], 9);
+            assert!(!hf_home.exists());
+            assert!(!cache.parent().unwrap().exists());
+            let identity = gemma::model_identity(&config).unwrap();
+            let engine = seyk::SearchEngine::builder()
+                .embedder(common::FakeEmbedder::with_identity(identity))
+                .build()
+                .unwrap();
+            let report = engine.index().paths([&fixture]).execute().unwrap();
+            assert_eq!(report.sync.resources_updated, 1);
+            assert!(report.sync.segments_embedded > 0);
+            assert_eq!(value["profile_id"], engine.profile_id());
+            assert_eq!(
+                value["profile"],
+                serde_json::to_value(engine.profile()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn model_profile_resolves_local_hf_ref_without_snapshot_or_weights() {
+    let temp = TempDir::new().unwrap();
+    let hf_home = temp.path().join("hf");
+    let refs = hf_home.join("hub/models--example--model/refs");
+    std::fs::create_dir_all(&refs).unwrap();
+    let commit = "1234567890123456789012345678901234567890";
+    std::fs::write(refs.join("main"), format!("{commit}\n")).unwrap();
+    let output = binary()
+        .env("HF_HOME", &hf_home)
+        .args([
+            "model",
+            "profile",
+            "--json",
+            "--model",
+            "example/model@main",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["profile"]["model"]["revision"],
+        format!("example/model@{commit}")
+    );
+    binary()
+        .env("HF_HOME", &hf_home)
+        .args(["model", "profile", "--model", "example/model@main"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Profile {}",
+            value["profile_id"].as_str().unwrap()
+        )));
+    assert!(
+        !hf_home
+            .join("hub/models--example--model/snapshots")
+            .exists()
+    );
+}
