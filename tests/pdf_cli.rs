@@ -319,11 +319,11 @@ fn typed_pdf_denials_are_static_and_preserve_locator_categories() {
         let mut invalid = original_hit.clone();
         let locator = &mut invalid["hits"][0]["locator"];
         // Field names follow the serialized PageText locator.
-        match field {
-            "page" | "byte_end" => locator[field] = 999999.into(),
-            "page_text_hash" => locator[field] = "SYNTHETIC_PRIVATE_SENTINEL".into(),
-            _ => locator[field] = "SYNTHETIC_PRIVATE_SENTINEL".into(),
-        }
+        locator[field] = if field == "byte_end" {
+            999999.into()
+        } else {
+            "SYNTHETIC_PRIVATE_SENTINEL".into()
+        };
         check(invalid, &original, 6, "invalid_evidence");
     }
 }
