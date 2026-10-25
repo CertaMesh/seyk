@@ -532,6 +532,16 @@ same package and JSON schema versions. Builds with the same values share an
 endpoint, even when their implementation differs. The daemon is Unix-only; on
 Windows `seyk mcp` always runs standalone.
 
+Daemon sockets normally live at `<cache_dir>/seyk/daemon-<id>.sock`. If that
+path reaches the Unix socket limit (104 bytes on macOS, 108 on Linux, including
+the terminating NUL), only the socket moves to `$TMPDIR/seyk-<uid>/d-<hash>.sock`,
+or `/tmp/seyk-<uid>/d-<hash>.sock` if TMPDIR is unset or too long. The fallback
+directory must be a real directory owned by your uid with mode `0700`. Seyk
+creates it with that mode and refuses unsafe existing directories. Sockets use
+mode `0600`. Locks and `daemon.log` stay in the cache directory.
+`SEYK_DAEMON_DIR` overrides the normal directory for sockets, locks and logs.
+An explicit override must fit the same socket length limit and does not fall back.
+
 For automatic local-content collections on Unix, opt into a fixed narrower
 policy with `seyk mcp --local-content /absolute/real/folder`. It requires explicit
 directory roots and always runs in-process, bypassing the daemon. The MCP

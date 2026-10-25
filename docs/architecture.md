@@ -331,6 +331,25 @@ unchanged: no fields or storage layouts change. Build tokens inherit the
 tokens. Endpoint separation does not make mixed cache schemas safe; use separate
 cache paths when running incompatible binaries.
 
+Socket selection is shared by the client and daemon in `Endpoint::new`. The
+normal `<cache_dir>/seyk/daemon-<id>.sock` stays unchanged when its encoded Unix
+path fits `sockaddr_un.sun_path`, reserving one byte for NUL (104 bytes total on
+macOS, 108 on Linux). Otherwise only the socket moves to
+`$TMPDIR/seyk-<uid>/d-<hash>.sock`, falling back to `/tmp/seyk-<uid>/` when the
+TMPDIR candidate is too long or TMPDIR is unset. The filename retains 128 bits
+of a BLAKE3 hash of the normal socket path, including the cache directory and
+endpoint identity, so separate lock directories do not share a fallback socket.
+Locks and logs remain in the normal cache directory. `SEYK_DAEMON_DIR` still
+overrides all three locations. Explicit overrides must fit without fallback.
+If no path fits, the error reports the offending path, byte length, platform
+limit, and `SEYK_DAEMON_DIR` override.
+
+Seyk creates fallback directories with mode `0700` and uses `lstat` to check
+real-directory type, current effective uid ownership, and exact mode `0700`.
+Seyk rejects existing unsafe directories. The daemon rechecks the directory
+before stale socket removal, bind, and shutdown cleanup. Removal touches only
+the computed socket path while holding the normal endpoint lock. Socket permissions remain `0600`. Windows continues to use standalone MCP.
+
 Public Rust API breaks:
 
 - `ResourceId::path()` is removed. Replace it with `to_file_path() -> Option<PathBuf>`;
