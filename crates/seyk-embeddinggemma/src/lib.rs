@@ -196,15 +196,38 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
 /// fingerprint as model loading (graph/config bytes and external weight sizes).
 pub fn model_identity(config: &GemmaConfig) -> Result<ModelIdentity> {
     let resolved = match &config.source {
-        ModelSource::Directory(dir) => ResolvedModel {
-            dir: dir.clone(),
-            revision: None,
-        },
+        ModelSource::Directory(_) => resolve(config)?,
         ModelSource::HuggingFace { repo, revision } => {
             hf_snapshot(&hf_cache_path()?, repo, revision)
         }
     };
     resolved.identity(config)
+}
+
+/// Required model files that are absent, checked using filesystem metadata only.
+/// A rejected symlinked ONNX directory is reported as `onnx/`.
+/// Does not load weights, materialize files, download or create a cache.
+pub fn missing_model_files(config: &GemmaConfig) -> Result<Vec<String>> {
+    let dir = match &config.source {
+        ModelSource::Directory(dir) => dir.clone(),
+        ModelSource::HuggingFace { repo, revision } => {
+            hf_snapshot(&hf_cache_path()?, repo, revision).dir
+        }
+    };
+    let mut missing: Vec<_> = config
+        .files()
+        .into_iter()
+        .filter(|file| !dir.join(file).exists())
+        .collect();
+    if symlinked_onnx_dir(&dir) {
+        missing.push("onnx/".into());
+    }
+    Ok(missing)
+}
+
+fn symlinked_onnx_dir(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir.join("onnx"))
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
 }
 
 /// A snapshot and the commit selected in the same cache lookup. Local directories
@@ -782,6 +805,11 @@ fn onnx_files_without_symlinks(
     files: Vec<String>,
     discriminator: &str,
 ) -> Result<PathBuf> {
+    if symlinked_onnx_dir(dir) {
+        return Err(Error::Config(
+            "model onnx directory must not be a symlink".into(),
+        ));
+    }
     let onnx: Vec<String> = files
         .into_iter()
         .filter_map(|f| f.strip_prefix("onnx/").map(str::to_string))

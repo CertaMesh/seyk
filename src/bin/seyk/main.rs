@@ -786,27 +786,34 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     println!("Model files are in {}", dir.display());
                 }
                 ModelAction::Profile { json } => {
-                    let profile =
-                        SearchEngine::builder().cache_profile(gemma::model_identity(&config)?);
+                    let profile = SearchEngine::builder()
+                        .cache_profile(gemma::model_identity(&config).map_err(model_error)?);
                     let profile_id = profile.id();
+                    let missing_files = gemma::missing_model_files(&config)?;
+                    let model_present = missing_files.is_empty();
                     if json {
                         #[derive(serde::Serialize)]
                         struct ProfileOutput {
                             profile_id: String,
                             profile: seyk::cache::CacheProfile,
+                            model_present: bool,
+                            missing_files: Vec<String>,
                         }
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&json_output(&ProfileOutput {
                                 profile_id,
                                 profile,
+                                model_present,
+                                missing_files,
                             }))?
                         );
                     } else {
-                        println!(
-                            "Profile {profile_id}\n{}",
-                            serde_json::to_string_pretty(&profile)?
-                        );
+                        print!("Profile {profile_id}\n{}", format_profile(&profile));
+                        println!("  present:   {model_present}");
+                        if !missing_files.is_empty() {
+                            println!("  missing:   {}", missing_files.join(", "));
+                        }
                     }
                 }
                 ModelAction::Info => match gemma::locate(&config) {
@@ -1086,19 +1093,21 @@ fn engine(args: &ModelArgs, ephemeral: bool) -> Result<SearchEngine> {
     engine_with_provider(args, ephemeral, None)
 }
 
+fn model_error(error: seyk_embed::Error) -> anyhow::Error {
+    if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
+        anyhow::Error::new(error).context("model is missing; run `seyk model download`")
+    } else {
+        anyhow::Error::new(error)
+    }
+}
+
 fn engine_with_provider(
     args: &ModelArgs,
     ephemeral: bool,
     provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
 ) -> Result<SearchEngine> {
     let window = args.embedding_window()?;
-    let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(|error| {
-        if matches!(error, seyk_embed::Error::ModelNotFound(_)) {
-            anyhow::Error::new(error).context("model is missing; run `seyk model download`")
-        } else {
-            anyhow::Error::new(error)
-        }
-    })?;
+    let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(model_error)?;
     let builder = SearchEngine::builder()
         .embedder(embedder)
         .batch_size(window)
@@ -1444,6 +1453,17 @@ fn report_scrub(result: seyk::Result<seyk::cache::CacheCleanup>) {
     }
 }
 
+fn format_profile(profile: &seyk::cache::CacheProfile) -> String {
+    format!(
+        "  model:     {} ({}, {})\n  dimension: {}\n  segmenter: {}\n",
+        profile.model.model_id,
+        profile.model.revision,
+        profile.model.variant,
+        profile.model.dimension,
+        profile.segmenter_version
+    )
+}
+
 fn format_cache_stats(stats: &CacheStats) -> String {
     let mut out = format!("Cache schema: {}\n", seyk::cache::SCHEMA_VERSION);
     if let Some(p) = &stats.location {
@@ -1458,14 +1478,7 @@ fn format_cache_stats(stats: &CacheStats) -> String {
     for p in &stats.profiles {
         out.push_str(&format!("\nProfile {}\n", p.profile_id));
         if let Some(prof) = &p.profile {
-            out.push_str(&format!(
-                "  model:     {} ({}, {})\n  dimension: {}\n  segmenter: {}\n",
-                prof.model.model_id,
-                prof.model.revision,
-                prof.model.variant,
-                prof.model.dimension,
-                prof.segmenter_version
-            ));
+            out.push_str(&format_profile(prof));
         }
         out.push_str(&format!(
             "  {} files, {} segments, {} vectors\n",
