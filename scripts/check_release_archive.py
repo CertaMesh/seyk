@@ -23,7 +23,8 @@ def check_archive(archive):
     with bundle:
         for name in ("LICENSE", "THIRD_PARTY.md"):
             assert read(f"{root}/{name}") == Path(name).read_bytes(), name
-        content = read(f"{root}/THIRD_PARTY_LICENSES.html").decode("utf-8")
+        # The generator writes platform-native HTML newlines on Windows.
+        content = read(f"{root}/THIRD_PARTY_LICENSES.html").decode("utf-8").replace("\r\n", "\n")
         assert len(content) > 1000, "empty dependency licence bundle"
         notices = Path("third_party/onnxruntime")
         for source in notices.iterdir():
