@@ -61,11 +61,13 @@ impl std::str::FromStr for Dimension {
     }
 }
 
-/// A finite vector, truncated and L2-normalized on construction.
-/// A zero vector remains zero and reports `normalized() == false`.
+/// A vector with two explicit construction policies.
 ///
-/// Constructed only through [`Embedding::from_raw`], which truncates and
-/// L2-normalises, so cosine similarity reduces to a dot product.
+/// [`Embedding::from_raw`] truncates and L2-normalises model output;
+/// [`Embedding::from_preserved`] validates nonempty, finite input and preserves
+/// every component's bits without truncation or normalization. A zero vector
+/// remains zero and reports `normalized() == false`.
+/// Derived deserialization retains its existing, unvalidated behavior.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Embedding(Vec<f32>);
 
@@ -90,6 +92,22 @@ impl Embedding {
             ));
         }
         Ok(Self(raw))
+    }
+
+    /// Restore a nonempty, finite vector without truncating or normalizing it.
+    /// Every component's bits are preserved, including signed zero and subnormals.
+    pub fn from_preserved(values: Vec<f32>) -> Result<Self> {
+        if values.is_empty() {
+            return Err(Error::Embedding(
+                "cannot preserve an empty embedding".into(),
+            ));
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(Error::Embedding(
+                "cannot preserve a non-finite embedding".into(),
+            ));
+        }
+        Ok(Self(values))
     }
 
     pub fn as_slice(&self) -> &[f32] {
@@ -205,6 +223,54 @@ pub fn normalize(values: &mut [f32]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserved_vectors_round_trip_exact_bits() {
+        for values in [
+            vec![0.0, -0.0],
+            vec![
+                f32::from_bits(1),
+                -f32::from_bits(1),
+                f32::from_bits(0x007fffff),
+            ],
+            vec![3.0, -4.0, f32::MIN_POSITIVE, f32::MIN, f32::MAX],
+            vec![2.0; 769],
+        ] {
+            let bits: Vec<_> = values.iter().map(|v| v.to_bits()).collect();
+            let embedding = Embedding::from_preserved(values).unwrap();
+            assert_eq!(embedding.dim(), bits.len());
+            assert_eq!(
+                embedding
+                    .as_slice()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                bits
+            );
+            assert_eq!(
+                embedding
+                    .into_vec()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                bits
+            );
+        }
+    }
+
+    #[test]
+    fn preserved_vectors_reject_empty_and_non_finite_input() {
+        assert!(matches!(
+            Embedding::from_preserved(vec![]),
+            Err(Error::Embedding(_))
+        ));
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                Embedding::from_preserved(vec![1.0, value]),
+                Err(Error::Embedding(_))
+            ));
+        }
+    }
 
     #[test]
     fn truncation_renormalizes() {
