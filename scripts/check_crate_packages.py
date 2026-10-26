@@ -4,6 +4,7 @@
 import json
 from pathlib import Path, PurePosixPath
 import subprocess
+import shutil
 import tarfile
 import tomllib
 
@@ -42,6 +43,12 @@ def main():
         files = output.splitlines()
         review_files(name, files)
         archive = Path("target/package") / f"{name}-{version}.crate"
+        # Workspace publication moves archives into Cargo's staging registry.
+        # Copy those exact verified bytes to the artifact directory.
+        if not archive.exists():
+            staged = list(Path("target/package").rglob(archive.name))
+            assert len(staged) == 1, (name, "expected one staged archive", staged)
+            shutil.copyfile(staged[0], archive)
         with tarfile.open(archive) as package:
             members = package.getmembers()
             prefix = f"{name}-{version}/"
