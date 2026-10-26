@@ -1030,7 +1030,6 @@ fn embed_token_ids(
     ))
 }
 
-#[cfg(any(feature = "image", test))]
 fn session(path: &Path, threads: Option<usize>) -> Result<Session> {
     session_with_allocator(path, threads, CpuAllocator::Default)
 }
