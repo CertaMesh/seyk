@@ -21,7 +21,15 @@ There are four ways to search:
    incremental update about 1.5 s after files stop changing. Changes inside
    `.git/`, `target/`, `node_modules/` and similar folders are ignored.
 
-Stale vectors cannot be reused. Every vector is stored under a *profile*: a hash of
+Filesystem size and mtime are cheap change hints, not proof of unchanged bytes.
+An equal-size rewrite with a restored mtime can skip the warm-pass read when
+preparation is unchanged, leaving stale vectors and keyword rows for ranking.
+Extraction still checks the content hash and refuses changed text. To force a
+re-read, run `seyk cache clear` for the cache in use, then search or index again.
+`seyk index` alone uses the same metadata check and does not force a re-read.
+
+After a file is read, vector reuse requires identical model input under the same
+profile. Every vector is stored under a *profile*: a hash of
 the model id, exact weights revision, precision, dimension, normalisation, both
 prompt templates, maximum input length and segmenter version. Within a profile it
 is keyed by a hash of the exact text sent to the model. Change any of these and

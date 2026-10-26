@@ -71,7 +71,7 @@ is never hash-checked.
 | Area | Seyk does | The caller is responsible for |
 |---|---|---|
 | Authorization | The MCP server only searches and extracts inside the folders it was started with. The filesystem provider refuses secret-looking file names (keys, password stores, `.env`) by name, with no override. | Deciding who may query which folders. CLI and library extraction add no access layer of their own; a custom resource provider sets its own rules. |
-| Freshness | Re-indexes changed files (size and modification time first). Extraction fails with a stale-resource error if the file changed. Search omits a preview it cannot verify. | Hits can point at a changed file until re-index. An agent that reads `path:lines` directly, without `extract`, gets no hash check. |
+| Freshness | Uses filesystem size and mtime as cheap change hints. An equal-size rewrite with a restored mtime can leave stale vectors and keyword rows for ranking, even after `index`. Extraction checks the content hash and refuses changed text. Search omits a preview it cannot verify. | To force a re-read, run `seyk cache clear` for the cache in use, then search or index again. An agent that reads `path:lines` directly, without `extract`, gets no hash check. |
 | Provenance | Every hit carries the resource, location, whole-resource hash and per-signal ranks (`match`). Derived text carries its method. | Judging authorship and authenticity. |
 | Relevance | Ranks by meaning, keywords and file names, measured on public datasets ([benchmarks](benchmarks.md)). | Deciding whether a hit actually answers the question. Relevance is not guaranteed. |
 | Meaning | Nothing. Seyk does not interpret, summarise or judge content. | Everything an answer needs. |
