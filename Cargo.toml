@@ -113,3 +113,7 @@ required-features = ["onnx", "image"]
 [[example]]
 name = "photo_anchor_latency"
 required-features = ["cli", "image"]
+
+[[example]]
+name = "photo_calibration_export"
+required-features = ["onnx", "image"]
