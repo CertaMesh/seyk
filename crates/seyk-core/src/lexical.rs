@@ -267,10 +267,10 @@ mod tests {
 
     #[test]
     fn queries_keep_identifiers_as_conjunctions_and_drop_stopwords() {
-        let q = LexicalQuery::new(["where is INC-18372 and the father.md"]);
+        let q = LexicalQuery::new(["where is INC-18372 and the garden.md"]);
         assert_eq!(
             q.groups,
-            [vec!["inc", "18372"], vec!["father", "md"]]
+            [vec!["inc", "18372"], vec!["garden", "md"]]
                 .map(|g| g.iter().map(|s| s.to_string()).collect::<Vec<_>>())
         );
         assert_eq!(
@@ -278,8 +278,8 @@ mod tests {
             concat!(
                 "(name:(\"inc\" AND \"18372\") OR path:(\"inc\" AND \"18372\") OR ",
                 "heading:(\"inc\" AND \"18372\") OR body:(\"inc\" AND \"18372\")) OR ",
-                "(name:(\"father\" AND \"md\") OR path:(\"father\" AND \"md\") OR ",
-                "heading:(\"father\" AND \"md\") OR body:(\"father\" AND \"md\"))"
+                "(name:(\"garden\" AND \"md\") OR path:(\"garden\" AND \"md\") OR ",
+                "heading:(\"garden\" AND \"md\") OR body:(\"garden\" AND \"md\"))"
             )
         );
         assert!(LexicalQuery::new(["where is the"]).fts5().is_none());
@@ -335,8 +335,8 @@ mod tests {
             ["session restore", "", "", "session"],
             ["", "", "", "restore extra session session"],
             ["", "session restore", "", "different"],
-            ["", "", "restore session", "father"],
-            ["father", "", "", "unrelated unrelated"],
+            ["", "", "restore session", "garden"],
+            ["garden", "", "", "unrelated unrelated"],
             ["other", "", "", "other other"],
         ];
         let mut docs = Vec::new();
@@ -356,7 +356,7 @@ mod tests {
         }
         for text in [
             "Session::restore()",
-            "Session::restore() father",
+            "Session::restore() garden",
             "session",
             "session-session",
             "missing-restoration",
@@ -432,16 +432,16 @@ mod tests {
 
     #[test]
     fn filename_matches_outrank_body_mentions() {
-        let named = LexicalDoc::new("father.md", "book/father.md", None, "Notes on him.");
+        let named = LexicalDoc::new("garden.md", "book/garden.md", None, "Notes on it.");
         let mentioned = LexicalDoc::new(
             "ideas.md",
             "book/ideas.md",
             None,
-            "My father and the md file.",
+            "My garden and the md file.",
         );
         let ranked = bm25(
             [("named", &named), ("mentioned", &mentioned)],
-            &LexicalQuery::new(["father.md"]),
+            &LexicalQuery::new(["garden.md"]),
         );
         assert_eq!(ranked[0].0, "named");
     }

@@ -40,7 +40,7 @@ Find where relevant information is in any collection of unstructured content, an
 ## Success + anti-signals
 
 **Going right:**
-- One query style finds both "where did I write about someone becoming like their father?" and `father.md`, and the evaluation on a real folder holds or improves each phase.
+- One query style finds both "how do I keep tomatoes alive in a heatwave?" and `garden.md`, and the evaluation on a real folder holds or improves each phase.
 - `engine.extract(&hit)` returns the exact matching text, hash-verified, for every supported resource type.
 - A developer can embed text with only the embedding crates, without pulling in search, SQLite or the CLI.
 - Gaze uses Seyk over a process boundary with no Seyk-side Gaze code.

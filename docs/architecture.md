@@ -87,7 +87,7 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
 
 ### What is coupled to text
 
-- **Search is semantic only.** Exact names (`father.md`), identifiers
+- **Search is semantic only.** Exact names (`garden.md`), identifiers
   (`INC-18372`, `Session::restore()`) and rare words depend on the embedding
   noticing them, which it often does not.
 - **Previews are byte slices.** `PreviewReader` slices the source file at the
@@ -127,7 +127,7 @@ paths ─► discovery ─► segmentation ─► Embedder (EmbeddingGemma 2 / O
   re-read once. Resource rows, segments and embeddings are kept; FTS5 `delete-all`
   empties the keyword index before it is rebuilt.
 - **File-name matches.** A query that is a file's name, stem or trailing path
-  (`father.md`, `father`, `people/father.md`) is its own signal, independent of
+  (`garden.md`, `garden`, `notes/garden.md`) is its own signal, independent of
   both the model and the keyword index.
 - **Fusion.** Semantic, keyword and file-name lists are merged with reciprocal
   rank fusion (k = 60). File names weigh 3. Keywords weigh 1.0 for names,
@@ -179,8 +179,8 @@ ranks are reported. Rank of the target (lower is better):
 ### What we learned
 
 - **The weight has to depend on the query.** One global keyword weight cannot
-  serve both `INC-18372` and "where did I write about someone becoming like
-  their father":
+  serve both `INC-18372` and "how do I keep tomatoes alive in a
+  heatwave":
   the first is all keyword, the second is all meaning.
 - **Rank fusion hides strength.** A hybrid score of 0.97 can be a weak match
   that happens to rank second of three. That is why hits carry their signals

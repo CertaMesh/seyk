@@ -231,7 +231,7 @@ position (reciprocal rank fusion):
 
 - **meaning**: cosine similarity between the question and each passage;
 - **words**: keyword relevance (BM25) over the text, heading, file name and path;
-- **name**: the query names the file (`father.md`, `father` or `notes/father.md`).
+- **name**: the query names the file (`garden.md`, `garden` or `notes/garden.md`).
 
 The hybrid score depends only on **where a hit ranked in each list**, scaled so
 1.000 means first everywhere something was found. It says nothing about how
