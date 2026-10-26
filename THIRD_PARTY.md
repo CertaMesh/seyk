@@ -7,7 +7,7 @@ may be selected. MPL requires explicit review, including existing
 dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing
 transitive dependency of `dirs`. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
-Additional scoped exceptions for opt-in audio are listed below.
+Additional scoped exceptions for audio in the default CLI are listed below.
 
 Allowed dependency licence classes are MIT, Apache-2.0, BSD-3-Clause, ISC,
 Zlib, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0. The Rust MPL-2.0 exceptions
