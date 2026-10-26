@@ -14,7 +14,7 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 ### Added
 
 - Hybrid search: one query now combines meaning, keywords (BM25) and file names,
-  so both a question and `father.md` find the right file. Each hit shows which
+  so both a question and `garden.md` find the right file. Each hit shows which
   signals matched, as CLI tags and the `matched` MCP field.
   ([#5](https://github.com/CertaMesh/seyk/pull/5),
   [#7](https://github.com/CertaMesh/seyk/pull/7))
