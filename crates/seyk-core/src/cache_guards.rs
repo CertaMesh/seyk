@@ -505,7 +505,9 @@ mod tests {
         let fresh = temp.path().join(".CACHEDIR.TAG-fresh");
         std::fs::write(&old, "unfinished").unwrap();
         std::fs::write(&fresh, "unfinished").unwrap();
-        std::fs::File::open(&old)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old)
             .unwrap()
             .set_times(
                 std::fs::FileTimes::new().set_modified(

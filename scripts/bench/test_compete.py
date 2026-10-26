@@ -100,6 +100,31 @@ if sys.argv[3] == 'wait': time.sleep(30)
             with self.subTest(kind=kind):
                 self.check_process_group_cleanup(kind, exited=False)
 
+    def test_cpu_name_probes_and_fallbacks(self):
+        with mock.patch.object(compete.platform, "system", return_value="Darwin"), \
+             mock.patch.object(compete.subprocess, "check_output", return_value="Apple CPU\n") as probe:
+            self.assertEqual(compete.cpu_name(), "Apple CPU")
+            probe.assert_called_once_with(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                          text=True, stderr=subprocess.DEVNULL)
+        for info, expected in [("processor : 0\nmodel name : Linux CPU\n", "Linux CPU"),
+                               ("Hardware : ARM CPU\n", "ARM CPU"), ("processor : 0\n", "unknown")]:
+            with self.subTest(info=info), \
+                 mock.patch.object(compete.platform, "system", return_value="Linux"), \
+                 mock.patch.object(Path, "read_text", return_value=info), \
+                 mock.patch.object(compete.subprocess, "check_output") as probe:
+                self.assertEqual(compete.cpu_name(), expected)
+                probe.assert_not_called()
+        for system, error in [("Darwin", FileNotFoundError()),
+                              ("Darwin", subprocess.CalledProcessError(1, "sysctl")),
+                              ("Linux", OSError())]:
+            with self.subTest(system=system, error=error), \
+                 mock.patch.object(compete.platform, "system", return_value=system), \
+                 mock.patch.object(Path, "read_text", side_effect=error), \
+                 mock.patch.object(compete.subprocess, "check_output", side_effect=error):
+                self.assertEqual(compete.cpu_name(), "unknown")
+        with mock.patch.object(compete.platform, "system", return_value="Windows"):
+            self.assertEqual(compete.cpu_name(), "unknown")
+
     def test_first_passage_wins_without_resorting_scores(self):
         hits = [{"path": f"/corpus/{key}.txt", "score": score}
                 for key, score in [(self.b, 1), (self.b, 9), (self.a, 3)]]
@@ -184,6 +209,7 @@ if sys.argv[3] == 'wait': time.sleep(30)
             with mock.patch.object(bench, "ROOT", root), \
                  mock.patch.object(bench, "gold", return_value=(manifest, self.docmap, [bench.ir.Qrel(f"q{i}", "doc one", 1) for i in range(3)])), \
                  mock.patch.object(compete, "network_probe", return_value="fixture"), \
+                 mock.patch.object(compete, "cpu_name", return_value="fixture CPU"), \
                  mock.patch.object(compete, "installed_provenance", return_value=model), \
                  mock.patch.object(compete, "Worker") as worker, mock.patch("sys.stdout"):
                 worker.return_value.request.return_value = {"hits": []}
@@ -221,6 +247,7 @@ if sys.argv[3] == 'wait': time.sleep(30)
             with mock.patch.object(bench, "ROOT", root), \
                  mock.patch.object(bench, "gold", return_value=(manifest, self.docmap, [])), \
                  mock.patch.object(compete, "network_probe", return_value="fixture"), \
+                 mock.patch.object(compete, "cpu_name", return_value="fixture CPU"), \
                  mock.patch.object(compete, "installed_provenance", return_value={}), \
                  mock.patch.object(compete, "run_index"), \
                  mock.patch.object(compete, "Worker") as worker, mock.patch("sys.stdout"):

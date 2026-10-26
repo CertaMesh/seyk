@@ -146,9 +146,15 @@ impl WatcherDiagnostics {
             resource.to_file_path().is_some_and(|path| {
                 roots.iter().any(|root| {
                     let real = root.canonicalize().unwrap_or_else(|_| root.clone());
-                    path.strip_prefix(&real).is_ok_and(|relative| {
-                        seyk::discovery::ensure_allowed_path(&root.join(relative)).is_ok()
-                    })
+                    // File URIs use ordinary drive paths; Windows canonicalize returns
+                    // verbatim paths. Round-trip the root before comparing components.
+                    let real = ResourceId::from_path(&real)
+                        .ok()
+                        .and_then(|id| id.to_file_path());
+                    real.and_then(|real| path.strip_prefix(real).ok())
+                        .is_some_and(|relative| {
+                            seyk::discovery::ensure_allowed_path(&root.join(relative)).is_ok()
+                        })
                 })
             })
         };
@@ -2071,6 +2077,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let allowed = dir.path().join("allowed");
         let sibling = dir.path().join("sibling");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
         let diagnostic = |path: PathBuf, reason: &str| seyk::PageDiagnostic {
             code: seyk::SkipCode::PdfParserPanicked,
             resource: ResourceId::from_path(path).unwrap(),
@@ -2078,8 +2086,8 @@ mod tests {
             reason: reason.into(),
         };
         let pages = vec![
-            diagnostic(allowed.join("bad.pdf"), "allowed"),
-            diagnostic(sibling.join("secret.pdf"), "hidden"),
+            diagnostic(allowed.canonicalize().unwrap().join("bad.pdf"), "allowed"),
+            diagnostic(sibling.canonicalize().unwrap().join("secret.pdf"), "hidden"),
         ];
         let skipped = pages
             .iter()
@@ -2163,7 +2171,7 @@ mod tests {
         seed_progress(&server.hub, &b, &progress);
         let confined = server.root_progress();
         assert_eq!(confined.len(), 1);
-        assert_eq!(confined[0].root.to_file_path().as_ref(), Some(&child));
+        assert_eq!(confined[0].root, ResourceId::from_path(&child).unwrap());
         assert!(confined[0].progress.is_none());
         let own = server
             .hub
