@@ -26,8 +26,24 @@ pub(crate) struct Manifest {
     pub graphs: Vec<Graph>,
     pub policy: Policy,
 }
+impl Manifest {
+    pub fn graph(&self, file: &str) -> (&Asset, &Graph) {
+        let graph = self
+            .graphs
+            .iter()
+            .find(|graph| graph.file == file)
+            .expect("compiled manifest graph");
+        let asset = self
+            .files
+            .iter()
+            .find(|asset| asset.path == graph.file)
+            .expect("compiled manifest graph asset");
+        (asset, graph)
+    }
+}
 #[derive(Deserialize)]
 pub(crate) struct Graph {
+    pub file: String,
     pub inputs: Vec<Port>,
     pub outputs: Vec<Port>,
 }
@@ -287,6 +303,65 @@ pub fn install_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_graph_resolves_to_exactly_one_asset() {
+        let manifest = manifest();
+        for graph in &manifest.graphs {
+            assert_eq!(
+                manifest
+                    .files
+                    .iter()
+                    .filter(|asset| asset.path == graph.file)
+                    .count(),
+                1,
+                "{}",
+                graph.file
+            );
+            assert_eq!(
+                manifest
+                    .graphs
+                    .iter()
+                    .filter(|other| other.file == graph.file)
+                    .count(),
+                1,
+                "{}",
+                graph.file
+            );
+            assert_eq!(manifest.graph(&graph.file).0.path, graph.file);
+        }
+    }
+
+    #[test]
+    fn graph_lookup_is_independent_of_manifest_array_order() {
+        let mut shuffled: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        shuffled.files.reverse();
+        shuffled.graphs.rotate_left(1);
+        for file in [
+            "onnx/encoder_model.onnx",
+            "onnx/decoder_model.onnx",
+            "onnx/decoder_with_past_model.onnx",
+        ] {
+            let (expected, expected_graph) = manifest().graph(file);
+            let (asset, graph) = shuffled.graph(file);
+            assert_eq!(asset.path, file);
+            assert_eq!(graph.file, file);
+            assert_eq!(asset.bytes, expected.bytes);
+            assert_eq!(asset.sha256, expected.sha256);
+            for (ports, expected_ports) in [
+                (&graph.inputs, &expected_graph.inputs),
+                (&graph.outputs, &expected_graph.outputs),
+            ] {
+                assert_eq!(ports.len(), expected_ports.len());
+                for (port, expected) in ports.iter().zip(expected_ports) {
+                    assert_eq!(port.name, expected.name);
+                    assert_eq!(port.dtype, expected.dtype);
+                    assert_eq!(port.shape, expected.shape);
+                }
+            }
+        }
+    }
+
     #[test]
     fn stt_install_lock_names_path_and_recovers_from_stale_file() {
         let dir = tempfile::tempdir().unwrap();
