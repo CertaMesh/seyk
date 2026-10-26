@@ -17,9 +17,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use seyk::embedder::gemma::{self, GemmaConfig, GemmaEmbedder, ModelSource, Precision};
 use seyk::{
-    CacheStats, Dimension, DiscoveryOptions, EmbeddingCache, ImageScan, IndexReport, MemoryCache,
-    ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchMode, SearchResults,
-    SqliteCache, SyncStats, expand_tilde,
+    CacheStats, Dimension, DiscoveryOptions, Embedder, EmbeddingCache, ImageScan, IndexReport,
+    MemoryCache, ProgressEvent, ResourceLocator, SearchEngine, SearchHit, SearchMode,
+    SearchResults, SqliteCache, SyncStats, expand_tilde,
 };
 
 /// Machine-output protocol; legacy output had no version field.
@@ -1169,6 +1169,9 @@ fn engine_with_provider(
 ) -> Result<SearchEngine> {
     let window = args.embedding_window()?;
     let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(model_error)?;
+    if let Some(reason) = embedder.unavailable_reason(seyk::Modality::Image) {
+        eprintln!("warning: {reason}");
+    }
     let builder = SearchEngine::builder()
         .embedder(embedder)
         .batch_size(window)

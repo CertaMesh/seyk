@@ -186,6 +186,27 @@ impl GemmaConfig {
     }
 }
 
+/// Select the runtime configuration without loading weights. Missing optional
+/// vision assets disable images, while required text assets are still validated
+/// by the normal resolver. The effective config also defines cache identity.
+pub fn runtime_config(config: &GemmaConfig) -> Result<(GemmaConfig, Option<String>)> {
+    let mut effective = config.clone();
+    let missing: Vec<_> = missing_model_files(config)?
+        .into_iter()
+        .filter(|file| file.starts_with("onnx/vision_encoder"))
+        .collect();
+    let reason = if config.vision && !missing.is_empty() {
+        effective.vision = false;
+        Some(format!(
+            "image embedding unavailable: missing {}; run `seyk model download`; semantic text search remains available",
+            missing.join(", ")
+        ))
+    } else {
+        None
+    };
+    Ok((effective, reason))
+}
+
 /// Resolve the local model directory without touching the network.
 pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
     Ok(resolve(config)?.dir)
@@ -195,6 +216,8 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
 /// HF sources read local refs when present; local directories use the same file
 /// fingerprint as model loading (graph/config bytes and external weight sizes).
 pub fn model_identity(config: &GemmaConfig) -> Result<ModelIdentity> {
+    let (effective, _) = runtime_config(config)?;
+    let config = &effective;
     let resolved = match &config.source {
         ModelSource::Directory(_) => resolve(config)?,
         ModelSource::HuggingFace { repo, revision } => {
@@ -351,6 +374,7 @@ pub struct EmbeddingGemma2 {
     text: Vec<Mutex<Session>>,
     text_workers: Option<rayon::ThreadPool>,
     vision: Option<Mutex<Session>>,
+    vision_unavailable: Option<String>,
     #[cfg(feature = "audio")]
     audio: Option<audio::AudioEncoder>,
     identity: ModelIdentity,
@@ -455,8 +479,11 @@ impl EmbeddingGemma2 {
                 modality: Modality::Image,
             });
         }
+        let (config, vision_unavailable) = runtime_config(&config)?;
         let resolved = resolve(&config)?;
-        Self::from_resolved(resolved, config)
+        let mut model = Self::from_resolved(resolved, config)?;
+        model.vision_unavailable = vision_unavailable;
+        Ok(model)
     }
 
     fn from_resolved(resolved: ResolvedModel, config: GemmaConfig) -> Result<Self> {
@@ -508,6 +535,7 @@ impl EmbeddingGemma2 {
             text,
             text_workers,
             vision,
+            vision_unavailable: None,
             identity,
             config,
             pad_id,
@@ -935,6 +963,12 @@ impl Embedder for EmbeddingGemma2 {
         }
         let _ = modality;
         Ok("")
+    }
+
+    fn unavailable_reason(&self, modality: Modality) -> Option<String> {
+        (modality == Modality::Image)
+            .then(|| self.vision_unavailable.clone())
+            .flatten()
     }
 
     fn supports(&self, modality: Modality) -> bool {

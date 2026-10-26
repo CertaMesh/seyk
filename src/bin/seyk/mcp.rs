@@ -672,6 +672,7 @@ impl SeykServer {
             "schema_version": crate::JSON_SCHEMA_VERSION,
             "index": self.status()?,
             "index_progress": self.root_progress(),
+            "model_diagnostics": self.hub.ready_engine.get().and_then(|engine| engine.embedder().unavailable_reason(seyk::Modality::Image)).into_iter().collect::<Vec<_>>(),
         }))
     }
 

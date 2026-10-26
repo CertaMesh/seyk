@@ -870,7 +870,11 @@ impl SearchEngine {
                     } else if r.kind == ResourceKind::Audio && !cfg!(feature = "audio") {
                         "audio support is not compiled in (feature `audio`)".into()
                     } else {
-                        format!("{modality} search is not supported by this embedder")
+                        self.embedder
+                            .unavailable_reason(modality)
+                            .unwrap_or_else(|| {
+                                format!("{modality} search is not supported by this embedder")
+                            })
                     },
                 ));
                 continue;
@@ -1456,10 +1460,11 @@ impl SearchEngine {
                     resource: r.id.clone(),
                     page: page.page,
                     reason: if cfg!(feature = "pdf-render") {
-                        "no usable embedded text; image embedding is disabled"
+                        self.embedder.unavailable_reason(crate::Modality::Image).unwrap_or_else(||
+                            "no usable embedded text; image embedding is disabled".into())
                     } else {
-                        "no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)"
-                    }.into(),
+                        "no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)".into()
+                    },
                 });
             }
             if batch.len() == capacity

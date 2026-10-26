@@ -11,6 +11,10 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep semantic text search available when vision encoder files are missing, and report skipped images and scanned PDF pages with recovery instructions.
+
 ### Added
 
 - Hybrid search: one query now combines meaning, keywords (BM25) and file names,
