@@ -1,0 +1,21 @@
+{
+  "artifact": "token-goldens.json",
+  "kind": "frozen decoder capture",
+  "historical_capture": {
+    "decoder_manifest_identity": "unknown",
+    "speech_pcm_sha256": "unknown",
+    "capture_procedure": "unknown",
+    "capture_revision": "unknown"
+  },
+  "present_day_verification": {
+    "verified_at_commit": "912559f20b6a0ba8f340951f226609b03e6bf3ca",
+    "sha256": {
+      "token-goldens.json": "763b5766e0f2b1af19027f0fbe3fc1a7b380b4a341dd01cc591a3705408a0a69"
+    },
+    "consumer": "crates/seyk-stt/src/tests.rs::model_backed_transcript_cache_parity_silence_and_installation",
+    "decoder_manifest": {
+      "path": "crates/seyk-stt/assets/manifest.json",
+      "sha256": "3cefb2a90f9cee1983933dcaee20a25689c8b35a3c9bedfd94ae3c38ffb1a254"
+    }
+  }
+}
