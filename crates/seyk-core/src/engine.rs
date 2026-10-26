@@ -410,7 +410,7 @@ pub struct SearchEngine {
     /// Acquire before `cache`, never while holding it. Covers pending vectors
     /// until their resource references are committed and pruning is complete.
     indexing: Arc<Mutex<()>>,
-    pdf_diagnostics: Mutex<HashMap<(ResourceId, String), PdfDiagnostics>>,
+    pdf_diagnostics: Mutex<HashMap<ResourceId, PdfDiagnostics>>,
     scrubber_started: AtomicBool,
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
@@ -1311,7 +1311,10 @@ impl SearchEngine {
             .pdf_diagnostics
             .lock()
             .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?;
-        if let Some(record) = diagnostics.get(&(resource.clone(), descriptor.to_owned())) {
+        if let Some(record) = diagnostics
+            .get(resource)
+            .filter(|record| record.descriptor_hash == descriptor)
+        {
             stats.page_diagnostics.extend(record.pages.clone());
             if let Some(skipped) = &record.skipped {
                 stats.skipped.push(skipped.clone());
@@ -1330,15 +1333,17 @@ impl SearchEngine {
             .pdf_diagnostics
             .lock()
             .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?;
-        diagnostics.retain(|(resource, _), _| resource != &target.resource);
         if !target.page_diagnostics.is_empty() || skipped.is_some() {
             diagnostics.insert(
-                (target.resource.clone(), target.descriptor_hash.clone()),
+                target.resource.clone(),
                 PdfDiagnostics {
+                    descriptor_hash: target.descriptor_hash.clone(),
                     pages: target.page_diagnostics.clone(),
                     skipped,
                 },
             );
+        } else {
+            diagnostics.remove(&target.resource);
         }
         Ok(())
     }
@@ -1723,6 +1728,7 @@ fn pdf_skip(resource: &ResourceId, error: Error) -> SkippedResource {
 }
 
 struct PdfDiagnostics {
+    descriptor_hash: String,
     pages: Vec<PageDiagnostic>,
     skipped: Option<SkippedResource>,
 }
@@ -2809,7 +2815,7 @@ impl<'e> IndexRequest<'e> {
                 .pdf_diagnostics
                 .lock()
                 .map_err(|_| Error::Config("PDF diagnostics lock poisoned".into()))?
-                .retain(|(resource, _), _| !gone.contains(resource));
+                .retain(|resource, _| !gone.contains(resource));
         }
         sync.skipped_counts = skipped_counts(&sync.skipped);
         Ok(IndexReport {
@@ -2917,6 +2923,93 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "pdf")]
+    fn diagnostic_target(resource: &ResourceId, descriptor: &str, page: u32) -> Pending {
+        Pending {
+            descriptor_hash: descriptor.into(),
+            resource: resource.clone(),
+            version: ResourceVersion::unknown(),
+            metadata: ResourceMetadata {
+                media_type: Some("application/pdf".into()),
+                modality: crate::Modality::Document,
+                size_bytes: 0,
+                modified_ns: None,
+                content_hash: String::new(),
+            },
+            jobs: Vec::new(),
+            page_diagnostics: vec![PageDiagnostic {
+                code: SkipCode::PdfParseFailed,
+                resource: resource.clone(),
+                page,
+                reason: descriptor.into(),
+            }],
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn pdf_diagnostics_replace_descriptors_and_clear_empty_results() {
+        let engine = SearchEngine::lexical().unwrap();
+        let resource = "mem://pdf/first".parse().unwrap();
+        let other = "mem://pdf/other".parse().unwrap();
+        let a = diagnostic_target(&resource, "A", 1);
+        let mut b = diagnostic_target(&resource, "B", 2);
+        let unrelated = diagnostic_target(&other, "other", 3);
+        engine
+            .remember_pdf_diagnostics(&a, Some(skip(&resource, "A skip")))
+            .unwrap();
+        engine.remember_pdf_diagnostics(&unrelated, None).unwrap();
+        let b_skip = skip(&resource, "B skip");
+        engine
+            .remember_pdf_diagnostics(&b, Some(b_skip.clone()))
+            .unwrap();
+        let mut stats = SyncStats::default();
+        engine
+            .replay_pdf_diagnostics(&resource, "A", &mut stats)
+            .unwrap();
+        assert!(stats.page_diagnostics.is_empty());
+        assert!(stats.skipped.is_empty());
+        engine
+            .replay_pdf_diagnostics(&resource, "B", &mut stats)
+            .unwrap();
+        assert_eq!(stats.page_diagnostics, b.page_diagnostics);
+        assert_eq!(stats.skipped, vec![b_skip]);
+        b.page_diagnostics.clear();
+        engine.remember_pdf_diagnostics(&b, None).unwrap();
+        let mut stats = SyncStats::default();
+        engine
+            .replay_pdf_diagnostics(&resource, "B", &mut stats)
+            .unwrap();
+        assert!(stats.page_diagnostics.is_empty());
+        assert!(stats.skipped.is_empty());
+        engine
+            .replay_pdf_diagnostics(&other, "other", &mut stats)
+            .unwrap();
+        assert_eq!(stats.page_diagnostics, unrelated.page_diagnostics);
+        assert!(stats.skipped.is_empty());
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn deletion_clears_pdf_diagnostics_only_for_deleted_resources() {
+        let root = tempfile::tempdir().unwrap();
+        let deleted = root.path().join("deleted.pdf");
+        let kept = root.path().join("kept.pdf");
+        for path in [&deleted, &kept] {
+            std::fs::write(path, b"%PDF invalid").unwrap();
+        }
+        let engine = SearchEngine::lexical().unwrap();
+        engine.index().paths([root.path()]).execute().unwrap();
+        let deleted_id = ResourceId::from_path(deleted.canonicalize().unwrap()).unwrap();
+        let kept_id = ResourceId::from_path(kept.canonicalize().unwrap()).unwrap();
+        assert_eq!(engine.pdf_diagnostics.lock().unwrap().len(), 2);
+        std::fs::remove_file(deleted).unwrap();
+        engine.index().paths([root.path()]).execute().unwrap();
+        let diagnostics = engine.pdf_diagnostics.lock().unwrap();
+        assert!(!diagnostics.contains_key(&deleted_id));
+        assert!(diagnostics.contains_key(&kept_id));
+    }
 
     #[test]
     fn skipped_versions_stay_bounded_after_delete_cycles() {
