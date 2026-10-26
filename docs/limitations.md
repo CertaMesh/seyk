@@ -40,11 +40,12 @@
   needs a persistent SQLite cache and a d256 or d768 profile, cannot guarantee
   recall on arbitrary libraries, and stores both representations, so it adds
   cache storage. See [the Photo Anchor scan](multimodal.md#experimental-photo-anchor-scan).
-- **Change detection uses size and mtime first.** A file rewritten with identical
-  size and modification time to the nanosecond is not re-read. `seyk index` alone
-  does not force a re-read; clear the cache or change the file's modification
-  time. Extraction still re-hashes the file and refuses changed text, and
-  vectors are never reused for different text.
+- **Filesystem size and mtime are cheap change hints.** They do not prove that
+  bytes are unchanged. An equal-size rewrite with a restored mtime is not re-read
+  on a warm pass when preparation is unchanged. Ranking can then use stale
+  vectors and keyword rows. Extraction still checks the content hash and
+  refuses changed text. To force a re-read, run `seyk cache clear` for the cache
+  in use, then search or index again. `seyk index` alone does not force a re-read.
 - **Single-writer cache.** Two processes writing the same cache wait on SQLite's
   lock rather than run in parallel. MCP sessions avoid this by sharing the daemon;
   a separate `seyk index --watch` on the same folder still duplicates its work.

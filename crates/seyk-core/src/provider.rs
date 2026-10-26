@@ -11,7 +11,9 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-/// Opaque freshness token. Unknown tokens never establish freshness.
+/// Opaque change token. Equal known tokens let the warm pass skip reading.
+/// Filesystem tokens are cheap change hints, not proof of unchanged bytes.
+/// Unknown tokens force a reread and hash check.
 ///
 /// Unstable: may change before 1.0; filesystem is the only supported provider.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +33,10 @@ impl ResourceVersion {
     pub fn is_known(&self) -> bool {
         self.0.is_some()
     }
+    /// Build `fs:{size}:{mtime}` as a cheap change hint, not a content proof.
+    /// An equal-size rewrite with a restored mtime can skip the warm-pass read,
+    /// leaving stale vectors and keyword rows. Extraction still checks the
+    /// content hash and refuses changed text.
     pub(crate) fn file(size: u64, modified: Option<i64>) -> Self {
         modified
             .map(|t| Self::known(format!("fs:{size}:{t}")))
@@ -149,8 +155,13 @@ pub trait ResourceProvider: Send + Sync {
         self.list(scope)
     }
     fn read(&self, id: &ResourceId) -> Result<Vec<u8>>;
-    /// A known token must change when the resource bytes change. Use unknown
-    /// when freshness cannot be established; the engine will reread and hash.
+    /// Return a change token consistent with the token supplied by `list`.
+    /// Equal known tokens let the warm pass skip reading when preparation is
+    /// unchanged. Filesystem size and mtime are cheap change hints, not proof
+    /// of unchanged bytes: an equal-size rewrite with a restored mtime can
+    /// leave stale vectors and keyword rows. Extraction still checks the
+    /// content hash and refuses changed text. Use unknown tokens in both
+    /// `list` and `version` to force a reread and hash check.
     fn version(&self, id: &ResourceId) -> Result<ResourceVersion>;
     /// Resolve deletion roots once per pass, before filtering cached identities.
     /// An error retains entries and is reported as skipped work by the engine.
