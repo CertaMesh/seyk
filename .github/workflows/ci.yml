@@ -30,15 +30,13 @@ jobs:
       # Model-backed tests are #[ignore]d: CI never downloads the weights.
       - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo test --example bench_retrieval --locked
-      - run: cargo test --workspace --features audio --locked
-      - run: cargo clippy --workspace --all-targets --features audio --locked -- -D warnings
-      - run: cargo test --workspace --features audio-stt --locked
-      - run: cargo clippy --workspace --all-targets --features audio-stt --locked -- -D warnings
+      - name: Check audio-free ONNX library
+        run: cargo check -p seyk --no-default-features --features onnx --lib --locked
       - name: Check standalone dependency boundaries
         run: python scripts/check_embedding_dependencies.py
       - name: Check minimal facade library
         run: cargo check -p seyk --no-default-features --lib --locked
-      - name: Check text-only CLI
+      - name: Check CLI without other default features
         run: cargo check -p seyk --no-default-features --features cli --bin seyk --locked
       - name: Lint standalone text backend
         run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
@@ -80,5 +78,4 @@ jobs:
           key: msrv-1.89
       - run: cargo +1.89.0 check --workspace --all-targets --locked
       - run: cargo +1.89.0 build --workspace --locked
-      - run: cargo +1.89.0 build --workspace --features audio --locked
-      - run: cargo +1.89.0 check --workspace --all-targets --features audio-stt --locked
+      - run: cargo +1.89.0 check -p seyk --no-default-features --features onnx --lib --locked

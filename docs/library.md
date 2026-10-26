@@ -123,10 +123,10 @@ embedder declares what it supports, and the engine skips the rest with a reason
 instead of guessing.
 
 Cargo features on by default: `onnx` (EmbeddingGemma 2 backend), `image` (image
-resources), `cli` (the binary), `mcp` (the MCP server), `watch` (background
-re-indexing) and `pdf-render` (PDF text and page rendering). `audio` and
-`audio-stt` are opt-in. A library user who only wants the engine with
-their own embedder can use `default-features = false`.
+resources), `cli` (the binary, including `audio-stt` and `audio`), `mcp` (the MCP server), `watch` (background
+re-indexing) and `pdf-render` (PDF text and page rendering). A library user
+who only wants the engine with their own embedder can use
+`default-features = false` and opt into `audio` or `audio-stt` separately.
 
 ## PDF parser logs and panics
 

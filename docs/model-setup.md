@@ -13,7 +13,7 @@ seyk model info                # where they are, whether they are present
 seyk model profile --text-only --json  # active index profile, without loading weights
 ```
 
-`model download` is the only command that uses the network. It fetches the ONNX export
+Only explicit model setup commands use the network. `seyk model download` fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
 standard Hugging Face cache. Searching never downloads anything: if the weights are
 missing, search returns keyword and filename matches with a `no_model` degradation marker
@@ -72,6 +72,51 @@ revision. Use a pinned commit for an ID that stays stable across downloads.
 Local directories must contain the selected model files: identity reads graph and
 tokenizer bytes and external weight file sizes, as indexing does.
 
+## Audio in one command
+
+```sh
+seyk setup audio                   # audio encoder + Whisper tiny STT
+seyk search "repairing a bicycle" ./recordings
+```
+
+The default CLI includes audio decoding, audio search and speech-to-text.
+Weights stay outside the binary: nothing downloads at build time, startup or
+search time. The ordinary text model is still provisioned separately with
+`seyk model download` and is needed for semantic queries.
+
+`seyk setup audio` first prints the pinned repositories, revisions, sizes and
+maximum remaining download size. It explicitly fetches the q8 audio encoder
+(340,307,954 bytes) and Whisper tiny STT (267,743,552 bytes): 608,051,506 bytes
+in total, about 580 MiB. Existing files are SHA-256 verified and valid files are
+reused. Downloads are staged privately and all fetched files pass size and SHA-256
+checks before publication. Audio uses a fixed private stage, so hf-hub can resume
+partial downloads after interruption; real setup removes older random audio
+stages. The stage is protected by an OS lock and is deleted after a successful
+installation. Newly published audio and STT asset files use mode 0644 on Unix;
+STT file modes previously depended on umask. Staging remains private.
+Corrupt or incomplete managed installations are repaired; unmanaged STT
+directories are preserved. Verification streams files without loading inference
+sessions. The audio hashes and lengths come from the HF LFS metadata at
+`daa72c51243991dfcaf9f9137d2c573d8f7790c0`; STT uses its existing checked manifest.
+
+```sh
+seyk setup                         # offline text, audio and STT status
+seyk setup --json
+seyk setup audio --dry-run --json   # offline plan; no downloads
+seyk setup audio --json             # install; versioned completion on stdout
+```
+
+JSON uses the existing schema v9 envelope, with `action` (`status`, `plan` or
+`complete`), `models`, `total_bytes`, `download_bytes` and `next_step`. Each
+model reports `present`, `verification`, `bytes`, `repo` and `revision`.
+Text status checks file presence only (`bytes: null`); audio and STT status check
+SHA-256. The size fields cover the audio bundle; `download_bytes` is an upper
+bound because partially verified models can reuse files. Download plans and
+progress go to stderr so JSON stdout remains parseable. Failures exit nonzero.
+`seyk model download --audio` and `--stt` remain available for separate installs.
+Library consumers can use `default-features = false` and opt into `audio` or
+`audio-stt` explicitly; enabling `cli` includes both.
+
 ## Why EmbeddingGemma 2
 
 - **Small and local.** The text part is 270M parameters. It runs on a laptop CPU,
@@ -87,5 +132,5 @@ tokenizer bytes and external weight file sizes, as indexing does.
   [Supported content](supported-content.md).
 
 Audio and speech-to-text need extra model files. See
-[Audio](cli.md#audio-opt-in) and
-[Speech-to-text extraction](cli.md#speech-to-text-extraction-opt-in).
+[Audio](cli.md#audio) and
+[Speech-to-text extraction](cli.md#speech-to-text-extraction).

@@ -1,8 +1,9 @@
 # Multimodal support: status and what is missing
 
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
-space. This crate implements text, images, PDF retrieval and opt-in audio retrieval.
-This note records current support (including opt-in speech-to-text extraction)
+space. This crate implements text, images, PDF retrieval and audio retrieval.
+The default CLI includes audio; library consumers can enable it separately.
+This note records current support (including on-demand speech-to-text extraction)
 and what video and scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
@@ -51,10 +52,13 @@ Possible improvements:
   folders. That costs about 0.1 s, plus the memory for its weights (the q8 weight
   file is 195 MB).
 
-## Audio retrieval (done, opt-in)
+## Audio retrieval (done, default CLI)
+
+See [Audio in one command](model-setup.md#audio-in-one-command) for provisioning.
 
 The `audio` feature adds Symphonia 0.5.5 and a Rust port of the pinned Gemma 4
-feature extractor. It does not change default release features. The core streams
+feature extractor. The CLI enables `audio-stt` (and therefore `audio`) by default;
+`--no-default-features` library builds keep audio dependencies disabled. The core streams
 WAV/FLAC/MP3 and AAC-LC/ALAC M4A, applies presentation edits/gapless metadata,
 means channels and resamples with a deterministic 64-tap Blackman-windowed sinc
 filter (0.94 Nyquist guard). Windows are 10 seconds with an 8-second stride,
@@ -81,7 +85,7 @@ for reload and retry semantics and the scoped release memory measurement.
 The encoded limit remains 32 MiB; the derived decoded-duration limit is
 1,048.576 seconds. HE-AAC/SBR, multiple tracks and complex edit lists are typed
 unsupported inputs. Search never transcribes. Explicit extraction of a `time`
-hit transcribes that range with the opt-in `audio-stt` feature (Phase 5b-2);
+hit transcribes that range with `audio-stt`, included in the default CLI (Phase 5b-2);
 without it, extraction returns `UnsupportedExtraction`. Previews, VAD and
 diarization are not implemented.
 See the [implementation report](architecture.md#phase-5a-audio-retrieval) for

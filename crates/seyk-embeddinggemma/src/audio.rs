@@ -186,7 +186,7 @@ fn regular_audio_file(path: &Path) -> Result<std::fs::File> {
     let map_error = |error: std::io::Error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             Error::ModelNotFound(
-                "audio encoder is missing; run seyk model download --audio, then retry".into(),
+                "audio encoder is missing; run seyk setup audio, then retry".into(),
             )
         } else {
             io_error(path, error)

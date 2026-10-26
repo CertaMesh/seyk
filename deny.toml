@@ -6,7 +6,9 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1 is required by lopdf 0.42.0 through pdf-extract 0.12.1; the latest published pdf-extract and compatible lopdf releases still require it." },
 ]
 
-# Symphonia exceptions approved 2026-10-08 for opt-in audio; package + version scoped.
+# Symphonia exceptions approved 2026-10-08; package + version scoped.
+# Scope extended to the default CLI by the orchestrator per the user request
+# of 2026-10-25: audio in the default build. Source/license notices ship in THIRD_PARTY.
 # Only permissive licence choices are accepted. GPL/AGPL/LGPL/SSPL and MPL
 # cannot pass without an explicit, reviewed exception. Alternative expressions
 # (e.g. MIT OR LGPL) select the permissive choice, never the copyleft choice.
@@ -24,67 +26,78 @@ name = "option-ext"
 version = "=0.2.0"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-bundle-flac"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-bundle-mp3"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-codec-aac"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-codec-alac"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-codec-pcm"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-core"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-format-isomp4"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-format-riff"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-metadata"
 version = "=0.5.5"
 allow = ["MPL-2.0"]
 
-# Approved 2026-10-08 for opt-in Phase 5a audio.
+# Approved 2026-10-08; default CLI scope approved by the orchestrator
+# per the user request of 2026-10-25 (audio in the default build).
 [[licenses.exceptions]]
 name = "symphonia-utils-xiph"
 version = "=0.5.5"

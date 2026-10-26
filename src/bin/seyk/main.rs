@@ -7,6 +7,7 @@ mod mcp;
 
 mod extract_errors;
 mod index_progress;
+mod setup;
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -130,6 +131,17 @@ impl FilterArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Show offline model status, or explicitly install audio models.
+    Setup {
+        #[arg(value_enum)]
+        target: Option<setup::Target>,
+        /// Show the download plan without fetching files.
+        #[arg(long, requires = "target")]
+        dry_run: bool,
+        /// Print a versioned JSON status, plan or completion report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Search files and directories with a natural-language query.
     Search {
         /// What you are looking for, in your own words.
@@ -310,10 +322,10 @@ enum DaemonAction {
 enum ModelAction {
     /// Download the model weights from Hugging Face into the local HF cache.
     Download {
-        /// Provision only the pinned q8 audio encoder (requires feature `audio`).
+        /// Provision only the pinned q8 audio encoder.
         #[arg(long)]
         audio: bool,
-        /// Provision only the pinned Whisper STT manifest (feature `audio-stt`).
+        /// Provision only the pinned Whisper STT files.
         #[arg(long, conflicts_with = "audio")]
         stt: bool,
     },
@@ -758,6 +770,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Setup {
+            target,
+            dry_run,
+            json,
+        } => {
+            setup::run(target, dry_run, json)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Model { action, model } => {
