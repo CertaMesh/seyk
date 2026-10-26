@@ -5,7 +5,9 @@
 - Include audio search and speech-to-text in CLI builds. Add `seyk setup audio`
   to explicitly download and SHA-256 verify both pinned models, reusing valid
   files; add offline `seyk setup` status and `--dry-run`/`--json` plans. Missing
-  audio/STT model diagnostics point to the setup command. Library builds with
+  audio/STT model diagnostics point to the setup command. Provisioning stages
+  and verifies audio downloads before publication; STT uses an OS lock that
+  releases after interruption. Library builds with
   default features disabled remain minimal; search never downloads weights.
 
 - Fix daemon and `seyk mcp` startup under long HOME/cache paths: move only overlong default sockets to a private per-user directory under TMPDIR or `/tmp`, retaining normal cache locks and logs. Reject fallback directories with unsafe ownership, permissions or symlink type. Explicit `SEYK_DAEMON_DIR` overrides remain supported; overlong socket paths report their byte length and platform limit.

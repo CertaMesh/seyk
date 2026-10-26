@@ -13,7 +13,7 @@ seyk model info                # where they are, whether they are present
 seyk model profile --text-only --json  # active index profile, without loading weights
 ```
 
-`model download` and `setup audio` are the commands that use the network. It fetches the ONNX export
+Only explicit model setup commands use the network. `seyk model download` fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
 standard Hugging Face cache. Searching never downloads anything: if the weights are
 missing, search returns keyword and filename matches with a `no_model` degradation marker
@@ -88,7 +88,8 @@ search time. The ordinary text model is still provisioned separately with
 maximum remaining download size. It explicitly fetches the q8 audio encoder
 (340,307,954 bytes) and Whisper tiny STT (267,743,552 bytes): 608,051,506 bytes
 in total, about 580 MiB. Existing files are SHA-256 verified and valid files are
-reused. Corrupt or incomplete managed installations are repaired; unmanaged STT
+reused. Downloads are staged privately and all fetched files pass size and SHA-256
+checks before publication. Corrupt or incomplete managed installations are repaired; unmanaged STT
 directories are preserved. Verification streams files without loading inference
 sessions. The audio hashes and lengths come from the HF LFS metadata at
 `daa72c51243991dfcaf9f9137d2c573d8f7790c0`; STT uses its existing checked manifest.

@@ -27,6 +27,7 @@ check("seyk-core", ["-e", "normal"], {"seyk-embeddinggemma", "seyk-stt", "ort", 
 check("seyk-core", ["-e", "normal", "--features", "pdf"], {"seyk-embeddinggemma", "seyk-stt", "ort", "tokenizers", "hf-hub"})
 
 check("seyk", ["-e", "features", "--no-default-features"], {"symphonia", "symphonia-core", "seyk-stt", "ort", "hf-hub"})
+check("seyk", ["-e", "normal", "--no-default-features", "--features", "onnx"], {"symphonia", "seyk-stt"})
 check("seyk", ["-e", "normal", "--no-default-features", "--features", "cli"], set(), {"symphonia", "seyk-stt"})
 check("seyk-embeddinggemma", ["-e", "normal", "--features", "audio"], FORBIDDEN)
 check("seyk-core", ["-e", "normal", "--features", "audio"], {"seyk-embeddinggemma", "seyk-stt", "ort", "tokenizers", "hf-hub"})

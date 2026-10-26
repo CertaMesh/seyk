@@ -53,6 +53,16 @@ fn stt_status() -> Result<ModelStatus> {
     })
 }
 
+fn next_step(models: &[ModelStatus]) -> &'static str {
+    if models.iter().any(|m| m.model == "text" && !m.present) {
+        "seyk model download"
+    } else if models.iter().any(|m| !m.present) {
+        "seyk setup audio"
+    } else {
+        NEXT_STEP
+    }
+}
+
 fn report(action: &'static str, models: Vec<ModelStatus>) -> Report {
     Report {
         action,
@@ -62,8 +72,8 @@ fn report(action: &'static str, models: Vec<ModelStatus>) -> Report {
             .filter(|m| !m.present)
             .filter_map(|m| m.bytes)
             .sum(),
+        next_step: next_step(&models),
         models,
-        next_step: NEXT_STEP,
     }
 }
 
@@ -123,6 +133,7 @@ pub(super) fn run(target: Option<Target>, dry_run: bool, json: bool) -> Result<(
                 Ok(())
             })?;
             plan.action = "complete";
+            plan.next_step = next_step(&plan.models);
         }
         plan
     } else {
@@ -156,7 +167,6 @@ pub(super) fn run(target: Option<Target>, dry_run: bool, json: bool) -> Result<(
                 model.verification
             );
         }
-        println!("Next: {}", output.next_step);
         if output
             .models
             .iter()
@@ -172,6 +182,7 @@ pub(super) fn run(target: Option<Target>, dry_run: bool, json: bool) -> Result<(
         {
             println!("Audio models: run seyk setup audio");
         }
+        println!("Next: {}", output.next_step);
     }
     Ok(())
 }

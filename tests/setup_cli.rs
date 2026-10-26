@@ -27,6 +27,7 @@ fn setup_status_is_offline_and_lists_every_model() {
     let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(status["schema_version"], 9);
     assert_eq!(status["action"], "status");
+    assert_eq!(status["next_step"], "seyk model download");
     let names: Vec<_> = status["models"]
         .as_array()
         .unwrap()
@@ -61,7 +62,7 @@ fn audio_plan_names_pins_and_total_without_network() {
     );
     assert!(plan["total_bytes"].as_u64().unwrap() > 600_000_000);
     assert_eq!(plan["download_bytes"], plan["total_bytes"]);
-    assert!(plan["next_step"].as_str().unwrap().contains("seyk search"));
+    assert_eq!(plan["next_step"], "seyk setup audio");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Total:") && stderr.contains("Whisper tiny"));
 }
@@ -75,7 +76,7 @@ fn human_status_and_plan_include_next_steps() {
     assert!(status.contains("run seyk setup audio"));
     let output = setup(&["audio", "--dry-run"]);
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("./recordings"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Next: seyk setup audio"));
 }
 
 #[test]

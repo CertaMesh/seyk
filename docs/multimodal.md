@@ -3,7 +3,7 @@
 EmbeddingGemma 2 maps text, images, audio and video into one 768-dimensional
 space. This crate implements text, images, PDF retrieval and audio retrieval.
 The default CLI includes audio; library consumers can enable it separately.
-This note records current support (including opt-in speech-to-text extraction)
+This note records current support (including on-demand speech-to-text extraction)
 and what video and scanned-page text extraction still need, based on the model's processor configuration
 (`processor_config.json` at the pinned revision) and the Transformers reference
 implementation (`EmbeddingGemma2Processor`, `Gemma4ImageProcessor`,
@@ -52,7 +52,7 @@ Possible improvements:
   folders. That costs about 0.1 s, plus the memory for its weights (the q8 weight
   file is 195 MB).
 
-## Audio retrieval (done, opt-in)
+## Audio retrieval (done, default CLI)
 
 See [Audio in one command](model-setup.md#audio-in-one-command) for provisioning.
 

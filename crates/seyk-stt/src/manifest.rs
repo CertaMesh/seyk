@@ -191,19 +191,21 @@ pub fn install_with(
         .ok_or_else(|| model_error("invalid installation path"))?;
     fs::create_dir_all(parent).map_err(|_| model_error("cannot create installation parent"))?;
     let lock_path = parent.join(".stt-install.lock");
+    // Keep one stable inode. OS locks are released even when the process is killed.
     let _lock = OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&lock_path)
-        .map_err(|_| model_error("installation locked or unwritable"))?;
-    struct Unlock(PathBuf, Option<File>);
-    impl Drop for Unlock {
-        fn drop(&mut self) {
-            drop(self.1.take());
-            let _ = fs::remove_file(&self.0);
-        }
-    }
-    let _unlock = Unlock(lock_path, Some(_lock));
+        .map_err(|source| Error::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    _lock.try_lock().map_err(|error| Error::Io {
+        path: lock_path,
+        source: error.into(),
+    })?;
     if destination.exists() && verify_directory(destination).is_ok() {
         return Ok(destination.into());
     }
@@ -268,6 +270,78 @@ pub fn install_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stt_install_lock_names_path_and_recovers_from_stale_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".stt-install.lock");
+        fs::write(&lock_path, b"legacy interrupted install").unwrap();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let error = install_with(&dir.path().join("model"), |_| {
+            panic!("must not fetch while locked")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains(&lock_path.display().to_string()));
+        drop(lock);
+        let error = install_with(&dir.path().join("model"), |_| {
+            Err(model_error("fake fetch reached"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("fake fetch reached"));
+    }
+
+    #[test]
+    fn stt_install_lock_releases_after_killed_owner() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        const CHILD: &str = "SEYK_STT_INSTALL_LOCK_CHILD";
+        if let Some(dir) = std::env::var_os(CHILD) {
+            let _ = install_with(&PathBuf::from(dir).join("model"), |_| {
+                println!("STT_LOCK_READY");
+                std::io::stdout().flush().unwrap();
+                loop {
+                    std::thread::park();
+                }
+            });
+            panic!("child failed to acquire the installation lock");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "manifest::tests::stt_install_lock_releases_after_killed_owner",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "child exited before acquiring lock"
+            );
+            if line.trim() == "STT_LOCK_READY" {
+                break;
+            }
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let error = install_with(&dir.path().join("model"), |_| {
+            Err(model_error("fake fetch reached"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("fake fetch reached"));
+    }
+
     #[test]
     fn missing_corrupt_and_equal_length_tamper_are_typed() {
         let dir = tempfile::tempdir().unwrap();
