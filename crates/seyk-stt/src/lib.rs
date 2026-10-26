@@ -149,7 +149,12 @@ impl State {
         manifest::verify_layout(dir)?;
         let mut tokenizer = None;
         // Validate all small runtime assets, even those not used by this policy.
-        for asset in &manifest().files[3..] {
+        for asset in manifest().files.iter().filter(|asset| {
+            !manifest()
+                .graphs
+                .iter()
+                .any(|graph| graph.file == asset.path)
+        }) {
             let bytes = read_asset(dir, asset)?;
             if asset.path == "tokenizer.json" {
                 tokenizer = Some(
@@ -157,8 +162,8 @@ impl State {
                 );
             }
         }
-        let mut sessions = Vec::new();
-        for (asset, graph) in manifest().files[..3].iter().zip(&manifest().graphs) {
+        let load_graph = |file| -> Result<Session> {
+            let (asset, graph) = manifest().graph(file)?;
             let bytes = read_asset(dir, asset)?;
             let session = Session::builder()
                 .map_err(ort_error)?
@@ -202,11 +207,11 @@ impl State {
                     }
                 }
             }
-            sessions.push(session);
-        }
-        let past = sessions.pop().unwrap();
-        let decoder = sessions.pop().unwrap();
-        let encoder = sessions.pop().unwrap();
+            Ok(session)
+        };
+        let encoder = load_graph("onnx/encoder_model.onnx")?;
+        let decoder = load_graph("onnx/decoder_model.onnx")?;
+        let past = load_graph("onnx/decoder_with_past_model.onnx")?;
         Ok(Self {
             encoder,
             decoder,

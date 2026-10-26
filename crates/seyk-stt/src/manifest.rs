@@ -26,8 +26,28 @@ pub(crate) struct Manifest {
     pub graphs: Vec<Graph>,
     pub policy: Policy,
 }
+impl Manifest {
+    pub fn graph(&self, file: &str) -> Result<(&Asset, &Graph)> {
+        let mut graphs = self.graphs.iter().filter(|graph| graph.file == file);
+        let graph = graphs
+            .next()
+            .ok_or_else(|| model_error("graph missing from manifest"))?;
+        if graphs.next().is_some() {
+            return Err(model_error("duplicate graph in manifest"));
+        }
+        let mut assets = self.files.iter().filter(|asset| asset.path == graph.file);
+        let asset = assets
+            .next()
+            .ok_or_else(|| model_error("graph asset missing from manifest"))?;
+        if assets.next().is_some() {
+            return Err(model_error("duplicate graph asset in manifest"));
+        }
+        Ok((asset, graph))
+    }
+}
 #[derive(Deserialize)]
 pub(crate) struct Graph {
+    pub file: String,
     pub inputs: Vec<Port>,
     pub outputs: Vec<Port>,
 }
@@ -287,6 +307,121 @@ pub fn install_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_graph_resolves_to_exactly_one_asset() {
+        let manifest = manifest();
+        for graph in &manifest.graphs {
+            assert_eq!(
+                manifest
+                    .files
+                    .iter()
+                    .filter(|asset| asset.path == graph.file)
+                    .count(),
+                1,
+                "{}",
+                graph.file
+            );
+            assert_eq!(
+                manifest
+                    .graphs
+                    .iter()
+                    .filter(|other| other.file == graph.file)
+                    .count(),
+                1,
+                "{}",
+                graph.file
+            );
+            assert_eq!(manifest.graph(&graph.file).unwrap().0.path, graph.file);
+        }
+    }
+
+    #[test]
+    fn graph_lookup_is_independent_of_manifest_array_order() {
+        let mut shuffled: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        shuffled.files.reverse();
+        shuffled.graphs.rotate_left(1);
+        for file in [
+            "onnx/encoder_model.onnx",
+            "onnx/decoder_model.onnx",
+            "onnx/decoder_with_past_model.onnx",
+        ] {
+            let (expected, expected_graph) = manifest().graph(file).unwrap();
+            let (asset, graph) = shuffled.graph(file).unwrap();
+            assert_eq!(asset.path, file);
+            assert_eq!(graph.file, file);
+            assert_eq!(asset.bytes, expected.bytes);
+            assert_eq!(asset.sha256, expected.sha256);
+            for (ports, expected_ports) in [
+                (&graph.inputs, &expected_graph.inputs),
+                (&graph.outputs, &expected_graph.outputs),
+            ] {
+                assert_eq!(ports.len(), expected_ports.len());
+                for (port, expected) in ports.iter().zip(expected_ports) {
+                    assert_eq!(port.name, expected.name);
+                    assert_eq!(port.dtype, expected.dtype);
+                    assert_eq!(port.shape, expected.shape);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn graph_lookup_rejects_missing_graph() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let file = "onnx/encoder_model.onnx";
+        manifest.graphs.retain(|graph| graph.file != file);
+        assert!(matches!(
+            manifest.graph(file),
+            Err(Error::SttModel {
+                reason: "graph missing from manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_missing_asset() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let file = "onnx/encoder_model.onnx";
+        manifest.files.retain(|asset| asset.path != file);
+        assert!(matches!(
+            manifest.graph(file),
+            Err(Error::SttModel {
+                reason: "graph asset missing from manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_duplicate_graph() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let mut duplicate: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let graph = duplicate.graphs.remove(0);
+        let file = graph.file.clone();
+        manifest.graphs.push(graph);
+        assert!(matches!(
+            manifest.graph(&file),
+            Err(Error::SttModel {
+                reason: "duplicate graph in manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_duplicate_asset() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let mut duplicate: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let asset = duplicate.files.remove(0);
+        let file = asset.path.clone();
+        manifest.files.push(asset);
+        assert!(matches!(
+            manifest.graph(&file),
+            Err(Error::SttModel {
+                reason: "duplicate graph asset in manifest"
+            })
+        ));
+    }
+
     #[test]
     fn stt_install_lock_names_path_and_recovers_from_stale_file() {
         let dir = tempfile::tempdir().unwrap();
