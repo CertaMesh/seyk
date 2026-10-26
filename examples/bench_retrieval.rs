@@ -1028,6 +1028,12 @@ mod pdf_fixture;
 mod tests {
     use super::*;
 
+    // A parallel spawn can inherit a flock descriptor until exec closes it,
+    // keeping the lock alive across another test's parent-side drop/reopen.
+    // Hold this across ownership checks and subprocess spawn/reap lifetimes.
+    #[cfg(unix)]
+    static PDF_PROCESS_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn inventory_fixture(
         root: &Path,
         sizes: &[u64],
@@ -1231,6 +1237,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pdf_task_ownership_refuses_adoption_mismatch_and_second_writer() -> Result<()> {
+        let _process_guard = PDF_PROCESS_TEST.lock().unwrap();
         let tmp = tempfile::tempdir()?;
         let root = tmp.path().canonicalize()?;
         let profile = SearchEngine::builder()
@@ -1246,7 +1253,13 @@ mod tests {
         let session = PdfSession::open(&root, &owner, false)?;
         fs::write(&session.cache, b"not opened by ownership tests")?;
         assert!(PdfSession::open(&root, &owner, false).is_err());
-        assert!(PdfSession::open(&root, &owner, true).is_err());
+        assert_eq!(
+            PdfSession::open(&root, &owner, true)
+                .err()
+                .context("second writer admitted")?
+                .to_string(),
+            "PDF task cache has a conflicting writer"
+        );
         #[cfg(feature = "pdf")]
         {
             fs::create_dir(root.join("corpus"))?;
@@ -1272,7 +1285,8 @@ mod tests {
         wrong.proof = PDF_OWNER_PROOF.into();
         wrong.version = 2;
         assert!(PdfSession::open(&root, &wrong, true).is_err());
-        let resumed = PdfSession::open(&root, &owner, true)?;
+        let resumed =
+            PdfSession::open(&root, &owner, true).context("reopen after parent lock drop")?;
         let dir = resumed.cache.parent().unwrap().to_owned();
         drop(resumed);
         let receipt = fs::read(dir.join("owner.json"))?;
@@ -1505,9 +1519,12 @@ mod tests {
         let manifest = fs::read(root.join("manifest"))?;
         let owner = PdfOwner::new("synthetic", &manifest, &profile);
         if phase == "locked" {
-            ensure!(
-                PdfSession::open(&root, &owner, true).is_err(),
-                "second writer admitted"
+            assert_eq!(
+                PdfSession::open(&root, &owner, true)
+                    .err()
+                    .context("second writer admitted")?
+                    .to_string(),
+                "PDF task cache has a conflicting writer"
             );
             return Ok(());
         }
@@ -1643,6 +1660,7 @@ mod tests {
     #[cfg(all(unix, feature = "pdf"))]
     #[test]
     fn pdf_real_process_reopen_reset_and_interruption() -> Result<()> {
+        let _process_guard = PDF_PROCESS_TEST.lock().unwrap();
         use pdf_fixture::{Kind, pdf};
         for failure in [false, true] {
             let tmp = tempfile::tempdir()?;
