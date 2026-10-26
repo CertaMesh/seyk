@@ -36,5 +36,6 @@ with tempfile.TemporaryDirectory(dir='tmp',prefix='stt-fixture-') as tmp:
  for seconds in [10,30]:
   base=pcm+b'\0'*(8000*2);data=(base*((seconds*32000+len(base)-1)//len(base)))[:seconds*32000]
   with wave.open(f'tmp/stt-{seconds}.wav','wb') as w:w.setparams((1,2,16000,0,'NONE','not compressed'));w.writeframes(data)
-meta=dict(speech_storage="Generated at test time in ignored tmp/stt-speech.wav; never commit or redistribute System Voice output",text=text,voice='Karen en_AU',rate=160,reference_commit='86098128c0b4f24f0e2aa2994de830614b474227',torch=torch.__version__,numpy=np.__version__,mel_tolerance='max absolute error <= 0.0001 across all 240000 floats',sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.iterdir()) if p.is_file() and p.name!='provenance.json'})
+# Attest only the mel outputs written above. Frozen decoder captures have separate provenance.
+meta=dict(speech_storage="Generated at test time in ignored tmp/stt-speech.wav; never commit or redistribute System Voice output",text=text,voice='Karen en_AU',rate=160,reference_commit='86098128c0b4f24f0e2aa2994de830614b474227',torch=torch.__version__,numpy=np.__version__,mel_tolerance='max absolute error <= 0.0001 across all 240000 floats',sha256={name:hashlib.sha256((out/name).read_bytes()).hexdigest() for name in ('mel-input.f32le','mel-reference.f32le.gz')})
 (out/'provenance.json').write_text(json.dumps(meta,indent=2)+'\n')
