@@ -25,6 +25,12 @@ pub struct IndexProgress {
     pub eta_seconds: Option<u64>,
 }
 
+pub(crate) enum Completion {
+    Skipped,
+    Reused,
+    NewlyIndexed,
+}
+
 pub(crate) struct PassProgress<'a> {
     state: Mutex<PassState>,
     callback: Option<ProgressFn<'a>>,
@@ -75,7 +81,7 @@ impl<'a> PassProgress<'a> {
             callback(ProgressEvent::IndexProgress { progress });
         }
     }
-    pub(crate) fn complete(&self, id: &ResourceId, indexed: bool, updated: bool) {
+    pub(crate) fn complete(&self, id: &ResourceId, completion: Completion) {
         {
             let mut state = self.state.lock().unwrap();
             let Some(kind) = state.pending.remove(id) else {
@@ -83,12 +89,14 @@ impl<'a> PassProgress<'a> {
             };
             let counts = state.snapshot.by_kind.get_mut(kind).unwrap();
             counts.waiting -= 1;
-            if indexed {
-                counts.indexed += 1;
-            } else {
-                counts.skipped += 1;
+            match completion {
+                Completion::Skipped => counts.skipped += 1,
+                Completion::Reused => counts.indexed += 1,
+                Completion::NewlyIndexed => {
+                    counts.indexed += 1;
+                    state.updated += 1;
+                }
             }
-            state.updated += usize::from(updated);
         }
         self.emit();
     }
@@ -145,13 +153,23 @@ mod lifecycle_tests {
         assert_eq!(tracker.snapshot().by_kind.len(), 1);
         let elapsed = Duration::from_secs(4);
         assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, None);
-        tracker.complete(&resources[0].id, true, false); // reuse is not a sample
-        tracker.complete(&resources[1].id, false, false); // nor is a skip
-        tracker.complete(&resources[2].id, true, true);
+        tracker.complete(&resources[0].id, Completion::Reused); // reuse is not a sample
         assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, None);
-        tracker.complete(&resources[3].id, true, true);
+        tracker.complete(&resources[1].id, Completion::Skipped); // nor is a skip
+        assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, None);
+        let before = tracker.snapshot_after(elapsed);
+        tracker.complete(&resources[0].id, Completion::NewlyIndexed);
+        tracker.complete(&resources[1].id, Completion::NewlyIndexed);
+        assert_eq!(tracker.snapshot_after(elapsed), before);
+        tracker.complete(&resources[2].id, Completion::NewlyIndexed);
+        assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, None);
+        tracker.complete(&resources[3].id, Completion::NewlyIndexed);
         assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, Some(2));
-        tracker.complete(&resources[4].id, true, true);
+        let before = tracker.snapshot_after(elapsed);
+        tracker.complete(&resources[3].id, Completion::Skipped);
+        tracker.complete(&resources[2].id, Completion::Reused);
+        assert_eq!(tracker.snapshot_after(elapsed), before);
+        tracker.complete(&resources[4].id, Completion::NewlyIndexed);
         assert_eq!(tracker.snapshot_after(elapsed).eta_seconds, None);
         let counts = &tracker.snapshot_after(elapsed).by_kind["text"];
         assert_eq!((counts.indexed, counts.waiting, counts.skipped), (4, 0, 1));
