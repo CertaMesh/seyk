@@ -65,8 +65,8 @@ fn allocator_policies_load_external_weights_and_run_without_numerical_changes() 
         CpuAllocator::ArenaShrink,
     ] {
         let mut model = session_with_allocator(&path, Some(1), policy).unwrap();
+        let options = text_run_options(policy).unwrap();
         for _ in 0..3 {
-            let options = text_run_options(policy).unwrap();
             let input = Tensor::from_array(([1usize], vec![2.0_f32])).unwrap();
             let outputs = match options.as_ref() {
                 Some(options) => model.run_with_options(ort::inputs!["x" => input], options),

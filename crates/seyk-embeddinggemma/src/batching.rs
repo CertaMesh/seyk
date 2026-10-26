@@ -25,7 +25,8 @@ impl BatchBudget {
         })
     }
 
-    pub(crate) fn validate(self, max_tokens: usize) -> Result<()> {
+    /// Check that both limits are nonzero and can admit a maximum-length singleton.
+    pub fn validate(self, max_tokens: usize) -> Result<()> {
         if self.padded_tokens == 0 || self.attention_cells == 0 || !self.fits(1, max_tokens) {
             return Err(Error::Config(
                 "batch budgets must fit a max_tokens singleton".into(),

@@ -1147,6 +1147,9 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
             (None, None) => None,
             _ => bail!("both batch budgets must be provided"),
         };
+        if let Some(budget) = config.batch_budget {
+            budget.validate(config.max_tokens)?;
+        }
         config.cpu_allocator = args.cpu_allocator;
         config.vision = cfg!(feature = "image") && !args.text_only;
         config
@@ -1231,11 +1234,13 @@ fn engine_with_loader<E: Embedder + 'static>(
         args.stt_model_dir.as_deref(),
         args.stt_language.as_deref(),
     ));
-    let _cache_phase = seyk_embed::diagnostics::Phase::new("engine_cache_build");
-    let builder = if ephemeral {
-        builder.cache(MemoryCache::new())
-    } else {
-        builder.cache(open_cache(args.cache_path.as_deref())?)
+    let builder = {
+        let _cache_phase = seyk_embed::diagnostics::Phase::new("engine_cache_build");
+        if ephemeral {
+            builder.cache(MemoryCache::new())
+        } else {
+            builder.cache(open_cache(args.cache_path.as_deref())?)
+        }
     };
     Ok(builder.build()?)
 }
@@ -1727,6 +1732,18 @@ mod tests {
                 assert_eq!(restored.batch_budget, config.batch_budget);
                 assert_eq!(restored.cpu_allocator, config.cpu_allocator);
             }
+        }
+        for (tokens, cells) in [("2047", "4194304"), ("8192", "4194303")] {
+            let model = parse(&[
+                "seyk",
+                "search",
+                "test",
+                "--batch-token-budget",
+                tokens,
+                "--batch-attention-budget",
+                cells,
+            ]);
+            assert!(gemma_config(&model).is_err());
         }
         for extra in [
             vec!["--batch-token-budget", "8192"],

@@ -154,7 +154,9 @@ fn memory_budget_bit_identity() {
     ]);
     let mut mismatched_vectors = 0;
     for dimension in Dimension::ALL {
-        let baseline = GemmaEmbedder::load(model_support::config(dimension)).unwrap();
+        let mut base_config = model_support::config(dimension);
+        base_config.threads = Some(1);
+        let baseline = GemmaEmbedder::load(base_config.clone()).unwrap();
         let max_length = inputs
             .iter()
             .map(|input| match input {
@@ -167,7 +169,8 @@ fn memory_budget_bit_identity() {
             .max()
             .unwrap();
         assert!(
-            inputs.len() * max_length * max_length > BatchBudget::CANDIDATE.attention_cells,
+            inputs.len().min(base_config.batch_size) * max_length * max_length
+                > BatchBudget::CANDIDATE.attention_cells,
             "fixture must force subdivision under the candidate budget"
         );
         let expected_docs = baseline.embed_resources(&inputs).unwrap();
@@ -177,12 +180,14 @@ fn memory_budget_bit_identity() {
             .map(|q| baseline.embed_query(&q.text).unwrap())
             .collect();
         drop(baseline);
-        for policy in [
-            CpuAllocator::Default,
-            CpuAllocator::NoArena,
-            CpuAllocator::ArenaShrink,
+        for (sessions, policy) in [
+            (1, CpuAllocator::Default),
+            (1, CpuAllocator::NoArena),
+            (1, CpuAllocator::ArenaShrink),
+            (2, CpuAllocator::ArenaShrink),
         ] {
-            let mut config = model_support::config(dimension);
+            let mut config = base_config.clone();
+            config.sessions = sessions;
             config.batch_budget = Some(BatchBudget::CANDIDATE);
             config.cpu_allocator = policy;
             let candidate = GemmaEmbedder::load(config).unwrap();
@@ -204,7 +209,7 @@ fn memory_budget_bit_identity() {
                 })
                 .count();
             eprintln!(
-                "memory_bit_identity dimension={} allocator={} mismatched_vectors={mismatches}",
+                "memory_bit_identity dimension={} sessions={sessions} allocator={} mismatched_vectors={mismatches}",
                 dimension.get(),
                 policy.name()
             );

@@ -182,6 +182,7 @@ impl Default for GemmaConfig {
 
 /// CPU memory experiments; no policy changes numerical model inputs.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CpuAllocator {
     #[default]
     Default,
@@ -415,6 +416,7 @@ pub struct EmbeddingGemma2 {
     text_tokenizer: Tokenizer,
     text: Vec<Mutex<Session>>,
     text_workers: Option<rayon::ThreadPool>,
+    text_run_options: Option<ort::session::RunOptions>,
     vision: Option<Mutex<Session>>,
     vision_unavailable: Option<String>,
     #[cfg(feature = "audio")]
@@ -580,6 +582,7 @@ impl EmbeddingGemma2 {
         let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0) as i64;
 
         drop(tokenizer_phase);
+        let text_run_options = text_run_options(config.cpu_allocator)?;
         let text = (0..config.sessions)
             .map(|_| {
                 session_with_allocator(
@@ -621,6 +624,7 @@ impl EmbeddingGemma2 {
             text_tokenizer,
             text,
             text_workers,
+            text_run_options,
             vision,
             vision_unavailable: None,
             identity,
@@ -799,6 +803,7 @@ impl EmbeddingGemma2 {
         measure: bool,
     ) -> Result<(Vec<Embedding>, TextBatchMetrics)> {
         // Admission precedes tensor allocation, including callers outside the pool.
+        // Media also uses this text stage, but bypasses the plain-text batch budgets.
         let mut session = self.text[index]
             .lock()
             .map_err(|_| Error::Embedding("session lock poisoned".into()))?;
@@ -840,8 +845,7 @@ impl EmbeddingGemma2 {
                 ),
             ],
         );
-        let options = text_run_options(self.config.cpu_allocator)?;
-        let outputs = match options.as_ref() {
+        let outputs = match self.text_run_options.as_ref() {
             Some(options) => session.run_with_options(inputs, options),
             None => session.run(inputs),
         }

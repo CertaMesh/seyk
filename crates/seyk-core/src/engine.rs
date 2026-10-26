@@ -1096,6 +1096,10 @@ impl SearchEngine {
             )?;
             stats.progress = Some(telemetry.snapshot());
             stats.skipped_counts = skipped_counts(&stats.skipped);
+            seyk_embed::diagnostics::counts(
+                "index_work",
+                &[("missing_inputs", 0), ("resources", pending.len())],
+            );
             return Ok(stats);
         }
 
