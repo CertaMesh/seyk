@@ -16,11 +16,11 @@ name = "seyk"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Local-first semantic search over files, built around Google's EmbeddingGemma 2"
+description = "Local-first hybrid retrieval over private files: meaning, keywords and file names, with exact source locations"
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
-keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "search"]
+keywords = ["retrieval", "hybrid-search", "semantic-search", "local-first", "mcp"]
 categories = ["command-line-utilities", "text-processing"]
 include = ["/src/**", "/README.md", "/LICENSE*", "/NOTICE*", "/build.rs"]
 

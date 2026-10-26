@@ -1,4 +1,4 @@
-//! Local-first semantic search over files.
+//! Local-first hybrid retrieval over files.
 //!
 //! The crate combines resource discovery, segmentation, an embedding backend
 //! ([`Embedder`]), an embedding cache and similarity search into a

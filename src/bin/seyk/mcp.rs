@@ -1066,9 +1066,10 @@ impl SeykServer {
     }
 
     #[tool(
-        description = "Semantic search over local files (Markdown, text, code, images). Returns \
-        ranked passages as path + line range + preview. Read the files at those lines before \
-        answering. Pass several phrasings of the same need in `queries`."
+        description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
+        and audio once its models are installed) by meaning, keywords and file names. Returns \
+        ranked passages as path + location + preview. Read the files at those locations, or call \
+        `extract`, before answering. Pass several phrasings of the same need in `queries`."
     )]
     async fn search(
         &self,
