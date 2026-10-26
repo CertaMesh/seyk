@@ -39,8 +39,8 @@ and exact locations inside them. It does not generate answers or summaries.
 ## Why Seyk
 
 - **Local and private.** Seyk sends no files, queries or embeddings over the
-  network. The model runs on a laptop CPU. Only `seyk model download` uses the
-  network.
+  network. The model runs on a laptop CPU. Only explicit model setup commands
+  use the network.
 - **Meaning, keywords and file names together.** The default hybrid mode
   combines semantic similarity, BM25 keyword scores and file-name matches. A
   question can find a passage that shares none of its words. An identifier such
@@ -152,7 +152,7 @@ See the [Rust library guide](docs/library.md).
 | Markdown, plain text, source code | ✅ heading-, paragraph- or block-aware segments |
 | Images | ✅ found by meaning, one vector per image |
 | PDF | ✅ embedded text; scanned pages found by meaning, text extraction needs OCR |
-| Audio | Opt-in build feature; on-demand speech-to-text extraction is also opt-in |
+| Audio | Included in the default CLI; `seyk setup audio` installs audio search and speech-to-text models |
 | Video | ❌ not implemented |
 
 Seyk never indexes keys, password stores, `.env` files or credentials, and

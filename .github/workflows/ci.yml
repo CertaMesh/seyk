@@ -38,7 +38,7 @@ jobs:
         run: python scripts/check_embedding_dependencies.py
       - name: Check minimal facade library
         run: cargo check -p seyk --no-default-features --lib --locked
-      - name: Check text-only CLI
+      - name: Check CLI without other default features
         run: cargo check -p seyk --no-default-features --features cli --bin seyk --locked
       - name: Lint standalone text backend
         run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings

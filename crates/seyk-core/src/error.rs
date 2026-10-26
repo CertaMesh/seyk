@@ -11,7 +11,7 @@ pub enum Error {
     )]
     SecretFile { path: PathBuf },
 
-    #[error("STT model {reason}; run `seyk model download --stt`")]
+    #[error("STT model {reason}; run `seyk setup audio`")]
     SttModel { reason: &'static str },
     #[error("speech-to-text failed: {reason}")]
     SpeechToText { reason: &'static str },

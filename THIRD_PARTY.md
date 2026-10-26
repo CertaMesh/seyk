@@ -127,9 +127,10 @@ Hayro also embeds a CC0-1.0 compact CMYK colour profile and a generated LAB
 profile. Their provenance and CGATS notice accompany the pinned
 hayro-interpret archive (`assets/README.md`, `assets/CGATS_LICENSE.txt`).
 
-## Optional audio decoding (Phase 5a)
+## Audio decoding
 
-Unmodified Symphonia crates, approved for the optional `audio` feature. Each is
+Unmodified Symphonia crates, approved for the `audio` feature, now included by
+the default CLI through `audio-stt` (optional for library consumers). Each is
 MPL-2.0, with the license text included at `LICENSE` in its crates.io source
 archive. These are package+version exceptions only; new versions require new
 approval.

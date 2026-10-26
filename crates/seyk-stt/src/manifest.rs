@@ -152,24 +152,29 @@ pub(crate) fn verify_layout(dir: &Path) -> Result<()> {
 pub fn verify_directory(dir: &Path) -> Result<()> {
     verify_layout(dir)?;
     for asset in assets() {
-        let file = regular_file(&dir.join(&asset.path))?;
-        let mut reader = file.take(asset.bytes + 1);
-        let mut hash = Sha256::new();
-        let mut count = 0u64;
-        let mut block = [0u8; 64 * 1024];
-        loop {
-            let n = reader
-                .read(&mut block)
-                .map_err(|_| model_error("file unreadable"))?;
-            if n == 0 {
-                break;
-            }
-            count += n as u64;
-            hash.update(&block[..n]);
+        verify_asset(dir, asset)?;
+    }
+    Ok(())
+}
+
+fn verify_asset(dir: &Path, asset: &Asset) -> Result<()> {
+    let file = regular_file(&dir.join(&asset.path))?;
+    let mut reader = file.take(asset.bytes + 1);
+    let mut hash = Sha256::new();
+    let mut count = 0u64;
+    let mut block = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut block)
+            .map_err(|_| model_error("file unreadable"))?;
+        if n == 0 {
+            break;
         }
-        if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
-            return Err(model_error("file length or checksum mismatch"));
-        }
+        count += n as u64;
+        hash.update(&block[..n]);
+    }
+    if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
+        return Err(model_error("file length or checksum mismatch"));
     }
     Ok(())
 }
@@ -213,7 +218,11 @@ pub fn install_with(
         .tempdir_in(parent)
         .map_err(|_| model_error("cannot stage installation"))?;
     for asset in assets() {
-        let source = fetch(asset)?;
+        let source = if verify_asset(destination, asset).is_ok() {
+            destination.join(&asset.path)
+        } else {
+            fetch(asset)?
+        };
         let target = stage.path().join(&asset.path);
         fs::create_dir_all(target.parent().expect("asset parent"))
             .map_err(|_| model_error("cannot stage asset"))?;
@@ -275,7 +284,7 @@ mod tests {
             fs::write(dir.path().join("test"), bytes).unwrap();
             let e = read_asset(dir.path(), &asset).unwrap_err();
             assert!(matches!(e, Error::SttModel { .. }));
-            assert!(e.to_string().contains("seyk model download --stt"));
+            assert!(e.to_string().contains("seyk setup audio"));
         }
         fs::write(dir.path().join("test"), b"good").unwrap();
         assert_eq!(read_asset(dir.path(), &asset).unwrap(), b"good");

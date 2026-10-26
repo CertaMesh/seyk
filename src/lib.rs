@@ -42,14 +42,16 @@ pub mod embedder {
     pub mod gemma {
         pub use crate::model_download::download;
         #[cfg(feature = "audio")]
-        pub use crate::model_download::download_audio;
+        pub use crate::model_download::{
+            AudioAsset, audio_assets, audio_directory, download_audio, verify_audio,
+        };
         pub use seyk_embeddinggemma::*;
     }
 }
 #[cfg(feature = "onnx")]
 mod model_download;
 
-/// Opt-in speech backend and explicit provisioning. Runtime is offline.
+/// Speech backend and explicit provisioning. Runtime is offline.
 #[cfg(feature = "audio-stt")]
 pub mod stt {
     pub use crate::stt_download::download;

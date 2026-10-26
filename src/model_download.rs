@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Download the files `config` needs into the Hugging Face cache.
 ///
-/// This is the only function in the crate that uses the network. It sends
-/// nothing but file requests for public model weights.
+/// Provisioning functions use the network only for public model file requests.
 pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
     let ModelSource::HuggingFace { repo, revision } = &config.source else {
         return Err(Error::Config(
@@ -27,30 +26,131 @@ pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
     })
 }
 
-/// Explicitly provision only the two pinned q8 audio files; never called by inference.
+/// Pinned q8 assets, from the HF LFS metadata at ONNX_REVISION.
+#[cfg(feature = "audio")]
+pub struct AudioAsset {
+    pub path: &'static str,
+    pub bytes: u64,
+    pub sha256: &'static str,
+}
+
+#[cfg(feature = "audio")]
+pub fn audio_assets() -> &'static [AudioAsset] {
+    &[
+        AudioAsset {
+            path: seyk_embeddinggemma::audio::FILES[0],
+            bytes: 249330,
+            sha256: "04a9a9094ba76fb169e4c69be45a4b621580188654d6be59eab860eadcd42d3c",
+        },
+        AudioAsset {
+            path: seyk_embeddinggemma::audio::FILES[1],
+            bytes: 340058624,
+            sha256: "aa6361d898e1f1d6303f8dd2b5fabf4fd3629e15fd709e9cb06ac5cb9416a030",
+        },
+    ]
+}
+
+#[cfg(feature = "audio")]
+pub fn audio_directory() -> PathBuf {
+    hf_hub::Cache::from_env()
+        .path()
+        .join(format!(
+            "models--{}",
+            seyk_embeddinggemma::ONNX_REPO.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(seyk_embeddinggemma::ONNX_REVISION)
+}
+
+#[cfg(feature = "audio")]
+fn verify_audio_asset(path: &Path, asset: &AudioAsset) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let invalid = || {
+        Error::Embedding(format!(
+            "audio asset {} missing or checksum mismatch; run seyk setup audio",
+            asset.path
+        ))
+    };
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == asset.bytes) {
+        return Err(invalid());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|_| invalid())?;
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return Err(invalid());
+    }
+    let mut reader = file.take(asset.bytes + 1);
+    let mut hash = Sha256::new();
+    let mut count = 0;
+    let mut block = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut block).map_err(|_| invalid())?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        hash.update(&block[..n]);
+    }
+    if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Verify pinned audio weights offline, without creating an inference session.
+#[cfg(feature = "audio")]
+pub fn verify_audio(dir: &Path) -> Result<()> {
+    for asset in audio_assets() {
+        verify_audio_asset(&dir.join(asset.path), asset)?;
+    }
+    Ok(())
+}
+
+/// Explicitly provision pinned q8 audio files; never called by inference.
 #[cfg(feature = "audio")]
 pub fn download_audio() -> Result<PathBuf> {
-    let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .with_progress(true)
-        .build()
-        .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
-    let files: Vec<String> = seyk_embeddinggemma::audio::FILES
-        .iter()
-        .map(|f| f.to_string())
-        .collect();
-    download_files(
-        seyk_embeddinggemma::ONNX_REVISION,
-        &files,
-        |revision, file| {
-            api.repo(hf_hub::Repo::with_revision(
-                seyk_embeddinggemma::ONNX_REPO.into(),
-                hf_hub::RepoType::Model,
-                revision.into(),
-            ))
-            .get(file)
-            .map_err(|e| Error::Embedding(format!("downloading {file}: {e}")))
-        },
-    )
+    let dir = audio_directory();
+    install_audio_with(&dir, audio_assets(), |asset| {
+        let api = hf_hub::api::sync::ApiBuilder::from_env()
+            .with_progress(true)
+            .build()
+            .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
+        api.repo(hf_hub::Repo::with_revision(
+            seyk_embeddinggemma::ONNX_REPO.into(),
+            hf_hub::RepoType::Model,
+            seyk_embeddinggemma::ONNX_REVISION.into(),
+        ))
+        .download(asset.path)
+        .map_err(|e| Error::Embedding(format!("downloading {}: {e}", asset.path)))
+    })
+}
+
+#[cfg(feature = "audio")]
+fn install_audio_with(
+    dir: &Path,
+    assets: &[AudioAsset],
+    mut fetch: impl FnMut(&AudioAsset) -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    for asset in assets {
+        if verify_audio_asset(&dir.join(asset.path), asset).is_ok() {
+            continue;
+        }
+        let path = fetch(asset)?;
+        if path != dir.join(asset.path) {
+            return Err(Error::Embedding(
+                "audio download returned a different snapshot".into(),
+            ));
+        }
+        verify_audio_asset(&path, asset)?;
+    }
+    Ok(dir.into())
 }
 
 fn download_files(
@@ -94,6 +194,54 @@ fn snapshot_root(file: &Path, rel: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_install_verifies_repairs_and_skips_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = [AudioAsset {
+            path: "audio.bin",
+            bytes: 4,
+            sha256: "770e607624d689265ca6c44884d0807d9b054d23c473c106c72be9de08b7376c",
+        }];
+        let mut requests = 0;
+        let mut install = || {
+            install_audio_with(dir.path(), &assets, |asset| {
+                requests += 1;
+                let path = dir.path().join(asset.path);
+                std::fs::write(&path, b"good").unwrap();
+                Ok(path)
+            })
+        };
+        install().unwrap();
+        install().unwrap();
+        std::fs::write(dir.path().join("audio.bin"), b"evil").unwrap();
+        install().unwrap();
+        assert_eq!(requests, 2);
+        assert_eq!(
+            std::fs::read(dir.path().join("audio.bin")).unwrap(),
+            b"good"
+        );
+        install_audio_with(dir.path(), &assets, |_| panic!("must skip verified file")).unwrap();
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn corrupt_audio_download_fails_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = [AudioAsset {
+            path: "audio.bin",
+            bytes: 4,
+            sha256: "invalid",
+        }];
+        let error = install_audio_with(dir.path(), &assets, |asset| {
+            let path = dir.path().join(asset.path);
+            std::fs::write(&path, b"evil").unwrap();
+            Ok(path)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("run seyk setup audio"));
+    }
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
