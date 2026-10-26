@@ -124,7 +124,7 @@ fn dense_fixture_restart_reuses_all_cached_document_inputs() {
     let database = cache_dir.path().join("index.sqlite");
     // Invented dense numeric text exercises many character-sized segments.
     let dense = (0..8000).map(|i| format!("{i},")).collect::<String>();
-    std::fs::write(root.path().join("dense.json"), dense).unwrap();
+    std::fs::write(root.path().join("dense.txt"), dense).unwrap();
     let embedder = Arc::new(Recording {
         inner: common::FakeEmbedder::new(Dimension::D128, "dense-restart"),
         tasks: Mutex::new(vec![]),
@@ -139,6 +139,7 @@ fn dense_fixture_restart_reuses_all_cached_document_inputs() {
     };
     let first = build();
     let report = first.index().paths([root.path()]).execute().unwrap();
+    assert_eq!(report.sync.resources_discovered, 1);
     assert!(report.sync.segments_embedded > 16);
     let recorded = embedder.tasks.lock().unwrap().len();
     assert!(recorded > 16);
