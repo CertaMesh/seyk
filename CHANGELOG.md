@@ -13,6 +13,10 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ### Added
 
+- Opt-in padded-token and attention-work budgets for text embedding batches,
+  CPU allocator experiments, and content-free memory phase diagnostics.
+  Existing defaults remain unchanged pending calibration.
+  ([#95](https://github.com/CertaMesh/seyk/pull/95))
 - Hybrid search: one query now combines meaning, keywords (BM25) and file names,
   so both a question and `garden.md` find the right file. Each hit shows which
   signals matched, as CLI tags and the `matched` MCP field.

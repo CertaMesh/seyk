@@ -132,7 +132,9 @@ fn batching_does_not_change_vectors() {
 fn memory_budget_bit_identity() {
     use seyk_embeddinggemma::{BatchBudget, CpuAllocator};
     let r = reference();
-    let inputs: Vec<_> = r
+    let long = "the ".repeat(1100);
+    let medium = "the ".repeat(700);
+    let mut inputs: Vec<_> = r
         .docs
         .iter()
         .map(|d| seyk_embed::ResourceInput::Text {
@@ -140,9 +142,34 @@ fn memory_budget_bit_identity() {
             text: &d.text,
         })
         .collect();
+    inputs.extend([
+        seyk_embed::ResourceInput::Text {
+            title: None,
+            text: &long,
+        },
+        seyk_embed::ResourceInput::Text {
+            title: None,
+            text: &medium,
+        },
+    ]);
     let mut mismatched_vectors = 0;
     for dimension in Dimension::ALL {
         let baseline = GemmaEmbedder::load(model_support::config(dimension)).unwrap();
+        let max_length = inputs
+            .iter()
+            .map(|input| match input {
+                seyk_embed::ResourceInput::Text { title, text } => baseline
+                    .text_token_ids(&GemmaEmbedder::document_input(*title, text))
+                    .unwrap()
+                    .len(),
+                _ => unreachable!(),
+            })
+            .max()
+            .unwrap();
+        assert!(
+            inputs.len() * max_length * max_length > BatchBudget::CANDIDATE.attention_cells,
+            "fixture must force subdivision under the candidate budget"
+        );
         let expected_docs = baseline.embed_resources(&inputs).unwrap();
         let expected_queries: Vec<_> = r
             .queries
