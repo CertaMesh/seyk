@@ -25,4 +25,4 @@ Start with the [project README](../README.md) for what Seyk is and a quickstart.
 - [Multimodal support](multimodal.md): status of images, audio, video and PDF.
 - [Development](development.md): correctness checks, tests, evaluating on your own notes.
 - [Architecture](architecture.md): pipeline overview and design reports.
-- [Changelog](CHANGELOG.md)
+- [Changelog](../CHANGELOG.md)
