@@ -15,12 +15,10 @@ fn missing_vision_profile_preserves_text_vectors_and_reports_skipped_media() {
     let docs = temp.path().join("docs");
     std::fs::create_dir_all(model_dir.join("onnx")).unwrap();
     std::fs::create_dir(&docs).unwrap();
-    let requested = GemmaConfig {
-        source: ModelSource::Directory(model_dir.clone()),
-        dimension: Dimension::D128,
-        vision: true,
-        ..GemmaConfig::default()
-    };
+    let mut requested = GemmaConfig::default();
+    requested.source = ModelSource::Directory(model_dir.clone());
+    requested.dimension = Dimension::D128;
+    requested.vision = true;
     let mut text_only = requested.clone();
     text_only.vision = false;
     for file in text_only.files() {

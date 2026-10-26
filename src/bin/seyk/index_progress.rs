@@ -1,7 +1,6 @@
 //! Standalone indexing telemetry. Counts come only from the engine's snapshots.
 #[cfg(test)]
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use crate::common;
 use std::io::Write;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
