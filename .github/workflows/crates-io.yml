@@ -1,6 +1,7 @@
 name: Crates.io preparation
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -25,12 +26,7 @@ jobs:
         # Cargo 1.99 supports a workspace dry-run and stages sibling packages in
         # a temporary local registry, then verifies consumers in dependency order.
         # No registry token is needed or provided.
-        run: |
-          rm -rf target/package
-          cargo publish --dry-run --locked \
-            -p seyk-embed -p seyk-embeddinggemma -p seyk-core -p seyk-stt -p seyk
-      - name: Review every file and report compressed and unpacked sizes
-        run: python3 scripts/check_crate_packages.py
+        run: python3 scripts/check_crate_packages.py prepare
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: crate-packages
