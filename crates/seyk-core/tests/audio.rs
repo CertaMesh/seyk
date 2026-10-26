@@ -388,7 +388,9 @@ fn limits_filter_both_cache_fast_paths_and_cached_only_search() {
     drop(high);
     for touch in [false, true] {
         if touch {
-            std::fs::File::open(&path)
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
                 .unwrap()
                 .set_times(std::fs::FileTimes::new().set_modified(
                     std::time::SystemTime::UNIX_EPOCH

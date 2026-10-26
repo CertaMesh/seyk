@@ -66,7 +66,17 @@ fn logical_child_rejects_parent_traversal() {
     let temp = tempfile::tempdir().unwrap();
     let root = PolicyRoot::new(temp.path()).unwrap();
     for relative in ["../outside", "child/../../outside", "child/../sibling"] {
-        let candidate = root.authorize_path().join(relative);
+        // PathBuf::join normalizes parent segments on Windows verbatim paths.
+        // Preserve the traversal spelling so the guard actually receives it.
+        let mut spelling = root.authorize_path().as_os_str().to_os_string();
+        spelling.push(std::path::MAIN_SEPARATOR_STR);
+        spelling.push(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let candidate = std::path::PathBuf::from(spelling);
+        assert!(
+            candidate
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        );
         assert!(root.logical_child(&candidate).is_none(), "{relative}");
         assert!(root.current().unwrap().logical_child(&candidate).is_none());
     }
