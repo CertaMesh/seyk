@@ -30,6 +30,9 @@ jobs:
       # Model-backed tests are #[ignore]d: CI never downloads the weights.
       - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo test --example bench_retrieval --locked
+      # Lexical engine on the invented fixture: proves the example runs, with no model.
+      - name: Run the model-free embedding example
+        run: cargo run --example embed_search --locked
       - name: Check audio-free ONNX library
         run: cargo check -p seyk --no-default-features --features onnx --lib --locked
       - name: Check standalone dependency boundaries

@@ -9,7 +9,10 @@ use tempfile::TempDir;
 
 fn binary(hf_home: &Path) -> Command {
     let mut cmd = Command::cargo_bin("seyk").unwrap();
-    cmd.env("HF_HOME", hf_home).env("HF_HUB_OFFLINE", "1");
+    // A local SEYK_MODEL directory would bypass the empty HF_HOME.
+    cmd.env_remove("SEYK_MODEL")
+        .env("HF_HOME", hf_home)
+        .env("HF_HUB_OFFLINE", "1");
     cmd
 }
 
@@ -33,13 +36,13 @@ fn search(hf_home: &Path, query: &str, dir: &Path) -> Vec<u8> {
         .clone()
 }
 
-#[test]
-fn decision_record_is_found_and_extracted_exactly() {
+/// Extracts the top hit and checks it is exactly the expected source lines.
+fn assert_top_hit_extracts(query: &str, file: &str, lines: (u64, u64), passage: &str) {
     let temp = TempDir::new().unwrap();
     let dir = temp.path().join("decisions");
     copy_fixture(&dir);
 
-    let json = search(temp.path(), "why did we pick SQLite over Postgres", &dir);
+    let json = search(temp.path(), query, &dir);
     let response: Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(
         response["degraded"],
@@ -50,9 +53,15 @@ fn decision_record_is_found_and_extracted_exactly() {
         hit["resource"]
             .as_str()
             .unwrap()
-            .ends_with("/0007-storage-sqlite.md"),
+            .ends_with(&format!("/{file}")),
         "{hit}"
     );
+    assert_eq!(
+        hit["locator"]["line_start"].as_u64(),
+        Some(lines.0),
+        "{hit}"
+    );
+    assert_eq!(hit["locator"]["line_end"].as_u64(), Some(lines.1), "{hit}");
 
     let extracted = binary(temp.path())
         .args(["extract", "--from-json", "-"])
@@ -62,10 +71,33 @@ fn decision_record_is_found_and_extracted_exactly() {
         .get_output()
         .stdout
         .clone();
-    let source = std::fs::read(dir.join("0007-storage-sqlite.md")).unwrap();
+    let source = std::fs::read(dir.join(file)).unwrap();
     let start = hit["locator"]["byte_start"].as_u64().unwrap() as usize;
     let end = hit["locator"]["byte_end"].as_u64().unwrap() as usize;
     assert_eq!(extracted, &source[start..end]);
+    let extracted = String::from_utf8(extracted).unwrap();
+    assert!(extracted.contains(passage), "{extracted}");
+}
+
+#[test]
+fn decision_passage_is_found_and_extracted_exactly() {
+    assert_top_hit_extracts(
+        "store tickets in a single SQLite database file",
+        "0007-storage-sqlite.md",
+        (13, 18),
+        "We store tickets in a single SQLite database file in write-ahead-log mode,",
+    );
+}
+
+/// The walk-through in examples/agent-decisions/README.md.
+#[test]
+fn readme_walkthrough_finds_the_consequences() {
+    assert_top_hit_extracts(
+        "how do background jobs write to the database?",
+        "0007-storage-sqlite.md",
+        (20, 25),
+        "so background jobs queue their writes through the main service",
+    );
 }
 
 #[test]
