@@ -143,15 +143,13 @@ fn main() -> Result<()> {
     }
     let cache = Path::new(&args[2]);
     fs::create_dir_all(cache)?;
-    let config = GemmaConfig {
-        source: ModelSource::Directory(args[3].clone().into()),
-        dimension: Dimension::D768,
-        precision: Precision::Q8,
-        vision: true,
-        audio: false,
-        threads: Some(4),
-        ..GemmaConfig::default()
-    };
+    let mut config = GemmaConfig::default();
+    config.source = ModelSource::Directory(args[3].clone().into());
+    config.dimension = Dimension::D768;
+    config.precision = Precision::Q8;
+    config.vision = true;
+    config.audio = false;
+    config.threads = Some(4);
     let model = GemmaEmbedder::load(config)?;
     let identity = json!({"model":model.identity(),"image":model.input_identity(Modality::Image)?,
         "text":model.input_identity(Modality::Text)?});
