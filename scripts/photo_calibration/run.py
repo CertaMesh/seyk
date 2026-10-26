@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from build_set import EVAL, MAX_IMAGE_BYTES, ROOT, build, write_json
+from build_set import EVAL, ROOT, build, download_estimate, enforce_download_budget, write_json
 from measure import measure
 
 SUBJECTS = ("a bicycle", "a wooden table", "a crowded market", "a kitchen", "a railway station",
@@ -67,9 +67,10 @@ def main():
     args = parser.parse_args()
     if args.count < 1000:
         parser.error("at least 1,000 calibration photos are required")
-    print(json.dumps({"download_upper_bound_gb": args.count * MAX_IMAGE_BYTES / 1e9,
-                      "approval_required": args.count * MAX_IMAGE_BYTES > 5e9,
+    print(json.dumps({**download_estimate(args.count, args.approved_download_gb),
                       "eval_download": False, "model_download": False}), flush=True)
+    if args.execute:
+        enforce_download_budget(args.count, args.approved_download_gb)
     if not args.execute and not args.score_only:
         return
     directory, fixture = args.directory.expanduser().resolve(), args.fixture.expanduser().resolve()

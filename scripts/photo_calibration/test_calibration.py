@@ -1,6 +1,8 @@
 """Synthetic/offline tests. Never fetch images or load model weights."""
 import io
 import copy
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 import json
 import os
 from pathlib import Path
@@ -59,15 +61,48 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(sum(r["split"] == "fit" for r in first), 1500)
         self.assertEqual(sum(r["split"] == "heldout" for r in first), 500)
 
-    def test_estimate_and_approval_stop_before_network(self):
-        with patch.object(builder, "discover", side_effect=AssertionError("network")):
-            with tempfile.TemporaryDirectory() as directory:
-                with self.assertRaisesRegex(ValueError, "positive and finite"):
-                    builder.build(Path(directory), 2501, float("nan"))
-                with self.assertRaisesRegex(ValueError, "exceeds 5 GB"):
-                    builder.build(Path(directory), 2501, None)
-        with patch.object(run.sys, "argv", ["run"]), patch.object(run, "build", side_effect=AssertionError("network")), patch.object(run.subprocess, "run", side_effect=AssertionError("model")):
-            run.main()
+    def test_download_budget_boundaries_precede_discovery(self):
+        cases = ((2000, None, True), (2001, None, False),
+                 (2001, 4.002, True), (2001, 4.0, False),
+                 (2000, 3.999, False), (2000, 4.0, True))
+        with tempfile.TemporaryDirectory() as directory:
+            for count, approved, allowed in cases:
+                with self.subTest(count=count, approved=approved):
+                    with patch.object(builder, "discover", side_effect=RuntimeError("discovery reached")) as discover:
+                        if allowed:
+                            with self.assertRaisesRegex(RuntimeError, "discovery reached"):
+                                builder.build(Path(directory), count, approved)
+                            discover.assert_called_once()
+                        else:
+                            with self.assertRaisesRegex(ValueError, "exceeds .* GB budget"):
+                                builder.build(Path(directory), count, approved)
+                            discover.assert_not_called()
+            for invalid in (float("nan"), float("inf"), 0, -1):
+                with patch.object(builder, "discover") as discover:
+                    with self.assertRaisesRegex(ValueError, "positive and finite"):
+                        builder.build(Path(directory), 2000, invalid)
+                    discover.assert_not_called()
+
+    def test_both_entry_points_report_the_effective_budget_and_estimate_offline(self):
+        for module, action in ((builder, "--download"), (run, "--execute")):
+            for count, approved, required in ((2000, None, False), (2001, None, True),
+                                              (2001, "4.002", False), (2000, "3.999", True)):
+                args = ["entry", "--count", str(count)]
+                if approved is not None:
+                    args += ["--approved-download-gb", approved]
+                with self.subTest(entry=module.__name__, count=count, approved=approved):
+                    with patch.object(module.sys, "argv", args), patch.object(module, "build", side_effect=AssertionError("network")), patch.object(run.subprocess, "run", side_effect=AssertionError("model")), patch("sys.stdout", new_callable=io.StringIO) as output:
+                        module.main()
+                    estimate = json.loads(output.getvalue())
+                    self.assertEqual(estimate["approval_required"], required)
+                    self.assertEqual(estimate["download_budget_gb"], 4.0 if approved is None else float(approved))
+                    self.assertEqual(estimate["download_upper_bound_gb"], count * 2_000_000 / 1e9)
+                    if required:
+                        with patch.object(module.sys, "argv", args + [action]), patch.object(builder, "discover") as discover, patch.object(run.subprocess, "run") as subprocess, patch("sys.stdout", new_callable=io.StringIO):
+                            with self.assertRaisesRegex(ValueError, "exceeds .* GB budget"):
+                                module.main()
+                            discover.assert_not_called()
+                            subprocess.assert_not_called()
 
     def test_download_is_bounded_and_bad_responses_fail(self):
         response = MagicMock()
@@ -82,6 +117,52 @@ class BuilderTests(unittest.TestCase):
             response.status = 206
             with self.assertRaisesRegex(ValueError, "HTTP 200"):
                 builder.download({"url": "https://upload.wikimedia.org/a.jpg"})
+
+    def http_error(self, status, retry=None):
+        headers = {} if retry is None else {"Retry-After": retry}
+        return builder.fetcher.urllib.error.HTTPError("https://upload.wikimedia.org/a.jpg", status,
+                                                     "busy", headers, io.BytesIO())
+
+    def response(self):
+        response = MagicMock()
+        response.status = 200
+        response.headers.get_content_type.return_value = "image/jpeg"
+        response.read.return_value = b"JPEG bytes"
+        response.__enter__.return_value = response
+        return response
+
+    def test_image_retries_are_bounded_and_honour_retry_after(self):
+        errors = [self.http_error(429, "45"), self.http_error(503, "120"),
+                  self.http_error(429), self.http_error(503)]
+        with patch.object(builder.fetcher.OPENER, "open", side_effect=errors) as opened, patch.object(builder.fetcher.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "after 3 retries"):
+                builder.download({"url": "https://upload.wikimedia.org/a.jpg"})
+            self.assertEqual(opened.call_count, 4)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 45, 1, 120, 1, 240, 1])
+            requests = [call.args[0] for call in opened.call_args_list]
+            self.assertTrue(all(request is requests[0] for request in requests))
+            self.assertEqual(requests[0].full_url, "https://upload.wikimedia.org/a.jpg")
+
+    def test_retry_accepts_http_dates_and_keeps_validation(self):
+        future = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120))
+        response = self.response()
+        with patch.object(builder.fetcher.OPENER, "open", side_effect=[self.http_error(429, future), response]), patch.object(builder.fetcher.time, "sleep") as sleep, patch.object(builder, "validate_jpeg") as validate:
+            self.assertEqual(builder.download({"url": "https://upload.wikimedia.org/a.jpg"}), b"JPEG bytes")
+            self.assertEqual([call.args[0] for call in sleep.call_args_list][::2], [1, 1])
+            self.assertTrue(110 <= sleep.call_args_list[1].args[0] <= 120)
+            response.read.assert_called_once_with(builder.MAX_IMAGE_BYTES + 1)
+            validate.assert_called_once_with(b"JPEG bytes")
+        response = self.response()
+        response.headers.get_content_type.return_value = "text/html"
+        with patch.object(builder.fetcher.OPENER, "open", side_effect=[self.http_error(503), response]) as opened, patch.object(builder.fetcher.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, "HTTP 200 image/jpeg"):
+                builder.download({"url": "https://upload.wikimedia.org/a.jpg"})
+            self.assertEqual(opened.call_count, 2)
+        for error in (self.http_error(404), ValueError("redirect refused")):
+            with patch.object(builder.fetcher.OPENER, "open", side_effect=error) as opened, patch.object(builder.fetcher.time, "sleep"):
+                with self.assertRaises(type(error)):
+                    builder.download({"url": "https://upload.wikimedia.org/a.jpg"})
+                self.assertEqual(opened.call_count, 1)
 
     def test_verify_rejects_eval_hash_duplicates_and_changed_bytes_offline(self):
         output = io.BytesIO()
@@ -104,6 +185,48 @@ class BuilderTests(unittest.TestCase):
                 image.write_bytes(b"changed")
                 with self.assertRaisesRegex(ValueError, "hash/size"):
                     builder.verify(path, [])
+
+
+class CacheTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("SEYK_CALIBRATION_EXPORTER"), "CI provides the model-free exporter")
+    def test_same_size_changed_weights_invalidate_cached_vectors(self):
+        exporter = str(Path(os.environ["SEYK_CALIBRATION_EXPORTER"]).resolve())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "model"
+            model.mkdir()
+            (model / "model.onnx").write_bytes(b"synthetic ONNX stub; never loaded")
+            weights = model / "model.onnx_data"
+            weights.write_bytes(b"old-weight-bytes")
+            size = weights.stat().st_size
+            digest_map = root / "model-files.json"
+            cache = root / "vectors"
+            cache.mkdir()
+
+            def key(hashes):
+                builder.write_json(digest_map, hashes)
+                return run.subprocess.run([exporter, "--cache-key", str(digest_map)],
+                                          check=True, capture_output=True, text=True).stdout.strip()
+
+            before = run.model_files(model)
+            old_key = key(before)
+            cached = cache / f"{old_key}.json"
+            cached.write_text('{"synthetic": "old vector"}')
+            self.assertEqual(key(run.model_files(model)), old_key)
+            self.assertTrue(cached.exists())
+            weights.write_bytes(b"new-weight-bytes")
+            self.assertEqual(weights.stat().st_size, size)
+            after = run.model_files(model)
+            self.assertEqual(before["model.onnx"], after["model.onnx"])
+            self.assertNotEqual(before["model.onnx_data"], after["model.onnx_data"])
+            new_key = key(after)
+            self.assertNotEqual(new_key, old_key)
+            self.assertFalse((cache / f"{new_key}.json").exists())
+            self.assertTrue(cached.exists())
+            # The entire map is bound, including non-ONNX preprocessing assets.
+            (model / "processor.json").write_text('{}')
+            self.assertNotEqual(key(run.model_files(model)), new_key)
+            self.assertEqual(key(dict(reversed(list(after.items())))), new_key)
 
 
 class NumericTests(unittest.TestCase):

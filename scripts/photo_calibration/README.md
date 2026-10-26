@@ -10,7 +10,7 @@ Install the pinned Python dependencies in an isolated environment, or use `uv`:
 uv run --with-requirements scripts/photo_calibration/requirements.txt python scripts/photo_calibration/run.py
 ```
 
-The default command estimates only. It makes no network requests and loads no models. The image download has a hard upper bound of **4.0 GB** for 2,000 photos at 2,000,000 bytes each. The builder rejects larger images without substituting another photo. Metadata and vectors use additional disk space. A count whose image bound exceeds 5 GB requires approval and `--approved-download-gb` with the approved bound.
+The default command estimates only. It makes no network requests and loads no models. The image download has a hard upper bound of **4.0 GB** for 2,000 photos at 2,000,000 bytes each. The builder rejects larger images without substituting another photo. Metadata and vectors use additional disk space. The default download budget is 4.0 GB. A count above 2,000 requires an explicitly approved larger `--approved-download-gb` bound before discovery or downloads. A smaller supplied bound also applies, even below 4.0 GB. Both entry points report the effective bound and whether further approval is required.
 
 ## Provision the inputs
 
@@ -32,11 +32,13 @@ uv run --with-requirements scripts/photo_calibration/requirements.txt python scr
 
 On Windows, pass the exporter path with its `.exe` extension. `--directory` changes the calibration destination. `--fixture` changes the evaluation fixture destination. Neither models nor evaluation images have a download fallback.
 
-The command discovers broad-topic Commons JPEGs, verifies each image's CC0 licence name and URL through [Imageinfo metadata](https://www.mediawiki.org/wiki/API:Imageinfo), and pins the source URL, original hash, licence evidence, and downloaded SHA-256. It rejects non-960px thumbnails, redirects, duplicate source files, duplicate downloaded bytes, and evaluation fixture titles, IDs, or hashes. The selected set is saved before downloads. An interrupted run resumes that exact selection and cached vectors. A changed image or ineligible selected file stops the experiment.
+The command discovers broad-topic Commons JPEGs, verifies each image's CC0 licence name and URL through [Imageinfo metadata](https://www.mediawiki.org/wiki/API:Imageinfo), and pins the source URL, original hash, licence evidence, and downloaded SHA-256. It rejects non-960px thumbnails, redirects, duplicate source files, duplicate downloaded bytes, and evaluation fixture titles, IDs, or hashes. The selected set is saved before downloads. Image downloads retry HTTP 429 and 503 responses at most three times, honouring `Retry-After` seconds or dates with increasing delays. Invalid status, content type, image size, or redirects stop the download without retries or substitution. An interrupted run resumes that exact selection and cached vectors. A changed image or ineligible selected file stops the experiment.
 
 The seeded BLAKE3 order assigns exactly 1,500 photos to A and 500 to held-out B at the default size. A has a further deterministic 80/20 fit/validation split. Neither B nor evaluation photos enter fitting. The 200 generic query captions are generated independently of evaluation queries and checked for overlap.
 
 M1 chooses symmetric percentile bounds from 0.1, 0.25, 0.5, 1, and 2 percent by reconstruction MSE on A's validation partition. M2 searches independent lower and upper bounds on the same grid with per-coordinate query-energy weighting. A positive coordinate weight cannot change that coordinate's minimizer, so M2's additional freedom comes from asymmetric bounds. M3 widens only A coordinates with clipping above 3 percent to include their 0.5 and 99.5 percentiles, preserving other v1 table bytes.
+
+Vector cache keys include the complete verified model-file SHA-256 map, model and input identities, task, and input bytes. Changing any model file, including same-size external weights or preprocessing files, produces new keys and prevents old vectors from being reused. The previous cache-key format is also invalidated.
 
 The command writes `manifest.json`, `selection.json`, `job.json`, resumable vectors, `export.json`, candidate binary tables, and `candidates/evidence.json` under the calibration directory. The evidence pins model file hashes, manifest and export hashes, model/input identities, seed, table hashes, and per-coordinate choices. It reports clipping and reconstruction MSE separately for B and the evaluation fixture, score MAE and Spearman correlation over fixture pairs, and shortlist recall for k = 1, 5, 10 with R = k, 2k, 50 over B plus the fixture.
 

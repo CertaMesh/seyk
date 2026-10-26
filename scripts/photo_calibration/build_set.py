@@ -2,6 +2,7 @@
 """Build a separate, pinned CC0 calibration set. Default mode estimates only."""
 import argparse
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import io
 import json
@@ -22,6 +23,7 @@ EVAL = ROOT / "scripts/fixtures/photo-manifest.json"
 LICENCE = "https://creativecommons.org/publicdomain/zero/1.0/"
 SEED = "seyk-photo-calibration-2026-v1"
 MAX_IMAGE_BYTES = 2_000_000
+DEFAULT_DOWNLOAD_BYTES = 4_000_000_000
 TOPICS = ("animals birds", "plants flowers", "forests mountains", "rivers lakes", "ocean coast",
           "cities streets", "architecture buildings", "interiors furniture", "food cooking",
           "people activities", "sports recreation", "vehicles transport", "tools equipment",
@@ -137,16 +139,27 @@ def download(row):
     """Bound bytes read even if Content-Length is absent or incorrect."""
     request = fetcher.urllib.request.Request(row["url"], headers={
         "User-Agent": "SeykPhotoCalibration/1.0 (https://github.com/CertaMesh/seyk)"})
-    # Reuse the pinned-URL redirect policy. A failed image is never substituted.
-    fetcher.time.sleep(1)
-    with fetcher.OPENER.open(request, timeout=60) as response:
-        if response.status != 200 or response.headers.get_content_type() != "image/jpeg":
-            raise ValueError("expected HTTP 200 image/jpeg")
-        data = response.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ValueError("photo exceeds the 2 MB limit; do not substitute it")
-    validate_jpeg(data)
-    return data
+    wait = 0.0
+    for attempt in range(4):
+        fetcher.time.sleep(1)
+        try:
+            # The pinned-URL opener refuses redirects on every attempt.
+            with fetcher.OPENER.open(request, timeout=60) as response:
+                if response.status != 200 or response.headers.get_content_type() != "image/jpeg":
+                    raise ValueError("expected HTTP 200 image/jpeg")
+                data = response.read(MAX_IMAGE_BYTES + 1)
+            if len(data) > MAX_IMAGE_BYTES:
+                raise ValueError("photo exceeds the 2 MB limit; do not substitute it")
+            validate_jpeg(data)
+            return data
+        except fetcher.urllib.error.HTTPError as error:
+            if error.code not in (429, 503):
+                raise
+            if attempt == 3:
+                raise RuntimeError(f"HTTP {error.code} after 3 retries; stopping without substitutes") from error
+            wait = max(30.0, fetcher.retry_after(error.headers.get("Retry-After")), wait * 2)
+            print(f"HTTP {error.code}; retry {attempt + 1}/3 in {wait:g}s: {row['url']}", flush=True)
+            fetcher.time.sleep(wait)
 
 
 def validate_jpeg(data):
@@ -190,12 +203,26 @@ def verify(directory, excluded=None):
     return manifest
 
 
-def build(directory, count, approved_gb):
-    upper = count * MAX_IMAGE_BYTES
+def download_estimate(count, approved_gb=None):
     if approved_gb is not None and (not math.isfinite(approved_gb) or approved_gb <= 0):
         raise ValueError("approved download bound must be positive and finite")
-    if upper > 5_000_000_000 and (approved_gb is None or upper > approved_gb * 1e9):
-        raise ValueError("download exceeds 5 GB; obtain approval and pass --approved-download-gb")
+    budget = Decimal(DEFAULT_DOWNLOAD_BYTES) if approved_gb is None else Decimal(str(approved_gb)) * 1_000_000_000
+    upper = count * MAX_IMAGE_BYTES
+    return {"photos": count, "maximum_image_bytes": MAX_IMAGE_BYTES,
+            "download_upper_bound_gb": upper / 1e9,
+            "download_budget_gb": float(budget / 1_000_000_000),
+            "approval_required": upper > budget}
+
+
+def enforce_download_budget(count, approved_gb=None):
+    estimate = download_estimate(count, approved_gb)
+    if estimate["approval_required"]:
+        raise ValueError(f"download upper bound {estimate['download_upper_bound_gb']:g} GB exceeds "
+                         f"{estimate['download_budget_gb']:g} GB budget; obtain approval and pass --approved-download-gb")
+
+
+def build(directory, count, approved_gb):
+    enforce_download_budget(count, approved_gb)
     directory.mkdir(parents=True, exist_ok=True)
     if (directory / "manifest.json").exists():
         manifest = verify(directory)
@@ -251,9 +278,7 @@ def main():
     args = parser.parse_args()
     if args.count < 1000:
         parser.error("at least 1,000 separate calibration photos are required")
-    print(json.dumps({"photos": args.count, "maximum_image_bytes": MAX_IMAGE_BYTES,
-                      "download_upper_bound_gb": args.count * MAX_IMAGE_BYTES / 1e9,
-                      "approval_required": args.count * MAX_IMAGE_BYTES > 5_000_000_000}))
+    print(json.dumps(download_estimate(args.count, args.approved_download_gb)), flush=True)
     if args.download:
         build(args.directory, args.count, args.approved_download_gb)
     elif args.verify:

@@ -13,6 +13,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Deserialize)]
 struct Job {
+    model_files_sha256: BTreeMap<String, String>,
     images: Vec<Image>,
     queries: Vec<Query>,
 }
@@ -47,23 +48,56 @@ struct QueryOutput {
     scores: BTreeMap<usize, Value>,
 }
 
-fn cached(
-    model: &GemmaEmbedder,
-    directory: &Path,
-    input: ResourceInput<'_>,
+fn check_model_files(model_files: &BTreeMap<String, String>) -> Result<()> {
+    if model_files.is_empty()
+        || model_files.iter().any(|(name, digest)| {
+            name.is_empty()
+                || digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        return Err("job requires the full verified model-file SHA-256 map".into());
+    }
+    Ok(())
+}
+
+fn cache_key(
+    model_files: &BTreeMap<String, String>,
+    model_identity: &[u8],
+    input_identity: &str,
+    input: &ResourceInput<'_>,
     task: EmbeddingTask,
-) -> Result<Embedding> {
+) -> Result<String> {
     let mut hash = blake3::Hasher::new();
-    hash.update(b"photo-calibration-export-v1");
-    hash.update(&serde_json::to_vec(model.identity())?);
-    hash.update(model.input_identity(input.modality())?.as_bytes());
+    hash.update(b"photo-calibration-export-v2");
+    hash.update(&serde_json::to_vec(model_files)?);
+    hash.update(model_identity);
+    hash.update(input_identity.as_bytes());
     hash.update(format!("{task:?}").as_bytes());
-    match &input {
+    match input {
         ResourceInput::Image { bytes } => hash.update(bytes),
         ResourceInput::Text { text, .. } => hash.update(text.as_bytes()),
         _ => return Err("unsupported calibration input".into()),
     };
-    let key = hash.finalize().to_hex().to_string();
+    Ok(hash.finalize().to_hex().to_string())
+}
+
+fn cached(
+    model: &GemmaEmbedder,
+    directory: &Path,
+    model_files: &BTreeMap<String, String>,
+    input: ResourceInput<'_>,
+    task: EmbeddingTask,
+) -> Result<Embedding> {
+    let key = cache_key(
+        model_files,
+        &serde_json::to_vec(model.identity())?,
+        model.input_identity(input.modality())?,
+        &input,
+        task,
+    )?;
     let path = directory.join(format!("{key}.json"));
     if path.exists() {
         let entry: Cached = serde_json::from_slice(&fs::read(path)?)?;
@@ -133,6 +167,24 @@ fn main() -> Result<()> {
     if args.len() == 2 && args[0] == "--synthetic" {
         return synthetic(Path::new(&args[1]));
     }
+    if args.len() == 2 && args[0] == "--cache-key" {
+        let model_files = serde_json::from_slice(&fs::read(&args[1])?)?;
+        check_model_files(&model_files)?;
+        println!(
+            "{}",
+            cache_key(
+                &model_files,
+                b"synthetic-model-identity",
+                "synthetic-text-identity",
+                &ResourceInput::Text {
+                    title: None,
+                    text: "identical query bytes",
+                },
+                EmbeddingTask::SearchQuery,
+            )?
+        );
+        return Ok(());
+    }
     if args.len() != 4 {
         return Err("usage: photo_calibration_export JOB.json OUTPUT.json CACHE MODEL_DIR".into());
     }
@@ -141,6 +193,7 @@ fn main() -> Result<()> {
     if job.images.is_empty() || job.queries.is_empty() {
         return Err("calibration job must contain images and queries".into());
     }
+    check_model_files(&job.model_files_sha256)?;
     let cache = Path::new(&args[2]);
     fs::create_dir_all(cache)?;
     let mut config = GemmaConfig::default();
@@ -166,6 +219,7 @@ fn main() -> Result<()> {
         let vectors = widths(cached(
             &model,
             cache,
+            &job.model_files_sha256,
             ResourceInput::Image { bytes: &bytes },
             EmbeddingTask::SearchDocument,
         )?)?;
@@ -190,6 +244,7 @@ fn main() -> Result<()> {
         let vectors = widths(cached(
             &model,
             cache,
+            &job.model_files_sha256,
             ResourceInput::Text {
                 title: None,
                 text: &query.text,
