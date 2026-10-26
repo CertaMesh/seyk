@@ -1,0 +1,9 @@
+Seyk
+https://github.com/CertaMesh/seyk
+
+Seyk source code is licensed under Apache-2.0; see LICENSE.
+
+Dependencies retain their own licenses and notices. Distribution of compiled
+artifacts must preserve applicable notices from those dependencies. See
+https://github.com/CertaMesh/seyk/blob/main/THIRD_PARTY.md for provenance
+and the release notice bundle generation procedure.

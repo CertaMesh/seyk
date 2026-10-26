@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="600" alt="Seyk">
+  <img src="https://raw.githubusercontent.com/CertaMesh/seyk/main/docs/assets/logo.png" width="600" alt="Seyk">
 </p>
 
 <p align="center">
@@ -79,8 +79,8 @@ seyk search "how I fixed my sleep" ~/notes
 
 Searching never downloads anything. Without the model weights, search still
 returns keyword and file-name matches. For every option, see
-[Install Seyk](docs/installation.md), [Model setup](docs/model-setup.md) and the
-[CLI reference](docs/cli.md).
+[Install Seyk](https://github.com/CertaMesh/seyk/blob/main/docs/installation.md), [Model setup](https://github.com/CertaMesh/seyk/blob/main/docs/model-setup.md) and the
+[CLI reference](https://github.com/CertaMesh/seyk/blob/main/docs/cli.md).
 
 ## Use Seyk from an agent (MCP)
 
@@ -104,7 +104,7 @@ started with.
 
 **Privacy.** Seyk itself sends nothing anywhere, but a cloud-hosted agent sends
 the passages it reads to its provider. Point the server only at folders you are
-happy for that agent to read. See [Use Seyk from an agent (MCP)](docs/mcp.md).
+happy for that agent to read. See [Use Seyk from an agent (MCP)](https://github.com/CertaMesh/seyk/blob/main/docs/mcp.md).
 
 ## Use Seyk as a Rust library
 
@@ -137,7 +137,7 @@ let results = engine
 ```
 
 You can also use only the EmbeddingGemma 2 backend, without the search engine.
-See the [Rust library guide](docs/library.md).
+See the [Rust library guide](https://github.com/CertaMesh/seyk/blob/main/docs/library.md).
 
 ## Supported content
 
@@ -150,7 +150,7 @@ See the [Rust library guide](docs/library.md).
 | Video | ❌ not implemented |
 
 Seyk never indexes keys, password stores, `.env` files or credentials, and
-there is no override. See [Supported content](docs/supported-content.md).
+there is no override. See [Supported content](https://github.com/CertaMesh/seyk/blob/main/docs/supported-content.md).
 
 ## Status and limitations
 
@@ -165,28 +165,28 @@ Seyk is at version 0.1.0. Know these before you adopt it:
 - **The library API can still change.** Resource provider types may change
   before 1.0, and the filesystem is the only supported provider.
 
-See all [Known limitations](docs/limitations.md).
+See all [Known limitations](https://github.com/CertaMesh/seyk/blob/main/docs/limitations.md).
 
 ## Benchmarks
 
-![Seyk hybrid, semantic and lexical retrieval next to QMD, DigUp and LEANN measured on Seyk's harness, and sourced published model scores; higher nDCG@10 is better](docs/assets/benchmarks.svg)
+![Seyk hybrid, semantic and lexical retrieval next to QMD, DigUp and LEANN measured on Seyk's harness, and sourced published model scores; higher nDCG@10 is better](https://raw.githubusercontent.com/CertaMesh/seyk/main/docs/assets/benchmarks.svg)
 
 nDCG@10 measures how well the first ten results rank relevant documents. Higher
 is better. The default hybrid mode still trails semantic-only search on SciFact. See
-[Performance](docs/performance.md) for the full setup and
-[Benchmarks](docs/benchmarks.md) for sources and reproduction steps.
+[Performance](https://github.com/CertaMesh/seyk/blob/main/docs/performance.md) for the full setup and
+[Benchmarks](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md) for sources and reproduction steps.
 
 ## Documentation
 
-- [Install Seyk](docs/installation.md) and [Model setup](docs/model-setup.md)
-- [CLI reference](docs/cli.md): search modes, scores, extraction, audio, progress
-- [Use Seyk from an agent (MCP)](docs/mcp.md)
-- [Rust library](docs/library.md)
-- [Supported content](docs/supported-content.md)
-- [Caching and storage](docs/caching-and-storage.md): what is cached, where, and how to erase it
-- [Performance](docs/performance.md) and [Known limitations](docs/limitations.md)
-- [Development](docs/development.md) and [Architecture](docs/architecture.md)
-- [All documentation](docs/README.md)
+- [Install Seyk](https://github.com/CertaMesh/seyk/blob/main/docs/installation.md) and [Model setup](https://github.com/CertaMesh/seyk/blob/main/docs/model-setup.md)
+- [CLI reference](https://github.com/CertaMesh/seyk/blob/main/docs/cli.md): search modes, scores, extraction, audio, progress
+- [Use Seyk from an agent (MCP)](https://github.com/CertaMesh/seyk/blob/main/docs/mcp.md)
+- [Rust library](https://github.com/CertaMesh/seyk/blob/main/docs/library.md)
+- [Supported content](https://github.com/CertaMesh/seyk/blob/main/docs/supported-content.md)
+- [Caching and storage](https://github.com/CertaMesh/seyk/blob/main/docs/caching-and-storage.md): what is cached, where, and how to erase it
+- [Performance](https://github.com/CertaMesh/seyk/blob/main/docs/performance.md) and [Known limitations](https://github.com/CertaMesh/seyk/blob/main/docs/limitations.md)
+- [Development](https://github.com/CertaMesh/seyk/blob/main/docs/development.md) and [Architecture](https://github.com/CertaMesh/seyk/blob/main/docs/architecture.md)
+- [All documentation](https://github.com/CertaMesh/seyk/blob/main/docs/README.md)
 
 ## License
 
