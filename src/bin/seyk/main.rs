@@ -90,6 +90,18 @@ struct ModelArgs {
     #[arg(long, default_value_t = 16, value_parser = positive_count, global = true)]
     batch_size: usize,
 
+    /// Optional padded tokens per text call; use with --batch-attention-budget.
+    #[arg(long, value_parser = positive_count, requires = "batch_attention_budget", global = true)]
+    batch_token_budget: Option<usize>,
+
+    /// Optional rows × padded length squared per text call (per session).
+    #[arg(long, value_parser = positive_count, requires = "batch_token_budget", global = true)]
+    batch_attention_budget: Option<usize>,
+
+    /// CPU allocator experiment: default, no-arena or arena-shrink.
+    #[arg(long, default_value = "default", global = true)]
+    cpu_allocator: gemma::CpuAllocator,
+
     /// Inputs per engine dispatch. Defaults to sessions × batch-size.
     #[arg(long, value_parser = positive_count, global = true)]
     embedding_window: Option<usize>,
@@ -963,10 +975,18 @@ impl ModelArgs {
                 (self.batch_size != 16).then_some(self.batch_size),
             ),
             ("--embedding-window", self.embedding_window),
+            ("--batch-token-budget", self.batch_token_budget),
+            ("--batch-attention-budget", self.batch_attention_budget),
         ] {
             if let Some(value) = value {
                 a.extend([flag.to_string(), value.to_string()]);
             }
+        }
+        if self.cpu_allocator != gemma::CpuAllocator::Default {
+            a.extend([
+                "--cpu-allocator".to_string(),
+                self.cpu_allocator.name().to_string(),
+            ]);
         }
         // Include the default too: do not attach a new 2 h client to an older
         // daemon whose implementation still has the fixed 5a duration limit.
@@ -1119,6 +1139,15 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
         config.sessions = args.sessions;
         config.threads = args.threads;
         config.batch_size = args.batch_size;
+        config.batch_budget = match (args.batch_token_budget, args.batch_attention_budget) {
+            (Some(padded_tokens), Some(attention_cells)) => Some(gemma::BatchBudget {
+                padded_tokens,
+                attention_cells,
+            }),
+            (None, None) => None,
+            _ => bail!("both batch budgets must be provided"),
+        };
+        config.cpu_allocator = args.cpu_allocator;
         config.vision = cfg!(feature = "image") && !args.text_only;
         config
     })
@@ -1167,6 +1196,7 @@ fn engine_with_provider(
     ephemeral: bool,
     provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
 ) -> Result<SearchEngine> {
+    let _phase = seyk_embed::diagnostics::Phase::new("engine_load");
     let window = args.embedding_window()?;
     let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(model_error)?;
     let builder = SearchEngine::builder()
@@ -1182,6 +1212,7 @@ fn engine_with_provider(
         args.stt_model_dir.as_deref(),
         args.stt_language.as_deref(),
     ));
+    let _cache_phase = seyk_embed::diagnostics::Phase::new("engine_cache_build");
     let builder = if ephemeral {
         builder.cache(MemoryCache::new())
     } else {
@@ -1629,6 +1660,67 @@ mod tests {
             usize::MAX.to_string(),
         ] {
             assert!(Cli::try_parse_from(["seyk", "search", "test", "--threads", &value]).is_err());
+        }
+    }
+
+    #[test]
+    fn memory_controls_are_opt_in_and_forward_to_daemon() {
+        let parse = |args: &[&str]| {
+            let Cli {
+                command: Command::Search { model, .. },
+            } = Cli::try_parse_from(args).unwrap()
+            else {
+                panic!()
+            };
+            model
+        };
+        let defaults = parse(&["seyk", "search", "test"]);
+        assert_eq!(gemma_config(&defaults).unwrap().batch_budget, None);
+        assert_eq!(defaults.cpu_allocator, gemma::CpuAllocator::Default);
+        for policy in ["default", "no-arena", "arena-shrink"] {
+            let args = [
+                "seyk",
+                "search",
+                "test",
+                "--batch-token-budget",
+                "8192",
+                "--batch-attention-budget",
+                "4194304",
+                "--cpu-allocator",
+                policy,
+            ];
+            let model = parse(&args);
+            let config = gemma_config(&model).unwrap();
+            assert_eq!(config.batch_budget, Some(gemma::BatchBudget::CANDIDATE));
+            assert_eq!(config.cpu_allocator.name(), policy);
+            #[cfg(all(feature = "mcp", unix))]
+            {
+                let forwarded = model.to_args().unwrap();
+                let roundtrip: Vec<_> = ["seyk", "search", "test"]
+                    .into_iter()
+                    .chain(forwarded.iter().map(String::as_str))
+                    .collect();
+                let restored = gemma_config(&parse(&roundtrip)).unwrap();
+                assert_eq!(restored.batch_budget, config.batch_budget);
+                assert_eq!(restored.cpu_allocator, config.cpu_allocator);
+            }
+        }
+        for extra in [
+            vec!["--batch-token-budget", "8192"],
+            vec!["--batch-attention-budget", "4194304"],
+            vec![
+                "--batch-token-budget",
+                "0",
+                "--batch-attention-budget",
+                "4194304",
+            ],
+            vec!["--cpu-allocator", "unknown"],
+        ] {
+            let args: Vec<_> = ["seyk", "search", "test"]
+                .into_iter()
+                .chain(extra)
+                .collect();
+            assert!(Cli::try_parse_from(args).is_err());
         }
     }
 

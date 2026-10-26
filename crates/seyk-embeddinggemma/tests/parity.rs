@@ -125,3 +125,67 @@ fn batching_does_not_change_vectors() {
         );
     }
 }
+
+/// Strict diagnostic: a failure requires a retrieval benchmark before choosing defaults.
+#[test]
+#[ignore = "needs EmbeddingGemma 2 weights and memory-measurement approval"]
+fn memory_budget_bit_identity() {
+    use seyk_embeddinggemma::{BatchBudget, CpuAllocator};
+    let r = reference();
+    let inputs: Vec<_> = r
+        .docs
+        .iter()
+        .map(|d| seyk_embed::ResourceInput::Text {
+            title: d.title.as_deref(),
+            text: &d.text,
+        })
+        .collect();
+    let mut mismatched_vectors = 0;
+    for dimension in Dimension::ALL {
+        let baseline = GemmaEmbedder::load(model_support::config(dimension)).unwrap();
+        let expected_docs = baseline.embed_resources(&inputs).unwrap();
+        let expected_queries: Vec<_> = r
+            .queries
+            .iter()
+            .map(|q| baseline.embed_query(&q.text).unwrap())
+            .collect();
+        drop(baseline);
+        for policy in [
+            CpuAllocator::Default,
+            CpuAllocator::NoArena,
+            CpuAllocator::ArenaShrink,
+        ] {
+            let mut config = model_support::config(dimension);
+            config.batch_budget = Some(BatchBudget::CANDIDATE);
+            config.cpu_allocator = policy;
+            let candidate = GemmaEmbedder::load(config).unwrap();
+            let actual_docs = candidate.embed_resources(&inputs).unwrap();
+            let actual_queries: Vec<_> = r
+                .queries
+                .iter()
+                .map(|q| candidate.embed_query(&q.text).unwrap())
+                .collect();
+            let mismatches = expected_docs
+                .iter()
+                .chain(&expected_queries)
+                .zip(actual_docs.iter().chain(&actual_queries))
+                .filter(|(a, b)| {
+                    !a.as_slice()
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .eq(b.as_slice().iter().map(|v| v.to_bits()))
+                })
+                .count();
+            eprintln!(
+                "memory_bit_identity dimension={} allocator={} mismatched_vectors={mismatches}",
+                dimension.get(),
+                policy.name()
+            );
+            mismatched_vectors += mismatches;
+        }
+    }
+    assert_eq!(
+        mismatched_vectors, 0,
+        "run the retrieval gate before selecting defaults"
+    );
+}

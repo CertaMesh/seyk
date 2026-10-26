@@ -52,3 +52,28 @@ fn concurrent_external_data_sessions_keep_their_model_directories() {
         }
     });
 }
+
+#[test]
+fn allocator_policies_load_external_weights_and_run_without_numerical_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("model.onnx");
+    std::fs::write(&path, EXTERNAL_SCALAR).unwrap();
+    std::fs::write(root.path().join("weight.bin"), 7.0_f32.to_le_bytes()).unwrap();
+    for policy in [
+        CpuAllocator::Default,
+        CpuAllocator::NoArena,
+        CpuAllocator::ArenaShrink,
+    ] {
+        let mut model = session_with_allocator(&path, Some(1), policy).unwrap();
+        for _ in 0..3 {
+            let options = text_run_options(policy).unwrap();
+            let input = Tensor::from_array(([1usize], vec![2.0_f32])).unwrap();
+            let outputs = match options.as_ref() {
+                Some(options) => model.run_with_options(ort::inputs!["x" => input], options),
+                None => model.run(ort::inputs!["x" => input]),
+            }
+            .unwrap();
+            assert_eq!(outputs["y"].try_extract_tensor::<f32>().unwrap().1, &[9.0]);
+        }
+    }
+}

@@ -116,3 +116,35 @@ fn embedding_errors_keep_existing_search_variants() {
         C::UnsupportedTask { .. }
     ));
 }
+
+#[test]
+fn dense_fixture_restart_reuses_all_cached_document_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let database = cache_dir.path().join("index.sqlite");
+    // Invented dense numeric text exercises many character-sized segments.
+    let dense = (0..8000).map(|i| format!("{i},")).collect::<String>();
+    std::fs::write(root.path().join("dense.json"), dense).unwrap();
+    let embedder = Arc::new(Recording {
+        inner: common::FakeEmbedder::new(Dimension::D128, "dense-restart"),
+        tasks: Mutex::new(vec![]),
+    });
+    let build = || {
+        SearchEngine::builder()
+            .shared_embedder(embedder.clone())
+            .batch_size(16)
+            .cache(seyk_core::SqliteCache::open(&database).unwrap())
+            .build()
+            .unwrap()
+    };
+    let first = build();
+    let report = first.index().paths([root.path()]).execute().unwrap();
+    assert!(report.sync.segments_embedded > 16);
+    let recorded = embedder.tasks.lock().unwrap().len();
+    assert!(recorded > 16);
+    drop(first);
+    let restarted = build();
+    let report = restarted.index().paths([root.path()]).execute().unwrap();
+    assert_eq!(report.sync.segments_embedded, 0);
+    assert_eq!(embedder.tasks.lock().unwrap().len(), recorded);
+}

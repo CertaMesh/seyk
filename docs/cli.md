@@ -70,6 +70,65 @@ To move an indexed collection into a new directory, see
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
 
+## Embedding memory controls
+
+Text calls use at most `--batch-size` rows, default 16. Optional
+`--batch-token-budget` and `--batch-attention-budget` further limit each call.
+Both flags are required together. The first bounds rows × padded token length;
+the second bounds rows × padded token length squared. Inputs are grouped by
+length inside each engine dispatch and results return in their original order.
+The limits must fit one maximum-length input, currently 2048 tokens.
+
+Candidate limits for calibration are 8192 padded tokens and 4194304 attention
+cells. They keep 16 rows at 512 tokens and reduce long inputs to smaller calls.
+These limits are opt-in until real-weight measurements select defaults:
+
+```sh
+seyk index ./corpus --text-only --batch-token-budget 8192 --batch-attention-budget 4194304
+```
+
+`--cpu-allocator default` preserves ONNX Runtime's allocator settings.
+`no-arena` disables the CPU arena for text sessions. `arena-shrink` keeps the
+arena and requests shrinkage after each text inference call. Shrinkage can
+reduce retained memory but cannot reduce the live working set of a call.
+These experiments do not change vision or audio encoder allocators.
+
+Budgets apply independently to each text session. More sessions multiply the
+inference working set. Input tokenization and queued strings are outside these
+limits, so the budgets are not a process-memory cap. `--embedding-window`
+bounds the number of inputs per engine dispatch and defaults to sessions ×
+batch-size. Model prompts, segmentation and cache identities stay unchanged.
+Changing a padded shape can still change floating-point results, so compare
+embedding bits or run retrieval benchmarks before selecting new defaults.
+
+Set `SEYK_MEMORY_DIAGNOSTICS=1` before starting a fresh process to emit phase
+markers on stderr. Each line starts with `seyk_memory` and includes PID,
+monotonic microseconds since the first marker, an event and a state. Numeric
+counts report session count, batch shape, configured budgets and missing index
+inputs. Diagnostics contain no source text, token IDs, vectors or paths.
+An existing daemon keeps the environment it started with. Start a fresh daemon
+with the same flags as its clients to collect load and first-query markers.
+No synthetic warm-up is performed.
+
+For a measurement run with sufficient memory, compare a baseline command with
+no budget flags against the candidate command above, then repeat the candidate
+with `--cpu-allocator no-arena` and `--cpu-allocator arena-shrink`. Use a fresh
+cache for each cold index. Sample current and peak physical footprint externally;
+RSS alone can understate macOS memory use. Record completed inputs, cold-index
+time, ordinary-prose throughput, first-query latency and retained memory after
+a dense batch. For startup measurements, reuse a fully indexed cache and connect
+one MCP client to register the root and issue one query. Merely starting
+`seyk daemon run` does not trigger model loading.
+
+The ignored real-weight test `memory_budget_bit_identity` compares reference
+queries and documents across dimensions and allocator policies. It is a parity
+check, not a peak-memory or dense-corpus acceptance test. Run it only in the
+measurement environment:
+
+```sh
+cargo test -p seyk-embeddinggemma --test parity memory_budget_bit_identity -- --ignored --nocapture
+```
+
 ## Keyword search
 
 The default `hybrid` mode combines meaning, BM25 keyword relevance, and file-name

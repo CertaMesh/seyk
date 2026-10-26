@@ -321,6 +321,7 @@ impl Drop for SessionLease {
 
 /// Run the daemon in the foreground until it is stopped or idle for `idle`.
 pub fn run(endpoint: &Endpoint, factory: EngineFactory, idle: Duration) -> Result<()> {
+    seyk_embed::diagnostics::counts("daemon_start", &[]);
     // One daemon per endpoint: whoever holds the lock owns the socket path.
     let lock = OpenOptions::new()
         .create(true)

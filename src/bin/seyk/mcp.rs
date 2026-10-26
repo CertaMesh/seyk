@@ -371,6 +371,7 @@ impl Hub {
         if let Some(e) = slot.as_ref() {
             return Ok(e.clone());
         }
+        let _phase = seyk_embed::diagnostics::Phase::new("hub_engine_load");
         let e = Arc::new((self.factory)()?);
         e.start_cache_scrubber();
         *slot = Some(e.clone());
@@ -694,6 +695,7 @@ impl SeykServer {
     }
 
     fn run_search(&self, p: SearchParams) -> Result<Response> {
+        let _phase = seyk_embed::diagnostics::Phase::new("query");
         self.validate_roots()?;
         let queries: Vec<String> = p
             .queries
@@ -1839,20 +1841,28 @@ mod tests {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let release_rx = Mutex::new(release_rx);
+        let loads = Arc::new(AtomicUsize::new(0));
+        let factory_loads = loads.clone();
+        let documents = Arc::new(AtomicUsize::new(0));
+        let factory_documents = documents.clone();
         let hub = Hub::new(
             Box::new(move || {
+                factory_loads.fetch_add(1, Ordering::SeqCst);
                 entered_tx.send(()).unwrap();
                 release_rx
                     .lock()
                     .unwrap()
                     .recv_timeout(Duration::from_secs(10))
                     .unwrap();
-                fake_engine()
+                counted_engine(factory_documents.clone())
             }),
             true,
         );
-        let server = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        let server = SeykServer::new(vec![dir.path().into()], hub.clone()).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let sibling = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(documents.load(Ordering::SeqCst), 0);
         let started = Instant::now();
         let response = search(&server, "quartz");
         release_tx.send(()).unwrap();
@@ -1867,6 +1877,9 @@ mod tests {
         assert_eq!(response.segments_embedded, 0);
         wait_for(&server, |s| matches!(s, IndexStatus::Ready));
         assert!(search(&server, "quartz").degraded.is_none());
+        wait_for(&sibling, |s| matches!(s, IndexStatus::Ready));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(documents.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]
