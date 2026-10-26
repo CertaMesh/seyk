@@ -48,8 +48,9 @@ engine.index().paths(["~/notes"]).execute()?;
 ```
 
 Each `SearchHit` carries a resource URI, a modality-independent
-`ResourceLocator` (`Text` byte and line range, `Page`, `Time`, `ImageRegion`, or
-`WholeResource`),
+`ResourceLocator` (`Text` byte and line range, `PageText` range within a PDF
+page's extracted text, `Page`, `Time`, or `WholeResource`; `ImageRegion` is
+reserved and not produced yet),
 the score, the resource metadata (modality, size, mtime, content hash), the
 Markdown heading path and an optional short preview.
 

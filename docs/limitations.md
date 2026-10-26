@@ -8,27 +8,43 @@
   folder, hybrid search moved 7 of 8 target passages into the top 10 (semantic
   alone: 6 of 8), but one purely thematic query fell from 19th to 25th because keyword
   hits crowded it out. `--mode semantic` is there for those cases.
-- **First search of a large folder is slow.** Embedding on the CPU managed roughly
-  5–6 segments per second on a busy machine, about 30 minutes for 10,000
-  segments. After that, only changes are embedded. Run `index --watch` or the MCP
+- **First search of a large folder is slow.** In a historical measurement on a
+  busy Apple M5 Max (q8, 256 dimensions, segments of about 241 tokens), CPU
+  embedding managed roughly 5–6 segments per second, about 30 minutes for 10,000
+  segments. See [the model benchmark](benchmarks.md#model) for its method.
+  After that, only changes are embedded. Run `index --watch` or the MCP
   server so this happens in the background.
 - **Video and scanned-page OCR are not implemented.** Audio transcription exists
   only as opt-in, on-demand extraction (`audio-stt`). See
   [the multimodal status](multimodal.md) for current support and remaining
   work, including [PDF extraction limits](multimodal.md#pdf-retrieval-done-ocr-deferred).
+- **Indexing can use several GB of memory.** Embedding batches have no token
+  budget, so files that tokenize densely (numeric JSON, tables) fill a batch with
+  long inputs, and ONNX Runtime keeps its peak allocation. A long-running daemon
+  stays at its highest batch so far. A fix is in progress
+  ([#95](https://github.com/CertaMesh/seyk/pull/95)).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is
   enabled yet.
-- **Start-up costs about 1.5 s**, mostly ONNX graph optimisation and parsing the
-  32 MB tokenizer. This is per process, not per file.
+- **Start-up cost is per process**, not per file: mostly ONNX graph optimisation
+  and parsing the 32 MB tokenizer. It was about 1.5 s in a historical,
+  unrepeated observation; [the model benchmark](benchmarks.md#model) has the
+  measured model load times.
 - **Images are slow to embed** compared with text, because each image always uses
   the full 2,520-patch budget. Large photo collections are better indexed ahead of
   time.
-- **Brute-force search.** Every query is compared with every cached vector. That is
-  exact and simple, and the `VectorIndex` trait leaves room for an approximate index
-  if collections outgrow it.
+- **Exact brute-force search by default.** By default every query is compared
+  with every cached f32 vector. That is exact and simple, and the `VectorIndex`
+  trait leaves room for an approximate index if collections outgrow it. An
+  experimental, opt-in scan for standalone images (`--image-scan q4`) shortlists
+  candidates from compressed codes and reranks them with the f32 vectors. It
+  needs a persistent SQLite cache and a d256 or d768 profile, cannot guarantee
+  recall on arbitrary libraries, and stores both representations, so it adds
+  cache storage. See [the Photo Anchor scan](multimodal.md#experimental-photo-anchor-scan).
 - **Change detection uses size and mtime first.** A file rewritten with identical
-  size and modification time to the nanosecond is not re-read until `index` or a
-  cache clear. Vectors are still never reused for different text.
+  size and modification time to the nanosecond is not re-read. `seyk index` alone
+  does not force a re-read; clear the cache or change the file's modification
+  time. Extraction still re-hashes the file and refuses changed text, and
+  vectors are never reused for different text.
 - **Single-writer cache.** Two processes writing the same cache wait on SQLite's
   lock rather than run in parallel. MCP sessions avoid this by sharing the daemon;
   a separate `seyk index --watch` on the same folder still duplicates its work.
