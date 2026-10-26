@@ -35,6 +35,7 @@ def review_files(name, files):
 
 def main():
     version = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     sizes = {}
     for name in CRATES:
         output = subprocess.check_output(
@@ -64,6 +65,8 @@ def main():
             assert all(member.size <= MAX_FILE for member in members), name
             unpacked = sum(member.size for member in members)
             assert unpacked <= MAX_UNPACKED, (name, unpacked)
+            vcs = json.load(package.extractfile(prefix + ".cargo_vcs_info.json"))
+            assert vcs["git"]["sha1"] == commit and not vcs["git"].get("dirty", False), name
             readme = package.extractfile(prefix + "README.md").read().decode()
             assert "https://github.com/CertaMesh/seyk" in readme
         compressed = archive.stat().st_size

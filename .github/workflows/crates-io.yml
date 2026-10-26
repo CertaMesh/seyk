@@ -25,9 +25,10 @@ jobs:
         # Cargo 1.99 supports a workspace dry-run and stages sibling packages in
         # a temporary local registry, then verifies consumers in dependency order.
         # No registry token is needed or provided.
-        run: >-
-          cargo publish --dry-run --locked
-          -p seyk-embed -p seyk-embeddinggemma -p seyk-core -p seyk-stt -p seyk
+        run: |
+          rm -rf target/package
+          cargo publish --dry-run --locked \
+            -p seyk-embed -p seyk-embeddinggemma -p seyk-core -p seyk-stt -p seyk
       - name: Review every file and report compressed and unpacked sizes
         run: python3 scripts/check_crate_packages.py
       - uses: actions/upload-artifact@v4
