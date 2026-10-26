@@ -1771,6 +1771,7 @@ mod tests {
         assert!(value["hits"][0]["path"].as_str().unwrap().contains('�'));
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn background_index_reaches_ready_and_follows_changes() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1780,22 +1781,52 @@ mod tests {
         )
         .unwrap();
         let hub = Hub::new(Box::new(fake_engine), true);
-        let server = SeykServer::new(vec![dir.path().into()], hub).unwrap();
-
-        wait_for(&server, |s| matches!(s, IndexStatus::Ready));
+        let cell = Arc::new(Mutex::new(IndexStatus::LoadingModel));
+        hub.watched
+            .lock()
+            .unwrap()
+            .push((dir.path().into(), cell.clone()));
+        let server = SeykServer::new(vec![dir.path().into()], hub.clone()).unwrap();
+        let (events, changes, passes) = seyk::watch::TestEvents::channel();
+        let options = WatchOptions {
+            debounce: Duration::ZERO,
+            test_events: Some(events),
+            ..Default::default()
+        };
+        let root = dir.path().to_path_buf();
+        let worker = std::thread::spawn(move || {
+            hub.background_index_with_options(&root, &cell, &options);
+        });
+        // Ready describes the completed index pass, not a bound on OS event
+        // delivery. Signal changes explicitly and wait for each pass to finish.
+        passes
+            .recv_timeout(Duration::from_secs(20))
+            .expect("initial index pass did not finish");
+        assert!(matches!(server.status().unwrap(), Some(IndexStatus::Ready)));
         let r = search(&server, "lighthouse ships");
         assert_eq!(r.hits.len(), 1);
         assert_eq!(r.segments_embedded, 0, "searches read the cache only");
 
-        std::fs::write(dir.path().join("bread.md"), "grandmother bakes bread").unwrap();
-        let started = Instant::now();
-        while search(&server, "grandmother bread").hits.len() < 2 {
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "change never indexed"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let bread = dir.path().join("bread.md");
+        std::fs::write(&bread, "grandmother bakes bread").unwrap();
+        changes.send(bread.clone()).unwrap();
+        passes
+            .recv_timeout(Duration::from_secs(20))
+            .expect("change index pass did not finish");
+        assert!(matches!(server.status().unwrap(), Some(IndexStatus::Ready)));
+        let r = search(&server, "grandmother bread");
+        assert_eq!(r.hits.len(), 2);
+        assert!(
+            r.hits.iter().any(|hit| {
+                hit.resource.to_file_path().unwrap() == bread.canonicalize().unwrap()
+            })
+        );
+        assert_eq!(
+            r.segments_embedded, 0,
+            "searches read the updated cache only"
+        );
+        drop(changes);
+        worker.join().unwrap();
     }
 
     #[cfg(feature = "pdf")]
