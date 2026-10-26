@@ -36,7 +36,7 @@ fn envelope(path: &Path, bytes: &[u8]) -> Value {
         }],
     };
     let mut value = serde_json::to_value(results).unwrap();
-    value["schema_version"] = 9.into();
+    value["schema_version"] = 10.into();
     value
 }
 
@@ -78,7 +78,7 @@ fn typed_input_failures_are_one_static_line() {
     }
     for data in [
         format!("{{{SENTINEL}"),
-        json!({"schema_version":9,"hits":SENTINEL}).to_string(),
+        json!({"schema_version":10,"hits":SENTINEL}).to_string(),
     ] {
         std::fs::write(&input, data).unwrap();
         denied(

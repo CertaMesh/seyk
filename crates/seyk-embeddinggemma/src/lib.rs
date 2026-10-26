@@ -139,7 +139,8 @@ pub struct GemmaConfig {
     pub precision: Precision,
     /// Longer inputs are truncated. Segments are far shorter than this; it is a safety net.
     pub max_tokens: usize,
-    /// Load the vision encoder so image resources can be embedded.
+    /// Load the vision encoder when its files are present; missing files disable
+    /// images with an availability diagnostic while text remains usable.
     pub vision: bool,
     /// Enable audio inputs; missing weights fail individual audio requests.
     pub audio: bool,
@@ -1428,11 +1429,54 @@ mod resolution_tests {
     }
 
     #[test]
+    fn optional_vision_uses_text_only_identity_and_lists_only_missing_files() {
+        for precision in [Precision::Q8, Precision::Fp32] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = GemmaConfig {
+                source: ModelSource::Directory(dir.path().into()),
+                precision,
+                vision: true,
+                ..GemmaConfig::default()
+            };
+            let mut text_only = config.clone();
+            text_only.vision = false;
+            write_files(dir.path(), &text_only);
+            let vision_files = &config.files()[text_only.files().len()..];
+            for installed in 0..=vision_files.len() {
+                let (effective, reason) = runtime_config(&config).unwrap();
+                assert_eq!(effective.vision, installed == vision_files.len());
+                if let Some(reason) = reason {
+                    for file in &vision_files[installed..] {
+                        assert!(reason.contains(file));
+                    }
+                    for file in &vision_files[..installed] {
+                        // Full graph names can prefix external-data names.
+                        assert!(!reason.contains(&format!("{file},")));
+                    }
+                    assert!(reason.contains("seyk model download"));
+                    assert_eq!(
+                        model_identity(&config).unwrap(),
+                        model_identity(&text_only).unwrap()
+                    );
+                } else {
+                    assert_eq!(installed, vision_files.len());
+                }
+                if let Some(file) = vision_files.get(installed) {
+                    std::fs::write(dir.path().join(file), b"synthetic vision file").unwrap();
+                }
+            }
+            assert!(runtime_config(&text_only).unwrap().1.is_none());
+        }
+    }
+
+    #[test]
     fn missing_optional_vision_does_not_hide_missing_text() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = GemmaConfig::default();
-        config.source = ModelSource::Directory(dir.path().into());
-        config.vision = cfg!(feature = "image");
+        let config = GemmaConfig {
+            source: ModelSource::Directory(dir.path().into()),
+            vision: cfg!(feature = "image"),
+            ..GemmaConfig::default()
+        };
         let (effective, _) = runtime_config(&config).unwrap();
         assert!(!effective.vision);
         let error = match EmbeddingGemma2::load(config) {

@@ -128,8 +128,8 @@ enables stable exit codes for runtime failures. Without `--typed-errors`,
 returned failures retain exit code 1 and the existing prose diagnostics.
 Success output is identical in both modes, including raw text, the audio
 transcript label, and versioned JSON. The flag does not change the JSON schema.
-The current schema version is 9, and extract accepts search envelopes from
-versions 2 through 9.
+The current schema version is 10, and extract accepts search envelopes from
+versions 2 through 10.
 
 In typed mode, a returned runtime failure writes exactly one stderr line:
 

@@ -13,7 +13,7 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ### Fixed
 
-- Keep semantic text search available when vision encoder files are missing, and report skipped images and scanned PDF pages with recovery instructions.
+- **Breaking:** JSON `schema_version` 10 adds MCP `index_status.model_diagnostics`. Keep semantic text search available when vision encoder files are missing, and report skipped images and scanned PDF pages with recovery instructions.
 
 ### Added
 

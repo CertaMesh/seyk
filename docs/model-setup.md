@@ -119,7 +119,7 @@ seyk setup audio --dry-run --json   # offline plan; no downloads
 seyk setup audio --json             # install; versioned completion on stdout
 ```
 
-JSON uses the existing schema v9 envelope, with `action` (`status`, `plan` or
+JSON uses the existing schema v10 envelope, with `action` (`status`, `plan` or
 `complete`), `models`, `total_bytes`, `download_bytes` and `next_step`. Each
 model reports `present`, `verification`, `bytes`, `repo` and `revision`.
 Text status checks file presence only (`bytes: null`); audio and STT status check

@@ -1037,7 +1037,7 @@ fn to_response(r: SearchResults) -> Response {
 #[tool_router]
 impl SeykServer {
     #[tool(
-        description = "Current indexing state and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
+        description = "Current indexing state, model availability diagnostics, and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
         Ok(match self.index_status_json() {
