@@ -1,0 +1,43 @@
+name: Rust checks
+description: Run the shared Rust CI check sequence with the caller-selected toolchain.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: cargo fmt --all --check
+    - shell: bash
+      run: cargo clippy --workspace --all-targets --locked -- -D warnings
+    # Model-backed tests are #[ignore]d: CI never downloads the weights.
+    - shell: bash
+      run: cargo test --workspace --locked --no-fail-fast
+    - shell: bash
+      run: cargo test --example bench_retrieval --locked
+    # Lexical engine on the invented fixture: proves the example runs, with no model.
+    - name: Run the model-free embedding example
+      shell: bash
+      run: cargo run --example embed_search --locked
+    - name: Check audio-free ONNX library
+      shell: bash
+      run: cargo check -p seyk --no-default-features --features onnx --lib --locked
+    - name: Check standalone dependency boundaries
+      shell: bash
+      run: python scripts/check_embedding_dependencies.py
+    - name: Check minimal facade library
+      shell: bash
+      run: cargo check -p seyk --no-default-features --lib --locked
+    - name: Check CLI without other default features
+      shell: bash
+      run: cargo check -p seyk --no-default-features --features cli --bin seyk --locked
+    - name: Lint standalone text backend
+      shell: bash
+      run: cargo clippy -p seyk-embeddinggemma --no-default-features --all-targets --locked -- -D warnings
+    - name: Test standalone core
+      shell: bash
+      run: cargo test -p seyk-core --no-default-features --locked
+    - name: Test core with PDF text extraction
+      shell: bash
+      run: cargo test -p seyk-core --no-default-features --features pdf --locked
+    - name: Test core with PDF rendering
+      shell: bash
+      run: cargo test -p seyk-core --no-default-features --features pdf,pdf-render --locked
