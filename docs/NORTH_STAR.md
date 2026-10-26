@@ -1,6 +1,6 @@
 # Project north star — Seyk
 
-> Last reviewed: 2026-10-07 by krishan.
+> Last reviewed: 2026-10-26 by krishan.
 > Source-of-truth for autonomous-agent decisions. When two valid paths fork, pick the one that serves the mission for the target users without violating non-goals or constraints; principles break remaining ties.
 
 ## Mission
@@ -11,12 +11,12 @@ Find where relevant information is in any collection of unstructured content, an
 
 - Applications and AI agents that need retrieval over unstructured content: CLI, MCP or Rust library.
 - Any deployment, from one laptop to a shared server, with any content (files today, other sources later).
-- Developers using only Seyk's embedding layer, and downstream layers such as Gaze that consume its evidence.
+- Developers using only Seyk's embedding layer, and downstream tools that consume its evidence.
 
 ## Non-goals
 
 - Answering questions, summarising or generating text. Seyk returns evidence; reasoning is the caller's job.
-- PII protection or redaction. That belongs to Gaze or the integrator; Seyk never depends on Gaze.
+- PII protection or redaction. That belongs to the integrator or a downstream tool; Seyk never depends on one.
 - Remote connectors, enterprise IAM, HTTP APIs or distributed/vector-database search until the local engine is mature (later roadmap phases).
 - Extracting or transcribing a whole corpus just to make it searchable. Extraction runs on demand, for chosen hits.
 - Building every modality at once. OCR, PDF, audio and video come one proven phase at a time.
@@ -43,7 +43,7 @@ Find where relevant information is in any collection of unstructured content, an
 - One query style finds both "how do I keep tomatoes alive in a heatwave?" and `garden.md`, and the evaluation on a real folder holds or improves each phase.
 - `engine.extract(&hit)` returns the exact matching text, hash-verified, for every supported resource type.
 - A developer can embed text with only the embedding crates, without pulling in search, SQLite or the CLI.
-- Gaze uses Seyk over a process boundary with no Seyk-side Gaze code.
+- A downstream tool uses Seyk over a process boundary with no tool-specific code in Seyk.
 
 **Going wrong:**
 - A ranking or segmentation change merged without an evaluation run.
