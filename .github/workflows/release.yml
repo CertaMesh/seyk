@@ -2,12 +2,13 @@ name: Release
 
 # Push a tag like v0.2.0 to build every target and publish a GitHub release.
 # Run manually, or change this file in a PR, to build the archives without
-# releasing (they stay as workflow artifacts).
+# releasing (they stay as workflow artifacts). Manual runs NEVER publish,
+# including when dispatched against a tag; only a tag push can publish.
 on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py", "scripts/third_party_licenses.sh", about.toml, about.hbs, "third_party/onnxruntime/**", THIRD_PARTY.md, "crates/seyk-stt/Cargo.toml", "crates/seyk-embed/Cargo.toml"]
+    paths: [.github/workflows/release.yml, "crates/seyk-core/**", "tests/pdf_cli.rs", Cargo.toml, Cargo.lock, "scripts/check_release_no_observer.py", "scripts/check_release_archive.py", ".gitattributes", "scripts/third_party_licenses.sh", about.toml, about.hbs, "third_party/onnxruntime/**", THIRD_PARTY.md, "crates/seyk-stt/Cargo.toml", "crates/seyk-embed/Cargo.toml"]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +35,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       # Pinned in rust-toolchain.toml. Every target is the runner's own.
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
@@ -55,7 +59,7 @@ jobs:
 
       - name: Check packaged binary has no test observer
         if: runner.os != 'Windows'
-        run: python3 scripts/check_release_no_observer.py target/${{ matrix.target }}/release/seyk
+        run: python scripts/check_release_no_observer.py target/${{ matrix.target }}/release/seyk
 
       - name: Inspect linked libraries
         shell: bash
@@ -103,6 +107,9 @@ jobs:
           fi
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
+      - name: Verify licence notices in the archive
+        run: python scripts/check_release_archive.py "${{ env.ARCHIVE }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -112,7 +119,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-24.04
     permissions:

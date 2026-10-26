@@ -47,6 +47,16 @@ jobs:
       - name: Test core with PDF rendering
         run: cargo test -p seyk-core --no-default-features --features pdf,pdf-render --locked
 
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sh -n scripts/install.sh
+      - run: python -m unittest discover -s scripts -p test_install.py
+
   retrieval-harness:
     runs-on: ubuntu-24.04
     steps:

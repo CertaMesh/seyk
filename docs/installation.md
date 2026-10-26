@@ -16,6 +16,12 @@ file and the third-party licence notices. Two platform limits apply to them:
 - **There is no Intel Mac build**, because ONNX Runtime publishes no prebuilt
   library for it.
 
+When a release is available, `scripts/install.sh` downloads its public archive
+with curl or wget, verifies SHA-256, and installs to `~/.local/bin` without sudo.
+Set `SEYK_INSTALL_DIR` to another writable directory, `SEYK_VERSION=vX.Y.Z` to
+pin a release, or `SEYK_DOWNLOADER=gh` to use the GitHub CLI explicitly. The
+installer reports an error if no release or matching asset is available.
+
 The binary is self-contained. ONNX Runtime is linked statically; its prebuilt
 library is downloaded by the `ort` crate **at build time**. For a fully offline
 build, set `ORT_SKIP_DOWNLOAD=1` and point `ORT_LIB_LOCATION` at a local ONNX
