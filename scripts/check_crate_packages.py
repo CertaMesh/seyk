@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Review crates.io file lists and built archives. Run packaging in CI first."""
+"""Prepare and review crates.io archives, or review existing archives only."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -33,7 +34,19 @@ def review_files(name, files):
     assert not any("golden" in file or "witness" in file for file in files), name
 
 
-def main():
+def prepare():
+    package_dir = Path("target/package")
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
+    subprocess.run(
+        ["cargo", "publish", "--dry-run", "--locked"]
+        + [arg for name in CRATES for arg in ("-p", name)],
+        check=True,
+    )
+    review()
+
+
+def review():
     version = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     sizes = {}
@@ -73,7 +86,20 @@ def main():
         assert compressed <= MAX_ARCHIVE, (name, compressed)
         sizes[name] = {"archive_bytes": compressed, "unpacked_bytes": unpacked}
         print(f"SIZE {name}={compressed / 1000:.1f}KB unpacked={unpacked / 1000:.1f}KB", flush=True)
+    expected = {f"{name}-{version}.crate" for name in CRATES}
+    staged = {path.name for path in Path("target/package").glob("*.crate")}
+    assert staged == expected, ("staged archive set mismatch", expected - staged, staged - expected)
     Path("target/package/sizes.json").write_text(json.dumps(sizes, indent=2) + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("prepare", "review"), nargs="?", default="review")
+    args = parser.parse_args()
+    if args.mode == "prepare":
+        prepare()
+    else:
+        review()
 
 
 if __name__ == "__main__":
