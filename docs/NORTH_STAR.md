@@ -16,6 +16,8 @@ Find where relevant information is in any collection of unstructured content, an
 ## Non-goals
 
 - Answering questions, summarising or generating text. Seyk returns evidence; reasoning is the caller's job.
+- Judging whether evidence is true. A hash match shows the source is unchanged since indexing, not that it is authentic or correct.
+- Becoming an agent framework, LLM orchestrator or agent memory system. Seyk is a retrieval component inside them.
 - PII protection or redaction. That belongs to the integrator or a downstream tool; Seyk never depends on one.
 - Remote connectors, enterprise IAM, HTTP APIs or distributed/vector-database search until the local engine is mature (later roadmap phases).
 - Extracting or transcribing a whole corpus just to make it searchable. Extraction runs on demand, for chosen hits.
@@ -25,7 +27,7 @@ Find where relevant information is in any collection of unstructured content, an
 
 - **Tech:** Rust; MSRV 1.89, toolchain pinned to 1.99.0; CPU inference via ONNX Runtime; prebuilt binaries for macOS ARM, Linux x86_64/ARM64 and Windows x86_64.
 - **Legal / privacy:** Content, queries and vectors are never sent to a third-party service. Network use is limited to an explicit model download and, in later phases, sources the operator configures. The cache never stores source text in a readable order. Private content used for evaluation never appears in the repo, PRs, docs or shared notes.
-- **Correctness:** A vector is reused only for byte-identical model input under the same profile. Returned text is verified against the content hash; a mismatch is an error, never a guess.
+- **Correctness:** A vector is reused only for byte-identical model input under the same profile. Returned text is checked against the whole-resource hash recorded at indexing; a mismatch is an error, never a guess.
 - **Compatibility:** `seyk search "…" <paths>` keeps working. The EmbeddingGemma 2 parity tests stay green. Cache schema changes migrate and keep embeddings where they are still valid.
 
 ## Decision principles (priority-ordered)
@@ -44,9 +46,12 @@ Find where relevant information is in any collection of unstructured content, an
 - `engine.extract(&hit)` returns the exact matching text, hash-verified, for every supported resource type.
 - A developer can embed text with only the embedding crates, without pulling in search, SQLite or the CLI.
 - A downstream tool uses Seyk over a process boundary with no tool-specific code in Seyk.
+- A finished agent evaluation compares grep-only with grep + Seyk on correct-and-cited answers and tokens per task. Seyk earns a public agent claim only if it wins on one without losing on the other; results are published either way.
+- Indexing and the daemon stay within a documented memory bound.
 
 **Going wrong:**
 - A ranking or segmentation change merged without an evaluation run.
 - The cache or logs hold readable source text, or content is sent to a third-party service.
 - Seyk starts producing prose (answers, summaries) or imports a privacy/LLM stack.
 - A phase leaves main un-releasable, or an abstraction ships with no real implementation behind it.
+- Public docs claim a quality, speed or agent-outcome advantage that no committed benchmark shows.
