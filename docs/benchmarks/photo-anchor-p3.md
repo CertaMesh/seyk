@@ -1,6 +1,6 @@
 # Photo Anchor P3 evidence
 
-Opt-in q4 with retained f32 and exact reranking. All correctness and local CI/NanoSciFact gates passed. The coordinator-authorized slot passed the scan speed contract at both dimensions. q4 scanning is slower than f32 here, within the allowed +2 ms per 1,000 vectors.
+Opt-in q4 with retained f32 and exact reranking. All correctness and local CI/NanoSciFact gates passed. The dedicated run passed the scan speed contract at both dimensions. q4 scanning is slower than f32 here, within the allowed +2 ms per 1,000 vectors.
 
 ## Fixture
 
@@ -11,7 +11,7 @@ Fixture/query BLAKE3: `c2bbf14d318d9cc812941d8216d703f7cba7f2c9d4e067ed09f5460d5
 
 ## Correctness
 
-Each dimension checks 16,800 query/image score pairs against independent sequential f32 decode-dot and f64 dequantized-dot references parsed directly from the assets. The separate codec suite also covers every byte, mixed nibbles, sparse/sign/random queries, Python goldens and the unchanged 4714 witness.
+Each dimension checks 16,800 query/image score pairs against independent sequential f32 decode-dot and f64 dequantized-dot references parsed directly from the assets. The separate codec suite also covers every byte, mixed nibbles, sparse/sign/random queries, Python goldens and the unchanged rounding witness.
 
 | Width | Max error vs sequential f32 | Max error vs f64 | Tolerance |
 |---:|---:|---:|---:|
@@ -54,9 +54,9 @@ Provisioned ONNX q8 text/vision graphs, four inference threads. No models, table
 | `onnx/vision_encoder_quantized.onnx` | 162495 | `bb0de2df53a2448a32dc7908a187c168c8afd514d4d6f674f7f46024875fa4e3` |
 | `onnx/vision_encoder_quantized.onnx_data` | 195228672 | `3dabd69c0a36e9a8771ad82030dde74daa5a0e02b7047a5d3f3382b1137bab89` |
 
-## Authorized slot measurements
+## Dedicated run measurements
 
-One slot batch on 2026-10-24, 17:40:31–17:40:55 UTC, source `2d3604a724efcbf77d410bc99d00581c3537ac17`. Start/end load1 were **4.07 / 5.04**; memory free was **70% / 70%** (70% before each model run). Gaze #773’s leak-only capture (~1 core) remained running with coordinator approval; other projects were paused. All three prebuilt release commands ran sequentially at nice 10; no builds ran alongside. All exited zero.
+One dedicated run on 2026-10-24, 17:40:31–17:40:55 UTC, source `2d3604a724efcbf77d410bc99d00581c3537ac17`. Start/end load1 were **4.07 / 5.04**; memory free was **70% / 70%** (70% before each model run). One background process used approximately one CPU core. All three prebuilt release commands ran sequentially at nice 10; no builds ran alongside. All exited zero.
 
 Criterion 0.8.2 medians below are from `estimates.json` (not the stdout slope estimate): 30 samples per side, 0.5 s warmup and 2 s measurement per function. Each iteration scans 1,000 deterministic vectors and consumes every score. Setup, allocation, encoding and query LUT construction are outside the samples. The comparison is a CPU scan microbenchmark, not an end-to-end speedup claim; f32 precedes q4 within each width. Raw samples, median confidence intervals and request samples are in [the slot artifact](photo-anchor-p3-slot.json).
 
@@ -78,7 +78,7 @@ Warm end-to-end cached engine requests include actual text-query inference, SQLi
 
 All 24 sequential stages passed on `007c7fe3bbc55458bde20b53b352c3b26507bef3`: the CI verification commands for default/audio/audio-STT, standalone dependencies/library/CLI/core/PDF, Python chart/metric adapters, the exact `cargo deny --locked --all-features check licenses` form, all Rust 1.89 checks/builds, the requested Windows GNU no-default core all-target clippy check, and fetcher tests. Toolchains and the GNU target were already installed; no toolchain or package downloads were needed. These are native macOS checks plus Windows cross-target linting, not a Windows runtime test.
 
-The final P2 gate was repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved 4714 witness also passes the amended bound. Timed runs started only after explicit `ROOT: SLOT-GO`.
+The correctness checks were repeated on that implementation with f64 error/tolerance comparisons throughout. It passed without changing R. The preserved rounding witness also passes the amended bound. Timed runs required explicit opt-in.
 
 ## Review follow-up
 

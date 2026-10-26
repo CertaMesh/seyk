@@ -606,12 +606,12 @@ k=1/5/10/20/50 plus zero and k>N. It writes paired rankings, independent numeric
 errors, nDCG deltas and matched SQLite snapshot sizes under the protected fixture.
 A parity failure is a stop, with the failing queries reported. R is not tuned.
 
-Before the reserved slot, build `similarity` with `--no-run` and the
+Before the dedicated timing run, build `similarity` with `--no-run` and the
 `photo_anchor_latency` release example.
 The single Criterion `photo_anchor_scan` run keeps seed 4517, N=1000,
 30 samples, 500 ms warmup and 2 s measurement. Compare medians independently at
 each dimension against `q4 <= f32 + 2 ms per 1000 vectors`.
-The guarded latency example requires `SEYK_Q4_SLOT_GO=4517-p3` and a dimension
+The guarded latency example requires `SEYK_RUN_LATENCY=1` and a dimension
 argument. It uses fixture query 0, k=10, five repetitions per mode/scan and rotated
 exact/q4 order. Its end-to-end requests include real text-query inference, SQLite
 reads, scanning, reranking and fusion. Model loading, image preparation and warmup

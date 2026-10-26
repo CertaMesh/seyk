@@ -647,7 +647,7 @@ fn stt_is_explicit_verified_and_never_cached_or_previewed() {
 }
 
 #[test]
-fn persisted_audio_identities_match_4409_baseline() {
+fn persisted_audio_identities_match_pre_lazy_hashing_baseline() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("signal.wav");
     let text = dir.path().join("text.txt");

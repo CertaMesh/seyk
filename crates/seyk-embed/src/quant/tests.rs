@@ -239,9 +239,11 @@ fn absolute_accuracy_against_independent_f32_and_f64_references() {
 }
 
 #[test]
-fn preserved_4714_witness_satisfies_the_amended_absolute_contract() {
-    let witness: serde_json::Value =
-        serde_json::from_str(include_str!("../../assets/photo-anchor/witness-4714.json")).unwrap();
+fn preserved_rounding_witness_satisfies_the_amended_absolute_contract() {
+    let witness: serde_json::Value = serde_json::from_str(include_str!(
+        "../../assets/photo-anchor/rounding-witness.json"
+    ))
+    .unwrap();
     let values: Vec<f32> = witness["q_bits"]
         .as_array()
         .unwrap()

@@ -1,4 +1,4 @@
-//! Run only in the coordinator's quiet slot. Uses the prepared P3 cache pair.
+//! Opt-in timing on an otherwise idle machine. Uses the prepared Photo Anchor cache pair.
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::json;
@@ -23,8 +23,8 @@ struct Query {
 
 fn main() -> Result<()> {
     ensure!(
-        std::env::var("SEYK_Q4_SLOT_GO").as_deref() == Ok("4517-p3"),
-        "timing requires ROOT: SLOT-GO and SEYK_Q4_SLOT_GO=4517-p3"
+        std::env::var("SEYK_RUN_LATENCY").as_deref() == Ok("1"),
+        "set SEYK_RUN_LATENCY=1 to run timing"
     );
     let dim: usize = std::env::args()
         .nth(1)
@@ -75,13 +75,13 @@ fn main() -> Result<()> {
     let exact = SearchEngine::builder()
         .shared_embedder(embedder.clone())
         .cache(SqliteCache::open(
-            fixture.join(format!("p3-4517-d{dim}-f32.sqlite")),
+            fixture.join(format!("photo-anchor-d{dim}-f32.sqlite")),
         )?)
         .build()?;
     let q4 = SearchEngine::builder()
         .shared_embedder(embedder)
         .cache(SqliteCache::open(
-            fixture.join(format!("p3-4517-d{dim}-q4.sqlite")),
+            fixture.join(format!("photo-anchor-d{dim}-q4.sqlite")),
         )?)
         .build()?;
     let query = &queries_parsed[0].text;
@@ -128,7 +128,7 @@ fn main() -> Result<()> {
     }
     let report = json!({"dimension":dim,"query_index":0,"query":query,"k":10,"fixture_fingerprint":prepared["fingerprint"],"model":expected,"threads":4,"repetitions_per_mode_and_scan":5,"errors":0,"boundary":"warm cached end-to-end engine request, including real text-query inference, SQLite reads, scanning, exact rerank and fusion; excludes model load, fixture preparation, previews and warmup","samples":samples});
     fs::write(
-        fixture.join(format!("p3-4517-latency-d{dim}.json")),
+        fixture.join(format!("photo-anchor-latency-d{dim}.json")),
         serde_json::to_vec_pretty(&report)?,
     )?;
     println!("{report}");

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seyk third-party licences</title>
+  <style>
+    body { font-family: sans-serif; max-width: 70rem; margin: 2rem auto; padding: 0 1rem; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>Seyk third-party licences</h1>
+  <p>Generated from the locked workspace, including all features and platforms.
+     This covers a superset of each release build. See THIRD_PARTY.md for asset
+     attribution, native components and source availability for MPL exceptions.</p>
+  <h2>Rust crates</h2>
+  {{#each licenses}}
+  <section>
+    <h3>{{name}}</h3>
+    <ul>
+      {{#each used_by}}
+      <li><a href="https://crates.io/crates/{{crate.name}}/{{crate.version}}">{{crate.name}} {{crate.version}}</a></li>
+      {{/each}}
+    </ul>
+    <pre>{{text}}</pre>
+  </section>
+  {{/each}}
+  <h2>ONNX Runtime (native library)</h2>
+  <p>The ort-sys 2.0.0-rc.13 prebuilt runtime is ONNX Runtime 1.28.0.
+     <a href="https://github.com/microsoft/onnxruntime/blob/v1.28.0/LICENSE">Upstream MIT notice</a>.
+     The full upstream third-party notices for its statically linked native
+     dependencies follow the MIT notice. Keep both aligned with the runtime
+     when upgrading ort-sys.</p>
+  <pre>MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+  <h2>ONNX Runtime native dependency notices</h2>
+  <p>The original notice file and its provenance are also included under
+     <code>third_party/onnxruntime/</code> in each release archive.</p>
+  <pre><!-- ONNX_RUNTIME_THIRD_PARTY_NOTICES --></pre>
+</body>
+</html>
