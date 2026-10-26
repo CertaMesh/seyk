@@ -55,21 +55,15 @@ and exact locations inside them. It does not generate answers or summaries.
 
 ## Quickstart
 
-Install a prebuilt binary with the GitHub CLI (run `gh auth login` first):
-
-```bash
-gh api repos/CertaMesh/seyk/contents/scripts/install.sh \
-  -H "Accept: application/vnd.github.raw" | sh
-```
-
-The script picks your platform, checks the SHA-256 checksum and installs to
-`~/.local/bin`. Builds exist for macOS (Apple Silicon), Linux (x86_64 and ARM64)
-and Windows (x86_64). Linux needs glibc 2.38 or newer, and there is no Intel Mac
-build. To build from source instead (Rust 1.89 or newer):
+Build and install from source (Rust 1.89 or newer):
 
 ```bash
 cargo install --locked --git https://github.com/CertaMesh/seyk
 ```
+
+Prebuilt binaries for macOS (Apple Silicon), Linux (x86_64 and ARM64) and
+Windows (x86_64) return with the next release. Linux needs glibc 2.38 or newer,
+and there is no Intel Mac build.
 
 Download the model weights once (about 0.5 GB):
 
