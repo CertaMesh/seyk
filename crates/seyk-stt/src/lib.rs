@@ -163,7 +163,7 @@ impl State {
             }
         }
         let load_graph = |file| -> Result<Session> {
-            let (asset, graph) = manifest().graph(file);
+            let (asset, graph) = manifest().graph(file)?;
             let bytes = read_asset(dir, asset)?;
             let session = Session::builder()
                 .map_err(ort_error)?

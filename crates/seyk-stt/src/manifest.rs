@@ -27,18 +27,22 @@ pub(crate) struct Manifest {
     pub policy: Policy,
 }
 impl Manifest {
-    pub fn graph(&self, file: &str) -> (&Asset, &Graph) {
-        let graph = self
-            .graphs
-            .iter()
-            .find(|graph| graph.file == file)
-            .expect("compiled manifest graph");
-        let asset = self
-            .files
-            .iter()
-            .find(|asset| asset.path == graph.file)
-            .expect("compiled manifest graph asset");
-        (asset, graph)
+    pub fn graph(&self, file: &str) -> Result<(&Asset, &Graph)> {
+        let mut graphs = self.graphs.iter().filter(|graph| graph.file == file);
+        let graph = graphs
+            .next()
+            .ok_or_else(|| model_error("graph missing from manifest"))?;
+        if graphs.next().is_some() {
+            return Err(model_error("duplicate graph in manifest"));
+        }
+        let mut assets = self.files.iter().filter(|asset| asset.path == graph.file);
+        let asset = assets
+            .next()
+            .ok_or_else(|| model_error("graph asset missing from manifest"))?;
+        if assets.next().is_some() {
+            return Err(model_error("duplicate graph asset in manifest"));
+        }
+        Ok((asset, graph))
     }
 }
 #[derive(Deserialize)]
@@ -328,7 +332,7 @@ mod tests {
                 "{}",
                 graph.file
             );
-            assert_eq!(manifest.graph(&graph.file).0.path, graph.file);
+            assert_eq!(manifest.graph(&graph.file).unwrap().0.path, graph.file);
         }
     }
 
@@ -342,8 +346,8 @@ mod tests {
             "onnx/decoder_model.onnx",
             "onnx/decoder_with_past_model.onnx",
         ] {
-            let (expected, expected_graph) = manifest().graph(file);
-            let (asset, graph) = shuffled.graph(file);
+            let (expected, expected_graph) = manifest().graph(file).unwrap();
+            let (asset, graph) = shuffled.graph(file).unwrap();
             assert_eq!(asset.path, file);
             assert_eq!(graph.file, file);
             assert_eq!(asset.bytes, expected.bytes);
@@ -360,6 +364,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn graph_lookup_rejects_missing_graph() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let file = "onnx/encoder_model.onnx";
+        manifest.graphs.retain(|graph| graph.file != file);
+        assert!(matches!(
+            manifest.graph(file),
+            Err(Error::SttModel {
+                reason: "graph missing from manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_missing_asset() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let file = "onnx/encoder_model.onnx";
+        manifest.files.retain(|asset| asset.path != file);
+        assert!(matches!(
+            manifest.graph(file),
+            Err(Error::SttModel {
+                reason: "graph asset missing from manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_duplicate_graph() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let mut duplicate: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let graph = duplicate.graphs.remove(0);
+        let file = graph.file.clone();
+        manifest.graphs.push(graph);
+        assert!(matches!(
+            manifest.graph(&file),
+            Err(Error::SttModel {
+                reason: "duplicate graph in manifest"
+            })
+        ));
+    }
+
+    #[test]
+    fn graph_lookup_rejects_duplicate_asset() {
+        let mut manifest: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let mut duplicate: Manifest = serde_json::from_str(MANIFEST).unwrap();
+        let asset = duplicate.files.remove(0);
+        let file = asset.path.clone();
+        manifest.files.push(asset);
+        assert!(matches!(
+            manifest.graph(&file),
+            Err(Error::SttModel {
+                reason: "duplicate graph asset in manifest"
+            })
+        ));
     }
 
     #[test]
