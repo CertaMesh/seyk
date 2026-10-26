@@ -672,6 +672,7 @@ impl SeykServer {
             "schema_version": crate::JSON_SCHEMA_VERSION,
             "index": self.status()?,
             "index_progress": self.root_progress(),
+            "model_diagnostics": self.hub.ready_engine.get().and_then(|engine| engine.embedder().unavailable_reason(seyk::Modality::Image)).into_iter().collect::<Vec<_>>(),
         }))
     }
 
@@ -1036,7 +1037,7 @@ fn to_response(r: SearchResults) -> Response {
 #[tool_router]
 impl SeykServer {
     #[tool(
-        description = "Current indexing state and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
+        description = "Current indexing state, model availability diagnostics, and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
         Ok(match self.index_status_json() {
@@ -1355,7 +1356,7 @@ mod tests {
             env!("SEYK_BUILD_VERSION")
         );
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 9);
+        assert_eq!(valid.schema_version, 10);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1405,6 +1406,46 @@ mod tests {
         assert_eq!(
             ordinary.confine(&root.join("alias.rs")).unwrap(),
             root.join("alias.rs")
+        );
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn missing_vision_is_visible_in_status_without_no_model_degradation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("note.txt"), "quartz lighthouse").unwrap();
+        std::fs::write(root.join("photo.png"), b"skipped before decoding").unwrap();
+        let reason = "image embedding unavailable: missing onnx/vision_encoder_quantized.onnx, onnx/vision_encoder_quantized.onnx_data; run `seyk model download`; semantic text search remains available";
+        let hub = Hub::new(
+            Box::new(move || {
+                Ok(SearchEngine::builder()
+                    .embedder(
+                        crate::common::FakeEmbedder::new(Dimension::D128, "missing-vision")
+                            .with_missing_vision(Some(reason.into())),
+                    )
+                    .build()?)
+            }),
+            false,
+        );
+        let server = SeykServer::new(vec![root], hub).unwrap();
+        // Status must not initialize or wait for the model.
+        assert_eq!(
+            server.index_status_json().unwrap()["model_diagnostics"],
+            serde_json::json!([])
+        );
+        assert!(server.hub.ready_engine.get().is_none());
+        let response = search(&server, "quartz");
+        assert!(response.degraded.is_none());
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            server.index_status_json().unwrap()["model_diagnostics"],
+            serde_json::json!([reason])
+        );
+        assert!(
+            serde_json::to_string(&response)
+                .unwrap()
+                .contains("vision_encoder_quantized.onnx_data")
         );
     }
 
@@ -1527,7 +1568,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 9);
+        assert_eq!(response["schema_version"], 10);
         assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
         assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
         assert_eq!(

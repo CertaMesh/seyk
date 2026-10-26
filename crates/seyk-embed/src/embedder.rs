@@ -87,6 +87,10 @@ pub trait Embedder: Send + Sync {
     fn input_identity(&self, _modality: Modality) -> Result<&str> {
         Ok("")
     }
+    /// Why a configured modality is unavailable, including recovery instructions.
+    fn unavailable_reason(&self, _modality: Modality) -> Option<String> {
+        None
+    }
     fn supports(&self, modality: Modality) -> bool;
     fn embed_batch(&self, requests: &[EmbeddingRequest<'_>]) -> Result<Vec<Embedding>>;
 
@@ -133,6 +137,9 @@ impl<E: Embedder + ?Sized> Embedder for Box<E> {
     fn input_identity(&self, modality: Modality) -> Result<&str> {
         (**self).input_identity(modality)
     }
+    fn unavailable_reason(&self, modality: Modality) -> Option<String> {
+        (**self).unavailable_reason(modality)
+    }
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)
     }
@@ -164,6 +171,9 @@ impl<E: Embedder + ?Sized> Embedder for std::sync::Arc<E> {
     }
     fn input_identity(&self, modality: Modality) -> Result<&str> {
         (**self).input_identity(modality)
+    }
+    fn unavailable_reason(&self, modality: Modality) -> Option<String> {
+        (**self).unavailable_reason(modality)
     }
     fn supports(&self, modality: Modality) -> bool {
         (**self).supports(modality)

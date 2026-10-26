@@ -139,7 +139,8 @@ pub struct GemmaConfig {
     pub precision: Precision,
     /// Longer inputs are truncated. Segments are far shorter than this; it is a safety net.
     pub max_tokens: usize,
-    /// Load the vision encoder so image resources can be embedded.
+    /// Load the vision encoder when its files are present; missing files disable
+    /// images with an availability diagnostic while text remains usable.
     pub vision: bool,
     /// Enable audio inputs; missing weights fail individual audio requests.
     pub audio: bool,
@@ -186,6 +187,27 @@ impl GemmaConfig {
     }
 }
 
+/// Select the runtime configuration without loading weights. Missing optional
+/// vision assets disable images, while required text assets are still validated
+/// by the normal resolver. The effective config also defines cache identity.
+pub fn runtime_config(config: &GemmaConfig) -> Result<(GemmaConfig, Option<String>)> {
+    let mut effective = config.clone();
+    let missing: Vec<_> = missing_model_files(config)?
+        .into_iter()
+        .filter(|file| file.starts_with("onnx/vision_encoder"))
+        .collect();
+    let reason = if config.vision && !missing.is_empty() {
+        effective.vision = false;
+        Some(format!(
+            "image embedding unavailable: missing {}; run `seyk model download`; semantic text search remains available",
+            missing.join(", ")
+        ))
+    } else {
+        None
+    };
+    Ok((effective, reason))
+}
+
 /// Resolve the local model directory without touching the network.
 pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
     Ok(resolve(config)?.dir)
@@ -195,6 +217,8 @@ pub fn locate(config: &GemmaConfig) -> Result<PathBuf> {
 /// HF sources read local refs when present; local directories use the same file
 /// fingerprint as model loading (graph/config bytes and external weight sizes).
 pub fn model_identity(config: &GemmaConfig) -> Result<ModelIdentity> {
+    let (effective, _) = runtime_config(config)?;
+    let config = &effective;
     let resolved = match &config.source {
         ModelSource::Directory(_) => resolve(config)?,
         ModelSource::HuggingFace { repo, revision } => {
@@ -351,6 +375,7 @@ pub struct EmbeddingGemma2 {
     text: Vec<Mutex<Session>>,
     text_workers: Option<rayon::ThreadPool>,
     vision: Option<Mutex<Session>>,
+    vision_unavailable: Option<String>,
     #[cfg(feature = "audio")]
     audio: Option<audio::AudioEncoder>,
     identity: ModelIdentity,
@@ -455,8 +480,11 @@ impl EmbeddingGemma2 {
                 modality: Modality::Image,
             });
         }
+        let (config, vision_unavailable) = runtime_config(&config)?;
         let resolved = resolve(&config)?;
-        Self::from_resolved(resolved, config)
+        let mut model = Self::from_resolved(resolved, config)?;
+        model.vision_unavailable = vision_unavailable;
+        Ok(model)
     }
 
     fn from_resolved(resolved: ResolvedModel, config: GemmaConfig) -> Result<Self> {
@@ -508,6 +536,7 @@ impl EmbeddingGemma2 {
             text,
             text_workers,
             vision,
+            vision_unavailable: None,
             identity,
             config,
             pad_id,
@@ -935,6 +964,12 @@ impl Embedder for EmbeddingGemma2 {
         }
         let _ = modality;
         Ok("")
+    }
+
+    fn unavailable_reason(&self, modality: Modality) -> Option<String> {
+        (modality == Modality::Image)
+            .then(|| self.vision_unavailable.clone())
+            .flatten()
     }
 
     fn supports(&self, modality: Modality) -> bool {
@@ -1391,6 +1426,65 @@ mod resolution_tests {
             panic!("an incomplete snapshot must fail");
         };
         assert!(message.contains(&missing));
+    }
+
+    #[test]
+    fn optional_vision_uses_text_only_identity_and_lists_only_missing_files() {
+        for precision in [Precision::Q8, Precision::Fp32] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = GemmaConfig {
+                source: ModelSource::Directory(dir.path().into()),
+                precision,
+                vision: true,
+                ..GemmaConfig::default()
+            };
+            let mut text_only = config.clone();
+            text_only.vision = false;
+            write_files(dir.path(), &text_only);
+            let vision_files = &config.files()[text_only.files().len()..];
+            for installed in 0..=vision_files.len() {
+                let (effective, reason) = runtime_config(&config).unwrap();
+                assert_eq!(effective.vision, installed == vision_files.len());
+                if let Some(reason) = reason {
+                    for file in &vision_files[installed..] {
+                        assert!(reason.contains(file));
+                    }
+                    for file in &vision_files[..installed] {
+                        // Full graph names can prefix external-data names.
+                        assert!(!reason.contains(&format!("{file},")));
+                    }
+                    assert!(reason.contains("seyk model download"));
+                    assert_eq!(
+                        model_identity(&config).unwrap(),
+                        model_identity(&text_only).unwrap()
+                    );
+                } else {
+                    assert_eq!(installed, vision_files.len());
+                }
+                if let Some(file) = vision_files.get(installed) {
+                    std::fs::write(dir.path().join(file), b"synthetic vision file").unwrap();
+                }
+            }
+            assert!(runtime_config(&text_only).unwrap().1.is_none());
+        }
+    }
+
+    #[test]
+    fn missing_optional_vision_does_not_hide_missing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = GemmaConfig {
+            source: ModelSource::Directory(dir.path().into()),
+            vision: cfg!(feature = "image"),
+            ..GemmaConfig::default()
+        };
+        let (effective, _) = runtime_config(&config).unwrap();
+        assert!(!effective.vision);
+        let error = match EmbeddingGemma2::load(config) {
+            Ok(_) => panic!("text weights are required"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::ModelNotFound(_)));
+        assert!(error.to_string().contains("tokenizer.json"));
     }
 
     #[test]

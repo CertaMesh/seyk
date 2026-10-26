@@ -105,7 +105,14 @@ A search covered by a running watcher uses the existing index once all discovere
 supported resources are current. While the model loads, it uses an independent
 in-memory keyword index and returns `degraded: {"mode": "lexical_only", "reason":
 "model_loading"}`. New or changed resources awaiting embedding trigger the same
-fallback with `reason: "not_yet_embedded"`. Missing weights use `reason: "no_model"`.
+fallback with `reason: "not_yet_embedded"`. Missing text weights use `reason: "no_model"`.
+If only vision encoder files are missing, semantic text search stays available.
+Images and scanned PDF pages are skipped with diagnostics naming the missing files
+and `seyk model download`. After loading, `index_status.model_diagnostics` lists
+this condition; it is empty before model loading and when no optional model is
+missing. This does not set a lexical-only degradation marker. The active profile
+matches explicit `--text-only`, preserving reusable text vectors for identical
+inputs under that profile.
 The keyword index covers text and PDF text, respects request filters and root
 confinement, and creates no vectors. Preparing it still takes discovery and text
 parsing time, and there is no hard latency bound. Ready-state ranking is unchanged.
@@ -165,10 +172,10 @@ and no new text is persisted in the cache. Without a contributing keyword leg,
 the list is empty.
 
 Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
-meaning. Current JSON `schema_version` is **9**. Version 7 added optional result-kind
+meaning. Current JSON `schema_version` is **10**. Version 7 added optional result-kind
 counts, per-root indexing progress and `index_status`; version 8 adds optional
-lexical-only `degraded` metadata and its reason. Version 9 adds per-profile derived image-code counts to cache statistics.
-Extraction accepts versions 2–9.
+lexical-only `degraded` metadata and its reason. Version 9 added per-profile derived image-code counts to cache statistics. Version 10 adds `model_diagnostics` to MCP index status.
+Extraction accepts versions 2–10.
 Match provenance does not change existing fields or extraction requirements. Older
 search JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:
