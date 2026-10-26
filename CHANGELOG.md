@@ -11,10 +11,6 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ## [Unreleased]
 
-### Fixed
-
-- **Breaking:** JSON `schema_version` 10 adds MCP `index_status.model_diagnostics`. Keep semantic text search available when vision encoder files are missing, and report skipped images and scanned PDF pages with recovery instructions.
-
 ### Added
 
 - Hybrid search: one query now combines meaning, keywords (BM25) and file names,
@@ -95,11 +91,12 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
   longer overtaken by a weak hit that only shares a keyword.
   ([#5](https://github.com/CertaMesh/seyk/pull/5),
   [#69](https://github.com/CertaMesh/seyk/pull/69))
-- **Breaking:** JSON output carries a `schema_version`, now 9, and identifies
+- **Breaking:** JSON output carries a `schema_version`, now 10, and identifies
   resources by file URI instead of a local path. Later versions added PDF fields
   (3), speech-to-text (4), cache backup status (5), typed skip reasons (6),
   result counts and indexing progress (7), lexical fallback metadata (8) and
-  image-code counts (9). `seyk extract` still accepts older search output.
+  image-code counts (9) and MCP model availability diagnostics (10).
+  `seyk extract` still accepts older search output.
   ([#9](https://github.com/CertaMesh/seyk/pull/9),
   [#12](https://github.com/CertaMesh/seyk/pull/12),
   [#38](https://github.com/CertaMesh/seyk/pull/38),
@@ -159,6 +156,12 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
   ([#88](https://github.com/CertaMesh/seyk/pull/88))
 
 ### Fixed
+
+- **Breaking:** JSON `schema_version` 10 adds MCP
+  `index_status.model_diagnostics`. Keep semantic text search available when
+  vision encoder files are missing, and report skipped images and scanned PDF
+  pages with recovery instructions.
+  ([#91](https://github.com/CertaMesh/seyk/pull/91))
 
 - Concurrent indexing passes could drop each other's vectors, leaving files
   missing from semantic results.

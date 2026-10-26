@@ -1,6 +1,6 @@
 #![cfg(all(feature = "cli", feature = "image"))]
 mod common;
-#[cfg(feature = "pdf")]
+#[cfg(feature = "pdf-render")]
 #[path = "../crates/seyk-core/tests/support/pdf_fixture.rs"]
 mod fixture;
 
@@ -26,7 +26,7 @@ fn missing_vision_profile_preserves_text_vectors_and_reports_skipped_media() {
     }
     std::fs::write(docs.join("note.txt"), "quartz lighthouse").unwrap();
     std::fs::write(docs.join("photo.png"), b"never decoded").unwrap();
-    #[cfg(feature = "pdf")]
+    #[cfg(feature = "pdf-render")]
     std::fs::write(
         docs.join("scan.pdf"),
         fixture::pdf(&[""], fixture::Kind::EmptyPage),
@@ -62,7 +62,7 @@ fn missing_vision_profile_preserves_text_vectors_and_reports_skipped_media() {
     assert_eq!(result.stats.sync.skipped[0].reason, reason);
     assert!(reason.contains("onnx/vision_encoder_quantized.onnx_data"));
     assert!(reason.contains("seyk model download"));
-    #[cfg(feature = "pdf")]
+    #[cfg(feature = "pdf-render")]
     {
         assert_eq!(result.stats.sync.page_diagnostics.len(), 1);
         assert_eq!(result.stats.sync.page_diagnostics[0].reason, reason);

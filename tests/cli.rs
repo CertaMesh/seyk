@@ -718,7 +718,7 @@ fn extract_round_trip_without_a_model() {
         let extracted: Value = serde_json::from_slice(&json.stdout).unwrap();
         assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), expected);
     }
-    for version in [1, 10] {
+    for version in [1, 11] {
         let mut document = value.clone();
         document["schema_version"] = version.into();
         let bad = run(&["extract", "--from-json", "-"], &document.to_string());

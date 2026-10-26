@@ -66,9 +66,9 @@ fn typed_input_failures_are_one_static_line() {
     for schema in [
         Value::Null,
         json!(1),
-        json!(10),
-        json!("9"),
-        json!(9.5),
+        json!(11),
+        json!("10"),
+        json!(10.5),
         json!(true),
     ] {
         let mut value = valid.clone();

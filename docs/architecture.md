@@ -355,7 +355,7 @@ stop an older daemon explicitly. Startup logs, status `version`, and MCP
 per build/configuration in the daemon cache directory after shutdown. The daemon
 keeps it to preserve mutual exclusion when another same-build daemon starts.
 
-This identity change keeps JSON schema v10, cache schema v7 and the hello protocol
+This identity change keeps JSON schema v9, cache schema v7 and the hello protocol
 unchanged: no fields or storage layouts change. Build tokens inherit the
 `--version` limits: distinct dirty trees and metadata-free builds can have equal
 tokens. Endpoint separation does not make mixed cache schemas safe; use separate

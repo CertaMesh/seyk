@@ -1901,7 +1901,7 @@ mod tests {
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            9
+            10
         );
     }
 

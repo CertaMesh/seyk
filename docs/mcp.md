@@ -175,7 +175,7 @@ Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
 meaning. Current JSON `schema_version` is **10**. Version 7 added optional result-kind
 counts, per-root indexing progress and `index_status`; version 8 adds optional
 lexical-only `degraded` metadata and its reason. Version 9 added per-profile derived image-code counts to cache statistics. Version 10 adds `model_diagnostics` to MCP index status.
-Extraction accepts versions 2–9.
+Extraction accepts versions 2–10.
 Match provenance does not change existing fields or extraction requirements. Older
 search JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:
