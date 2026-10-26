@@ -22,6 +22,7 @@ repository.workspace = true
 readme.workspace = true
 keywords = ["semantic-search", "embeddings", "embeddinggemma", "local-first", "search"]
 categories = ["command-line-utilities", "text-processing"]
+include = ["/src/**", "/README.md", "/LICENSE*", "/NOTICE*", "/build.rs"]
 
 [features]
 default = ["onnx", "image", "cli", "mcp", "watch", "pdf-render"]
@@ -117,3 +118,8 @@ required-features = ["cli", "image"]
 [[example]]
 name = "photo_calibration_export"
 required-features = ["onnx", "image"]
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+# ort-sys skips native downloads and linking when docs.rs sets DOCS_RS.

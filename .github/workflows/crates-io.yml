@@ -1,0 +1,48 @@
+name: Crates.io preparation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  packages:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: crates-io
+      - name: Verify publishable archives without uploading
+        # Single-crate dry-runs cannot resolve unpublished siblings from crates.io.
+        # Cargo 1.99 supports a workspace dry-run and stages sibling packages in
+        # a temporary local registry, then verifies consumers in dependency order.
+        # No registry token is needed or provided.
+        run: |
+          rm -rf target/package
+          cargo publish --dry-run --locked \
+            -p seyk-embed -p seyk-embeddinggemma -p seyk-core -p seyk-stt -p seyk
+      - name: Review every file and report compressed and unpacked sizes
+        run: python3 scripts/check_crate_packages.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate-packages
+          path: |
+            target/package/*.crate
+            target/package/sizes.json
+      - name: Fetch documentation dependencies before disabling networking
+        run: cargo fetch --locked
+      - name: Build all API docs as docs.rs does, with networking disabled
+        # DOCS_RS makes ort-sys skip native runtime download/linking. Use a fresh
+        # target directory so a cached normal build cannot mask a missing guard.
+        run: >-
+          sudo unshare --net env "PATH=$PATH" "RUSTUP_HOME=$HOME/.rustup"
+          "CARGO_HOME=$HOME/.cargo" DOCS_RS=1 CARGO_TARGET_DIR=target/docs-rs
+          cargo doc --workspace --all-features --no-deps --offline --locked

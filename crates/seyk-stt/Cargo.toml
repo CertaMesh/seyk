@@ -7,9 +7,10 @@ rust-version.workspace = true
 license = "Apache-2.0 AND MIT"
 description = "Offline, on-demand Whisper transcription for Seyk"
 repository.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["whisper", "speech-to-text", "transcription", "offline", "onnx"]
 categories = ["multimedia::audio", "science"]
+include = ["/src/**", "/README.md", "/LICENSE*", "/NOTICE*", "/assets/**"]
 
 [dependencies]
 seyk-core = { path = "../seyk-core", version = "0.1.0", features = ["audio"] }
@@ -27,3 +28,8 @@ flate2 = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+# ort-sys skips native downloads and linking when docs.rs sets DOCS_RS.
