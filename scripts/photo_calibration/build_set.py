@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -191,6 +192,8 @@ def verify(directory, excluded=None):
 
 def build(directory, count, approved_gb):
     upper = count * MAX_IMAGE_BYTES
+    if approved_gb is not None and (not math.isfinite(approved_gb) or approved_gb <= 0):
+        raise ValueError("approved download bound must be positive and finite")
     if upper > 5_000_000_000 and (approved_gb is None or upper > approved_gb * 1e9):
         raise ValueError("download exceeds 5 GB; obtain approval and pass --approved-download-gb")
     directory.mkdir(parents=True, exist_ok=True)

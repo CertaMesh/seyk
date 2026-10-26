@@ -267,5 +267,10 @@ def measure(export_path, job_path, output, model_hashes):
                 "generic_fit_queries": len(training_queries), "eval_queries": len(queries),
                 "methods": provenance, "results": results, "decision": select(results),
                 "scope": "offline table experiment; no product codec or scan-loop change, no timing claim"}
+    (output / "NOTICE.md").write_text(
+        (ASSETS / "NOTICE.md").read_text() +
+        "\nExperimental M1/M2/M3 calibration tables were modified by Seyk through "
+        "per-coordinate percentile fitting on a separate CC0 calibration set. "
+        "The upstream Photo Anchor remains unchanged. These candidates are not product assets.\n")
     write_json(output / "evidence.json", evidence)
     return evidence

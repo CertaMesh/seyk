@@ -62,6 +62,8 @@ class BuilderTests(unittest.TestCase):
     def test_estimate_and_approval_stop_before_network(self):
         with patch.object(builder, "discover", side_effect=AssertionError("network")):
             with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, "positive and finite"):
+                    builder.build(Path(directory), 2501, float("nan"))
                 with self.assertRaisesRegex(ValueError, "exceeds 5 GB"):
                     builder.build(Path(directory), 2501, None)
         with patch.object(run.sys, "argv", ["run"]), patch.object(run, "build", side_effect=AssertionError("network")), patch.object(run.subprocess, "run", side_effect=AssertionError("model")):
