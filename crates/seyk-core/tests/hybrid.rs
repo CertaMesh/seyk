@@ -1447,6 +1447,7 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
         // Daemon/MCP lifetimes run an initial index before reporting ready.
         let report = reopened.index().paths([root.path()]).execute().unwrap();
         assert_eq!(report.sync.skipped.len(), 1);
+        assert_eq!(report.sync.skipped[0].resource, id);
         let result = reopened
             .search("father")
             .paths([root.path()])

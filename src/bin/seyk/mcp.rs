@@ -2103,11 +2103,21 @@ mod tests {
             page_diagnostics: pages,
             ..Default::default()
         });
-        let confined = snapshot.confined(&[allowed]);
+        let confined = snapshot.confined(std::slice::from_ref(&allowed));
         assert_eq!(confined.pages_total, 1);
         assert_eq!(confined.page_diagnostics.len(), 1);
         assert_eq!(confined.skipped.len(), 1);
         assert!(!serde_json::to_string(&confined).unwrap().contains("hidden"));
+
+        // A removed root must retain confined diagnostics through the fallback.
+        let missing_root = allowed.canonicalize().unwrap();
+        std::fs::remove_dir(&allowed).unwrap();
+        assert!(!missing_root.exists());
+        let missing = snapshot.confined(&[missing_root]);
+        assert_eq!(
+            serde_json::to_value(&missing).unwrap(),
+            serde_json::to_value(&confined).unwrap()
+        );
     }
 
     fn stopped() -> IndexStatus {
