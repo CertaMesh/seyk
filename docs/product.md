@@ -84,7 +84,11 @@ Treat it as sensitive. See [Caching and storage](caching-and-storage.md).
 ## Non-goals
 
 - Answering questions, summarising or generating text.
-- Being a chat-with-your-documents app, an agent framework or a hosted service.
+- Judging whether evidence is true. A hash match shows the source is unchanged
+  since indexing, not that it is authentic or correct.
+- Being a chat-with-your-documents app, an agent framework, an LLM
+  orchestrator, an agent memory system or a hosted service. Seyk is a retrieval
+  component inside them.
 - Replacing grep. For every exact occurrence of a string or symbol, grep is
   still the right tool.
 - PII protection or redaction. That belongs to the integrator or a downstream
@@ -109,7 +113,12 @@ Treat it as sensitive. See [Caching and storage](caching-and-storage.md).
 
 Seyk is at 0.1.0. Install from source; prebuilt binaries return with the next
 release. The crates are not on crates.io yet. Video and OCR are not
-implemented. See [Known limitations](limitations.md) and the
+implemented. Vector search is an exact comparison against every cached f32
+vector by default. An experimental, opt-in Photo Anchor scan for standalone
+images shortlists candidates from compressed codes and reranks them with f32;
+it needs a persistent SQLite cache and a d256 or d768 profile, and gives no
+recall guarantee on arbitrary libraries
+([details](multimodal.md#experimental-photo-anchor-scan)). See [Known limitations](limitations.md) and the
 [roadmap](roadmap.md).
 
 ## How Seyk compares

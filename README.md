@@ -201,22 +201,28 @@ weights: `cargo run --example embed_search`.
 | Audio | Included in the default CLI; `seyk setup audio` installs audio search and speech-to-text models |
 | Video | ❌ not implemented |
 
-Seyk never indexes keys, password stores, `.env` files or credentials, and
-there is no override. See [Supported content](https://github.com/CertaMesh/seyk/blob/main/docs/supported-content.md).
+Seyk refuses files whose names or paths look like keys, password stores,
+`.env` files or credentials, and there is no override. The check uses names
+and paths only, not file contents, so a renamed secret is not detected. See [Supported content](https://github.com/CertaMesh/seyk/blob/main/docs/supported-content.md).
 
 ## Status and limitations
 
 Seyk is at version 0.1.0. Know these before you adopt it:
 
 - **CPU only.** No GPU or Neural Engine provider is enabled yet.
-- **The first search of a large folder is slow.** Expect roughly 30 minutes for
-  10,000 segments on a busy machine. After that, Seyk embeds only what changed.
+- **The first search of a large folder is slow.** A historical measurement on a
+  busy Apple M5 Max (q8, 256 dimensions) took roughly 30 minutes for 10,000
+  segments; see [Benchmarks](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md#model).
+  After that, Seyk embeds only what changed.
 - **Hybrid can push a good meaning match down.** Use `--mode semantic` for
   purely thematic queries.
 - **Indexing can use several GB of memory.** Files that tokenize densely, such
   as numeric JSON, make embedding batches large. A fix is in progress
   ([#95](https://github.com/CertaMesh/seyk/pull/95)).
 - **Video and scanned-page OCR are not implemented.**
+- **Search is exact by default.** Every query is compared with every cached
+  vector. An opt-in image scan (`--image-scan q4`) is experimental and has no
+  recall guarantee; see [Multimodal support](https://github.com/CertaMesh/seyk/blob/main/docs/multimodal.md#experimental-photo-anchor-scan).
 - **The library API can still change.** Resource provider types may change
   before 1.0, and the filesystem is the only supported provider.
 
