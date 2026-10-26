@@ -1,6 +1,8 @@
 # Seyk documentation
 
 Start with the [project README](../README.md) for what Seyk is and a quickstart.
+[What Seyk is for](product.md) covers its purpose, the evidence contract and
+non-goals; the [roadmap](roadmap.md) lists the outcomes being worked on.
 
 ## Use Seyk
 
@@ -11,6 +13,7 @@ Start with the [project README](../README.md) for what Seyk is and a quickstart.
 - [Supported content](supported-content.md): file types, files Seyk never indexes, segmentation, images, PDFs.
 - [Caching and storage](caching-and-storage.md): how caching works, where files live, privacy and scrubbing, schema versions, cache import.
 - [Known limitations](limitations.md)
+- [Examples](../examples/README.md): decision records for agents, and a Rust program that embeds Seyk.
 
 ## Build on Seyk
 

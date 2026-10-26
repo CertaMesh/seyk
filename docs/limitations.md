@@ -16,6 +16,11 @@
   only as opt-in, on-demand extraction (`audio-stt`). See
   [the multimodal status](multimodal.md) for current support and remaining
   work, including [PDF extraction limits](multimodal.md#pdf-retrieval-done-ocr-deferred).
+- **Indexing can use several GB of memory.** Embedding batches have no token
+  budget, so files that tokenize densely (numeric JSON, tables) fill a batch with
+  long inputs, and ONNX Runtime keeps its peak allocation. A long-running daemon
+  stays at its highest batch so far. A fix is in progress
+  ([#95](https://github.com/CertaMesh/seyk/pull/95)).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is
   enabled yet.
 - **Start-up costs about 1.5 s**, mostly ONNX graph optimisation and parsing the
