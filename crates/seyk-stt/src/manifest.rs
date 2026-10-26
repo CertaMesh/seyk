@@ -179,6 +179,13 @@ fn verify_asset(dir: &Path, asset: &Asset) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn set_asset_permissions(file: &File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .map_err(|_| model_error("cannot set asset permissions"))
+}
+
 /// Stage a caller's explicitly downloaded files, then atomically publish one
 /// complete verified directory. Never used by inference. Existing unmanaged
 /// directories are preserved. A managed corrupt installation can be repaired.
@@ -204,7 +211,13 @@ pub fn install_with(
         })?;
     _lock.try_lock().map_err(|error| Error::Io {
         path: lock_path,
-        source: error.into(),
+        source: match error {
+            std::fs::TryLockError::WouldBlock => std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "another STT install is running",
+            ),
+            std::fs::TryLockError::Error(source) => source,
+        },
     })?;
     if destination.exists() && verify_directory(destination).is_ok() {
         return Ok(destination.into());
@@ -235,6 +248,8 @@ pub fn install_with(
         if n != asset.bytes {
             return Err(model_error("download length mismatch"));
         }
+        #[cfg(unix)]
+        set_asset_permissions(&output)?;
         output
             .sync_all()
             .map_err(|_| model_error("cannot sync asset"))?;
@@ -245,6 +260,8 @@ pub fn install_with(
     marker
         .write_all(stamp.as_bytes())
         .map_err(|_| model_error("cannot write manifest marker"))?;
+    #[cfg(unix)]
+    set_asset_permissions(&marker)?;
     marker
         .sync_all()
         .map_err(|_| model_error("cannot sync manifest marker"))?;
@@ -286,6 +303,7 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().contains(&lock_path.display().to_string()));
+        assert!(error.to_string().contains("another STT install is running"));
         drop(lock);
         let error = install_with(&dir.path().join("model"), |_| {
             Err(model_error("fake fetch reached"))

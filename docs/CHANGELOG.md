@@ -7,7 +7,9 @@
   files; add offline `seyk setup` status and `--dry-run`/`--json` plans. Missing
   audio/STT model diagnostics point to the setup command. Provisioning stages
   and verifies audio downloads before publication; STT uses an OS lock that
-  releases after interruption. Library builds with
+  releases after interruption. Audio resumes interrupted staged downloads and
+  sweeps legacy stages; published audio/STT asset files use mode 0644 on Unix.
+  Library builds with
   default features disabled remain minimal; search never downloads weights.
 
 - Fix daemon and `seyk mcp` startup under long HOME/cache paths: move only overlong default sockets to a private per-user directory under TMPDIR or `/tmp`, retaining normal cache locks and logs. Reject fallback directories with unsafe ownership, permissions or symlink type. Explicit `SEYK_DAEMON_DIR` overrides remain supported; overlong socket paths report their byte length and platform limit.

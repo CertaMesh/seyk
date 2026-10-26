@@ -127,25 +127,114 @@ pub fn verify_audio(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "audio")]
+fn audio_install_lock(parent: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+        path: parent.into(),
+        source,
+    })?;
+    let path = parent.join(".audio-fetch.lock");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+    file.try_lock().map_err(|error| Error::Io {
+        path,
+        source: error.into(),
+    })?;
+    Ok(file)
+}
+
+#[cfg(feature = "audio")]
+fn sweep_audio_stages(parent: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(parent).map_err(|source| Error::Io {
+        path: parent.into(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| Error::Io {
+            path: parent.into(),
+            source,
+        })?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(".audio-fetch-"))
+            && entry
+                .file_type()
+                .map_err(|source| Error::Io {
+                    path: entry.path(),
+                    source,
+                })?
+                .is_dir()
+        {
+            std::fs::remove_dir_all(entry.path()).map_err(|source| Error::Io {
+                path: entry.path(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove orphaned stages from older audio installers. Explicit setup only.
+#[cfg(feature = "audio")]
+pub fn cleanup_audio_stages() -> Result<()> {
+    let dir = audio_directory();
+    let parent = dir.parent().expect("snapshot parent");
+    let _lock = audio_install_lock(parent)?;
+    sweep_audio_stages(parent)
+}
+
+#[cfg(feature = "audio")]
+fn audio_stage_directory(parent: &Path) -> Result<PathBuf> {
+    let path = parent.join(".audio-fetch");
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.recursive(false).create(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(source) => return Err(Error::Io { path, source }),
+    }
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+        return Err(Error::Config(format!(
+            "audio stage must be a private directory: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |source| Error::Io {
+                path: path.clone(),
+                source,
+            },
+        )?;
+    }
+    Ok(path)
+}
+
 /// Explicitly provision pinned q8 audio files; never called by inference.
 #[cfg(feature = "audio")]
 pub fn download_audio() -> Result<PathBuf> {
     let dir = audio_directory();
     let parent = dir.parent().expect("snapshot parent");
-    std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-        path: parent.into(),
-        source,
-    })?;
-    let stage = tempfile::Builder::new()
-        .prefix(".audio-fetch-")
-        .tempdir_in(parent)
-        .map_err(|source| Error::Io {
-            path: parent.into(),
-            source,
-        })?;
+    let _lock = audio_install_lock(parent)?;
+    sweep_audio_stages(parent)?;
+    let stage = audio_stage_directory(parent)?;
     // hf-hub publishes into this private cache, never the inference snapshot.
     let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .with_cache_dir(stage.path().join("hub"))
+        .with_cache_dir(stage.join("hub"))
         .with_progress(true)
         .build()
         .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
@@ -154,10 +243,36 @@ pub fn download_audio() -> Result<PathBuf> {
         hf_hub::RepoType::Model,
         seyk_embeddinggemma::ONNX_REVISION.into(),
     ));
-    install_audio_with(&dir, audio_assets(), |asset| {
+    let cached = stage
+        .join("hub")
+        .join(format!(
+            "models--{}",
+            seyk_embeddinggemma::ONNX_REPO.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(seyk_embeddinggemma::ONNX_REVISION);
+    let result = install_audio_with(&dir, audio_assets(), |asset| {
+        let path = cached.join(asset.path);
+        if verify_audio_asset(&path, asset).is_ok() {
+            return Ok(path);
+        }
+        // A previous interrupted attempt may have left an invalid regular
+        // snapshot entry in the private cache too (notably on Windows).
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(Error::Io { path, source }),
+        }
         repo.download(asset.path)
             .map_err(|e| Error::Embedding(format!("downloading {}: {e}", asset.path)))
-    })
+    });
+    if result.is_ok() {
+        std::fs::remove_dir_all(&stage).map_err(|source| Error::Io {
+            path: stage,
+            source,
+        })?;
+    }
+    result
 }
 
 #[cfg(feature = "audio")]
@@ -204,6 +319,17 @@ fn install_audio_with(
             source,
         })?;
         verify_audio_asset(staged.path(), asset)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            staged
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o644))
+                .map_err(|source| Error::Io {
+                    path: staged.path().into(),
+                    source,
+                })?;
+        }
         verified.push((staged, target));
     }
     // Publish only after every fetched asset has passed verification. Temp files
@@ -260,6 +386,57 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "audio")]
+    #[test]
+    fn audio_stage_resumes_partial_files_and_cleans_legacy_stages() {
+        let cache = tempfile::tempdir().unwrap();
+        let parent = cache.path().join("snapshots");
+        let snapshot = parent.join("revision");
+        let legacy = parent.join(".audio-fetch-old-random");
+        let unrelated = parent.join("unrelated");
+        let first_stage;
+        {
+            let _lock = audio_install_lock(&parent).unwrap();
+            first_stage = audio_stage_directory(&parent).unwrap();
+            std::fs::create_dir(&legacy).unwrap();
+            std::fs::write(legacy.join("old.partial"), b"old").unwrap();
+            std::fs::create_dir(&unrelated).unwrap();
+            let result = install_audio_with(&snapshot, &[tiny_audio_asset()], |_| {
+                std::fs::write(first_stage.join("asset.sync.part"), b"go").unwrap();
+                Err(Error::Embedding("interrupted fetch".into()))
+            });
+            assert!(result.is_err());
+        }
+        let _lock = audio_install_lock(&parent).unwrap();
+        sweep_audio_stages(&parent).unwrap();
+        let stage = audio_stage_directory(&parent).unwrap();
+        assert_eq!(stage, first_stage);
+        assert!(!legacy.exists());
+        assert!(unrelated.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        install_audio_with(&snapshot, &[tiny_audio_asset()], |_| {
+            let partial = stage.join("asset.sync.part");
+            assert_eq!(std::fs::read(&partial).unwrap(), b"go");
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&partial)
+                .unwrap()
+                .write_all(b"od")
+                .unwrap();
+            Ok(partial)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(snapshot.join("audio.bin")).unwrap(), b"good");
+    }
+
+    #[cfg(feature = "audio")]
     fn tiny_audio_asset() -> AudioAsset {
         AudioAsset {
             path: "audio.bin",
@@ -290,6 +467,14 @@ mod tests {
         })
         .unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"good");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+        }
         install_audio_with(dir.path(), &[tiny_audio_asset()], |_| {
             panic!("verified file must be skipped")
         })

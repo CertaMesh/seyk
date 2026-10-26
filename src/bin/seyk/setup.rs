@@ -115,6 +115,9 @@ fn provision(
 }
 
 pub(super) fn run(target: Option<Target>, dry_run: bool, json: bool) -> Result<()> {
+    if target.is_some() && !dry_run {
+        gemma::cleanup_audio_stages()?;
+    }
     let models = vec![audio_status(), stt_status()?];
     let output = if target.is_some() {
         let mut plan = report("plan", models);

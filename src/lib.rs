@@ -43,7 +43,8 @@ pub mod embedder {
         pub use crate::model_download::download;
         #[cfg(feature = "audio")]
         pub use crate::model_download::{
-            AudioAsset, audio_assets, audio_directory, download_audio, verify_audio,
+            AudioAsset, audio_assets, audio_directory, cleanup_audio_stages, download_audio,
+            verify_audio,
         };
         pub use seyk_embeddinggemma::*;
     }

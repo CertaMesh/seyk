@@ -89,7 +89,12 @@ maximum remaining download size. It explicitly fetches the q8 audio encoder
 (340,307,954 bytes) and Whisper tiny STT (267,743,552 bytes): 608,051,506 bytes
 in total, about 580 MiB. Existing files are SHA-256 verified and valid files are
 reused. Downloads are staged privately and all fetched files pass size and SHA-256
-checks before publication. Corrupt or incomplete managed installations are repaired; unmanaged STT
+checks before publication. Audio uses a fixed private stage, so hf-hub can resume
+partial downloads after interruption; real setup removes older random audio
+stages. The stage is protected by an OS lock and is deleted after a successful
+installation. Newly published audio and STT asset files use mode 0644 on Unix;
+STT file modes previously depended on umask. Staging remains private.
+Corrupt or incomplete managed installations are repaired; unmanaged STT
 directories are preserved. Verification streams files without loading inference
 sessions. The audio hashes and lengths come from the HF LFS metadata at
 `daa72c51243991dfcaf9f9137d2c573d8f7790c0`; STT uses its existing checked manifest.
