@@ -78,7 +78,7 @@ pub struct SeykServer {
     roots: Arc<Vec<PolicyRoot>>,
     logical_paths: Arc<[PathBuf]>,
     hub: Arc<Hub>,
-    /// Status of each watcher covering `roots`; empty when background indexing is off.
+    /// Unique watcher cells covering `roots`; empty when background indexing is off.
     watchers: Arc<Vec<Arc<Mutex<IndexStatus>>>>,
     tool_router: ToolRouter<Self>,
 }
@@ -384,7 +384,7 @@ impl Hub {
         Ok(e)
     }
 
-    /// Status cells for the watchers covering `roots`, starting a watcher for
+    /// Unique status cells for the watchers covering `roots`, starting a watcher for
     /// any root no existing one covers. Empty when background indexing is off.
     fn watch_roots(self: &Arc<Self>, roots: &[PathBuf]) -> Result<Vec<Arc<Mutex<IndexStatus>>>> {
         if !self.background {
@@ -397,7 +397,9 @@ impl Hub {
         let mut cells = Vec::new();
         for root in roots {
             if let Some((_, cell)) = watched.iter().find(|(w, _)| watcher_covers(w, root)) {
-                cells.push(cell.clone());
+                if !cells.iter().any(|existing| Arc::ptr_eq(existing, cell)) {
+                    cells.push(cell.clone());
+                }
                 continue;
             }
             let cell = Arc::new(Mutex::new(IndexStatus::LoadingModel));
@@ -2089,6 +2091,94 @@ mod tests {
             1,
             "one model for all sessions"
         );
+    }
+
+    fn assert_unique_session_watchers(
+        make_server: impl Fn(Vec<PathBuf>, Arc<Hub>) -> Result<SeykServer>,
+    ) {
+        let dir = tempfile::Builder::new()
+            .prefix("watcher-dedupe-")
+            .tempdir()
+            .unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        let child = parent.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(parent.join("note.txt"), "parent").unwrap();
+        std::fs::write(child.join("note.txt"), "child").unwrap();
+
+        for (roots, child_first) in [
+            (vec![parent.clone(), parent.clone()], false),
+            (vec![parent.clone(), child.clone()], false),
+            (vec![parent.clone(), child.clone()], true),
+            (vec![child.clone(), parent.clone()], true),
+        ] {
+            let hub = Hub::new(
+                Box::new(|| panic!("registration must not load a model")),
+                true,
+            );
+            let parent_cell = Arc::new(Mutex::new(IndexStatus::Indexing {
+                segments_done: 3,
+                segments_total: 10,
+            }));
+            let child_cell = Arc::new(Mutex::new(IndexStatus::Indexing {
+                segments_done: 2,
+                segments_total: 7,
+            }));
+            // Seed registration order without background threads changing the statuses.
+            let mut watched = Vec::new();
+            if child_first {
+                watched.push((child.clone(), child_cell.clone()));
+            }
+            watched.push((parent.clone(), parent_cell.clone()));
+            *hub.watched.lock().unwrap() = watched;
+
+            let server = make_server(roots.clone(), hub.clone()).unwrap();
+            assert_eq!(server.logical_paths(), roots);
+            assert_eq!(logical_root_paths(&server.roots), roots);
+            assert_eq!(
+                server.confine(Path::new("note.txt")).unwrap(),
+                roots[0].join("note.txt")
+            );
+            assert_eq!(server.watchers.len(), if child_first { 2 } else { 1 });
+            assert_eq!(hub.watched().len(), server.watchers.len());
+            assert!(
+                server
+                    .watchers
+                    .iter()
+                    .any(|cell| Arc::ptr_eq(cell, &parent_cell))
+            );
+            if child_first {
+                assert!(
+                    server
+                        .watchers
+                        .iter()
+                        .any(|cell| Arc::ptr_eq(cell, &child_cell))
+                );
+            }
+            let (done, total) = if child_first { (5, 17) } else { (3, 10) };
+            assert_eq!(
+                server.index_status_json().unwrap()["index"],
+                serde_json::json!({
+                    "state": "indexing",
+                    "segments_done": done,
+                    "segments_total": total,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn session_watchers_count_shared_cells_once() {
+        assert_unique_session_watchers(SeykServer::new);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_content_session_watchers_count_shared_cells_once() {
+        assert_unique_session_watchers(|roots, hub| {
+            let provider = Arc::new(seyk::local_content::LocalContentProvider::new(&roots)?);
+            local_content_server(provider, hub)
+        });
     }
 
     #[test]
