@@ -1116,9 +1116,25 @@ mod tests {
         Ok(())
     }
 
+    // The task cache deliberately refuses platforms without its Unix security contract.
+    #[cfg(not(unix))]
+    #[test]
+    fn pdf_task_cache_refuses_unsupported_platform() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let owner = PdfOwner::new("synthetic", b"manifest", "profile");
+        for resume in [false, true] {
+            let error = PdfSession::open(tmp.path(), &owner, resume).err().unwrap();
+            assert_eq!(
+                error.to_string(),
+                "PDF task cache currently requires Unix private permissions and locking"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn pdf_diagnostic_classification_and_freshness() -> Result<()> {
-        let id = ResourceId::from_path("/public/opaque.pdf")?;
+        let id = ResourceId::from_path(std::env::temp_dir().join("public/opaque.pdf"))?;
         let eligible = HashMap::from([(id.clone(), "opaque".into())]);
         let mut sync = SyncStats {
             resources_discovered: 1,
@@ -1151,7 +1167,7 @@ mod tests {
 
     #[test]
     fn pdf_parser_misses_preserve_safe_outcomes_and_receipt() -> Result<()> {
-        let id = ResourceId::from_path("/public/opaque.pdf")?;
+        let id = ResourceId::from_path(std::env::temp_dir().join("public/opaque.pdf"))?;
         let eligible = HashMap::from([(id.clone(), "opaque".into())]);
         let mut sync = SyncStats {
             resources_discovered: 1,
@@ -1372,10 +1388,12 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "pdf")]
+    // PdfSession uses Unix ownership, mode bits and advisory locking; these
+    // subprocess helpers exercise that Unix-only task-cache lifecycle.
+    #[cfg(all(unix, feature = "pdf"))]
     type VectorSnapshot = Vec<(String, String, Vec<f32>)>;
 
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     fn vectors(engine: &SearchEngine, ids: &HashMap<ResourceId, String>) -> Result<VectorSnapshot> {
         let mut out = engine.with_cache(|c| {
             Ok(
@@ -1389,13 +1407,13 @@ mod tests {
         Ok(out)
     }
 
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     struct ProcessFake {
         inner: common::FakeEmbedder,
         calls: std::sync::Mutex<Option<PathBuf>>,
     }
 
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     impl seyk::Embedder for ProcessFake {
         fn identity(&self) -> &seyk::ModelIdentity {
             seyk::Embedder::identity(&self.inner)
@@ -1432,7 +1450,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     fn process_engine(
         cache: &Path,
         calls: Option<PathBuf>,
@@ -1448,7 +1466,7 @@ mod tests {
         Ok((engine, model))
     }
 
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     fn child(root: &Path, phase: &str) -> Result<std::process::Output> {
         Ok(Command::new(std::env::current_exe()?)
             .args(["--exact", "tests::pdf_process_child", "--nocapture"])
@@ -1458,7 +1476,7 @@ mod tests {
     }
 
     /// Spawned only by the bounded synthetic regression; no Gemma/model loading.
-    #[cfg(feature = "pdf")]
+    #[cfg(all(unix, feature = "pdf"))]
     #[test]
     fn pdf_process_child() -> Result<()> {
         let Some(root) = std::env::var_os("SEYK_PDF_TEST_ROOT") else {
@@ -1621,7 +1639,8 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "pdf")]
+    // This tests PdfSession's Unix ownership/mode checks and advisory file lock.
+    #[cfg(all(unix, feature = "pdf"))]
     #[test]
     fn pdf_real_process_reopen_reset_and_interruption() -> Result<()> {
         use pdf_fixture::{Kind, pdf};
