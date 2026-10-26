@@ -256,7 +256,7 @@ fn typed_pdf_denials_are_static_and_preserve_locator_categories() {
         .unwrap();
     let result = engine.search("basil").paths([&path]).execute().unwrap();
     let mut original_hit = serde_json::to_value(result).unwrap();
-    original_hit["schema_version"] = 9.into();
+    original_hit["schema_version"] = 10.into();
     let check = |mut envelope: serde_json::Value, bytes: &[u8], exit, code| {
         std::fs::write(&path, bytes).unwrap();
         envelope["hits"][0]["metadata"]["content_hash"] =

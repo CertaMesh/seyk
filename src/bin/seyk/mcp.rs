@@ -146,9 +146,15 @@ impl WatcherDiagnostics {
             resource.to_file_path().is_some_and(|path| {
                 roots.iter().any(|root| {
                     let real = root.canonicalize().unwrap_or_else(|_| root.clone());
-                    path.strip_prefix(&real).is_ok_and(|relative| {
-                        seyk::discovery::ensure_allowed_path(&root.join(relative)).is_ok()
-                    })
+                    // File URIs use ordinary drive paths; Windows canonicalize returns
+                    // verbatim paths. Round-trip the root before comparing components.
+                    let real = ResourceId::from_path(&real)
+                        .ok()
+                        .and_then(|id| id.to_file_path());
+                    real.and_then(|real| path.strip_prefix(real).ok())
+                        .is_some_and(|relative| {
+                            seyk::discovery::ensure_allowed_path(&root.join(relative)).is_ok()
+                        })
                 })
             })
         };
@@ -667,6 +673,7 @@ impl SeykServer {
             "schema_version": crate::JSON_SCHEMA_VERSION,
             "index": self.status()?,
             "index_progress": self.root_progress(),
+            "model_diagnostics": self.hub.ready_engine.get().and_then(|engine| engine.embedder().unavailable_reason(seyk::Modality::Image)).into_iter().collect::<Vec<_>>(),
         }))
     }
 
@@ -1032,7 +1039,7 @@ fn to_response(r: SearchResults) -> Response {
 #[tool_router]
 impl SeykServer {
     #[tool(
-        description = "Current indexing state and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
+        description = "Current indexing state, model availability diagnostics, and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
         Ok(match self.index_status_json() {
@@ -1351,7 +1358,7 @@ mod tests {
             env!("SEYK_BUILD_VERSION")
         );
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 9);
+        assert_eq!(valid.schema_version, 10);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1401,6 +1408,46 @@ mod tests {
         assert_eq!(
             ordinary.confine(&root.join("alias.rs")).unwrap(),
             root.join("alias.rs")
+        );
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn missing_vision_is_visible_in_status_without_no_model_degradation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::write(root.join("note.txt"), "quartz lighthouse").unwrap();
+        std::fs::write(root.join("photo.png"), b"skipped before decoding").unwrap();
+        let reason = "image embedding unavailable: missing onnx/vision_encoder_quantized.onnx, onnx/vision_encoder_quantized.onnx_data; run `seyk model download`; semantic text search remains available";
+        let hub = Hub::new(
+            Box::new(move || {
+                Ok(SearchEngine::builder()
+                    .embedder(
+                        crate::common::FakeEmbedder::new(Dimension::D128, "missing-vision")
+                            .with_missing_vision(Some(reason.into())),
+                    )
+                    .build()?)
+            }),
+            false,
+        );
+        let server = SeykServer::new(vec![root], hub).unwrap();
+        // Status must not initialize or wait for the model.
+        assert_eq!(
+            server.index_status_json().unwrap()["model_diagnostics"],
+            serde_json::json!([])
+        );
+        assert!(server.hub.ready_engine.get().is_none());
+        let response = search(&server, "quartz");
+        assert!(response.degraded.is_none());
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(
+            server.index_status_json().unwrap()["model_diagnostics"],
+            serde_json::json!([reason])
+        );
+        assert!(
+            serde_json::to_string(&response)
+                .unwrap()
+                .contains("vision_encoder_quantized.onnx_data")
         );
     }
 
@@ -1523,7 +1570,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 9);
+        assert_eq!(response["schema_version"], 10);
         assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
         assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
         assert_eq!(
@@ -2084,6 +2131,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let allowed = dir.path().join("allowed");
         let sibling = dir.path().join("sibling");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
         let diagnostic = |path: PathBuf, reason: &str| seyk::PageDiagnostic {
             code: seyk::SkipCode::PdfParserPanicked,
             resource: ResourceId::from_path(path).unwrap(),
@@ -2091,8 +2140,8 @@ mod tests {
             reason: reason.into(),
         };
         let pages = vec![
-            diagnostic(allowed.join("bad.pdf"), "allowed"),
-            diagnostic(sibling.join("secret.pdf"), "hidden"),
+            diagnostic(allowed.canonicalize().unwrap().join("bad.pdf"), "allowed"),
+            diagnostic(sibling.canonicalize().unwrap().join("secret.pdf"), "hidden"),
         ];
         let skipped = pages
             .iter()
@@ -2108,11 +2157,21 @@ mod tests {
             page_diagnostics: pages,
             ..Default::default()
         });
-        let confined = snapshot.confined(&[allowed]);
+        let confined = snapshot.confined(std::slice::from_ref(&allowed));
         assert_eq!(confined.pages_total, 1);
         assert_eq!(confined.page_diagnostics.len(), 1);
         assert_eq!(confined.skipped.len(), 1);
         assert!(!serde_json::to_string(&confined).unwrap().contains("hidden"));
+
+        // A removed root must retain confined diagnostics through the fallback.
+        let missing_root = allowed.canonicalize().unwrap();
+        std::fs::remove_dir(&allowed).unwrap();
+        assert!(!missing_root.exists());
+        let missing = snapshot.confined(&[missing_root]);
+        assert_eq!(
+            serde_json::to_value(&missing).unwrap(),
+            serde_json::to_value(&confined).unwrap()
+        );
     }
 
     fn stopped() -> IndexStatus {
@@ -2176,7 +2235,7 @@ mod tests {
         seed_progress(&server.hub, &b, &progress);
         let confined = server.root_progress();
         assert_eq!(confined.len(), 1);
-        assert_eq!(confined[0].root.to_file_path().as_ref(), Some(&child));
+        assert_eq!(confined[0].root, ResourceId::from_path(&child).unwrap());
         assert!(confined[0].progress.is_none());
         let own = server
             .hub

@@ -49,3 +49,8 @@ Model-backed tests are `#[ignore]`d and need locally provisioned weights
 Keep each pull request focused. Describe what changed, why, and the exact
 commands you ran with their results. By submitting a contribution you agree that
 it is licensed under the [Apache License 2.0](LICENSE).
+
+If your change is visible to users, add one line under `## [Unreleased]` in
+[CHANGELOG.md](CHANGELOG.md), in the matching section (Added, Changed,
+Deprecated, Removed, Fixed or Security). Mark breaking changes with
+**Breaking:**.

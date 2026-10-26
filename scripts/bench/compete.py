@@ -23,6 +23,23 @@ MODES = {"qmd": {"bm25": "lexical", "vector": "semantic", "hybrid": "hybrid", "f
 VERSIONS = {"qmd": "2.8.3", "digup": "f509c329e0032fbee4d945e1edbdbca7d94af50f", "leann": "0.3.8"}
 
 
+def cpu_name():
+    """Best-effort hardware metadata; unavailable probes must not abort a run."""
+    try:
+        if platform.system() == "Darwin":
+            return subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True,
+                stderr=subprocess.DEVNULL).strip() or "unknown"
+        if platform.system() == "Linux":
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in ("model name", "Hardware") and value.strip():
+                    return value.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
 def offline(command):
     bench.require(platform.system() == "Darwin", "offline adapter currently requires macOS sandbox-exec")
     return ["/usr/bin/sandbox-exec", "-f", str(HERE / "offline.sb"), *map(str, command)]
@@ -303,7 +320,7 @@ def run(args):
                     "digup": "stock DigUp/llama.cpp thread defaults; OMP/MKL environment=2"}[tool],
                 "competitor_mode": mode,
                 "hardware_path": "Metal (PyTorch MPS; CPU HNSW)" if tool == "leann" else "CPU" if mode == "bm25" else "Metal",
-                "platform": platform.platform(), "cpu": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
+                "platform": platform.platform(), "cpu": cpu_name(),
                 **provenance, "index": index,
                 "load_before": os.getloadavg(), "offline": proof}
             queries = bench.jsonlines((bench.ROOT / "meta" / ds / "queries.jsonl").read_text().splitlines())

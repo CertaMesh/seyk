@@ -25,7 +25,7 @@ fn setup_status_is_offline_and_lists_every_model() {
         String::from_utf8_lossy(&output.stderr)
     );
     let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(status["schema_version"], 9);
+    assert_eq!(status["schema_version"], 10);
     assert_eq!(status["action"], "status");
     assert_eq!(status["next_step"], "seyk model download");
     let names: Vec<_> = status["models"]
@@ -48,7 +48,7 @@ fn audio_plan_names_pins_and_total_without_network() {
         String::from_utf8_lossy(&output.stderr)
     );
     let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(plan["schema_version"], 9);
+    assert_eq!(plan["schema_version"], 10);
     assert_eq!(plan["action"], "plan");
     assert_eq!(plan["models"].as_array().unwrap().len(), 2);
     assert_eq!(plan["models"][0]["bytes"], 340307954u64);

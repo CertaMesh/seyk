@@ -81,9 +81,10 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 8`. Version 7 added result-kind counts, per-root
-indexing progress and `index_status`; version 8 adds optional lexical-only
-`degraded` metadata and its reason.
+CLI JSON objects and MCP search responses include `schema_version: 10`. Version 7 added result-kind counts, per-root
+indexing progress and `index_status`; version 8 added optional lexical-only
+`degraded` metadata and its reason. Version 9 added cache image-code counts;
+version 10 adds MCP `index_status.model_diagnostics` for optional model availability.
 Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
 `semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
 containing only normalized query tokens confirmed by the keyword index. Ranks

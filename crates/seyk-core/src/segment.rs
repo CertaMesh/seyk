@@ -489,15 +489,15 @@ mod tests {
 
     #[test]
     fn headings_stay_with_their_content() {
-        let src = "# Book\n\n## Father\n\nHe repeats his father's gestures.\n\n## Soup\n\nTomato soup needs basil.\n";
+        let src = "# Book\n\n## Garden\n\nShe waters the beds at dawn.\n\n## Soup\n\nTomato soup needs basil.\n";
         let s = seg(src, TextFormat::Markdown);
         assert_eq!(s.len(), 2);
         assert!(
             s[0].text.starts_with("# Book"),
             "heading-only section merges forward"
         );
-        assert!(s[0].text.contains("gestures"));
-        assert_eq!(s[0].heading.as_deref(), Some("Book > Father"));
+        assert!(s[0].text.contains("dawn"));
+        assert_eq!(s[0].heading.as_deref(), Some("Book > Garden"));
         assert!(s[1].text.starts_with("## Soup"));
         assert_eq!(s[1].heading.as_deref(), Some("Book > Soup"));
         assert_eq!(s[1].line_start, 7);

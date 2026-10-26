@@ -167,8 +167,8 @@ For stable runtime failure codes, add `--typed-errors` with either raw output or
 For raw text, extract writes the exact bytes without an added newline. Text and PDF
 text extraction need no model. Audio speech-to-text (STT) is on-demand and labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
-at `schema_version: 2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`, not a bare hit. The extraction document uses
-version 9 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
+at `schema_version: 2`, `3`, `4`, `5`, `6`, `7`, `8`, `9` or `10`, not a bare hit. The extraction document uses
+version 10 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
 `metadata.content_hash` is the hash of the **whole source**, not just the passage.
 `--no-preview` skips preview reads and sets `preview` to null; indexing still reads
 source content.
@@ -187,8 +187,8 @@ enables stable exit codes for runtime failures. Without `--typed-errors`,
 returned failures retain exit code 1 and the existing prose diagnostics.
 Success output is identical in both modes, including raw text, the audio
 transcript label, and versioned JSON. The flag does not change the JSON schema.
-The current schema version is 9, and extract accepts search envelopes from
-versions 2 through 9.
+The current schema version is 10, and extract accepts search envelopes from
+versions 2 through 10.
 
 In typed mode, a returned runtime failure writes exactly one stderr line:
 
@@ -290,7 +290,7 @@ position (reciprocal rank fusion):
 
 - **meaning**: cosine similarity between the question and each passage;
 - **words**: keyword relevance (BM25) over the text, heading, file name and path;
-- **name**: the query names the file (`father.md`, `father` or `notes/father.md`).
+- **name**: the query names the file (`garden.md`, `garden` or `notes/garden.md`).
 
 The hybrid score depends only on **where a hit ranked in each list**, scaled so
 1.000 means first everywhere something was found. It says nothing about how
@@ -308,11 +308,15 @@ it to rank within one search; it is not a calibrated probability, and unrelated
 text rarely scores near zero, so pick a `--min-score` by looking at your own
 results. `--mode lexical` never embeds the query. The CLI still loads the model
 and uses it to index new or changed files before searching when weights are available.
-Without weights, it builds an in-memory keyword index of text and PDF text without
+Without text weights, it builds an in-memory keyword index of text and PDF text without
 embedding. Search responses mark this as
 `"degraded": {"mode": "lexical_only", "reason": "no_model"}`. A requested semantic
 search also falls back and carries this marker; cosine thresholds do not filter
-keyword matches. Images, scanned PDF pages and audio require their normal models.
+keyword matches. Missing vision files alone preserve semantic text search, warn
+once on stderr, and skip images and scanned PDF pages with diagnostics naming the
+missing files and `seyk model download`. The effective cache profile matches
+`--text-only`; cached text vectors remain reusable for identical inputs under that
+profile. Audio still requires its normal models.
 
 ## Result counts and indexing progress
 

@@ -96,7 +96,7 @@ pub struct MatchSignals {
     pub semantic: Option<f32>,
     /// BM25 keyword relevance, when it ranked. Higher is better.
     pub lexical: Option<f32>,
-    /// The query named this file (`father.md`, `father`, `notes/father.md`).
+    /// The query named this file (`garden.md`, `garden`, `notes/garden.md`).
     pub filename: bool,
 }
 
@@ -871,7 +871,11 @@ impl SearchEngine {
                     } else if r.kind == ResourceKind::Audio && !cfg!(feature = "audio") {
                         "audio support is not compiled in (feature `audio`)".into()
                     } else {
-                        format!("{modality} search is not supported by this embedder")
+                        self.embedder
+                            .unavailable_reason(modality)
+                            .unwrap_or_else(|| {
+                                format!("{modality} search is not supported by this embedder")
+                            })
                     },
                 ));
                 continue;
@@ -1461,10 +1465,11 @@ impl SearchEngine {
                     resource: r.id.clone(),
                     page: page.page,
                     reason: if cfg!(feature = "pdf-render") {
-                        "no usable embedded text; image embedding is disabled"
+                        self.embedder.unavailable_reason(crate::Modality::Image).unwrap_or_else(||
+                            "no usable embedded text; image embedding is disabled".into())
                     } else {
-                        "no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)"
-                    }.into(),
+                        "no usable embedded text; PDF rendering is not compiled in (feature `pdf-render`)".into()
+                    },
                 });
             }
             if batch.len() == capacity
@@ -2529,8 +2534,8 @@ impl SegmentTable {
     }
 }
 
-/// Whether `query` names this file: its name (`father.md`), its stem (`father`)
-/// or a trailing part of its path (`notes/father.md`), ignoring case.
+/// Whether `query` names this file: its name (`garden.md`), its stem (`garden`)
+/// or a trailing part of its path (`notes/garden.md`), ignoring case.
 fn names_file(query: &str, path: &Path) -> bool {
     let q = query
         .trim()
@@ -2555,7 +2560,7 @@ fn names_file(query: &str, path: &Path) -> bool {
 
 /// How much keyword rank counts, relative to semantic rank, for these queries.
 ///
-/// Names and identifiers (`father.md`, `INC-18372`, `Session::restore()`) or a
+/// Names and identifiers (`garden.md`, `INC-18372`, `Session::restore()`) or a
 /// word or two are what keywords are for, so they count fully. In a question
 /// in prose, shared words are mostly incidental ("old", "match"), so they only
 /// break ties between hits of similar meaning.
@@ -3312,7 +3317,7 @@ mod tests {
     fn keywords_count_fully_for_names_and_identifiers_only() {
         let w = |q: &str| keyword_weight(&[q.to_string()]);
         for q in [
-            "father.md",
+            "garden.md",
             "Example Person",
             "INC-18372",
             "where is Session::restore() called",
@@ -3331,11 +3336,11 @@ mod tests {
 
     #[test]
     fn names_file_matches_name_stem_and_path_suffix_only() {
-        let p = Path::new("/book/people/father.md");
-        for q in ["father.md", "Father", "people/father.md", " `father.md` "] {
+        let p = Path::new("/book/plants/garden.md");
+        for q in ["garden.md", "Garden", "plants/garden.md", " `garden.md` "] {
             assert!(names_file(q, p), "{q}");
         }
-        for q in ["ather.md", "eople/father.md", "my father", "father.txt", ""] {
+        for q in ["arden.md", "lants/garden.md", "my garden", "garden.txt", ""] {
             assert!(!names_file(q, p), "{q}");
         }
     }
@@ -3368,14 +3373,14 @@ mod tests {
             }
         }
         assert!(names_file(
-            r"people\father.md",
-            Path::new("/book/people/father.md")
+            r"plants\garden.md",
+            Path::new("/book/plants/garden.md")
         ));
         assert!(names_file(
-            "people/father.md",
-            Path::new(r"C:\book\people\father.md")
+            "plants/garden.md",
+            Path::new(r"C:\book\plants\garden.md")
         ));
-        assert!(!names_file("my father", Path::new(r"C:\book\father.md")));
+        assert!(!names_file("my garden", Path::new(r"C:\book\garden.md")));
     }
 
     #[test]
@@ -3414,12 +3419,12 @@ mod tests {
     #[test]
     fn titles() {
         assert_eq!(
-            segment_title(Some("father"), None).as_deref(),
-            Some("father")
+            segment_title(Some("garden"), None).as_deref(),
+            Some("garden")
         );
         assert_eq!(
-            segment_title(Some("father"), Some("Father > Childhood")).as_deref(),
-            Some("Father > Childhood")
+            segment_title(Some("garden"), Some("Garden > Spring")).as_deref(),
+            Some("Garden > Spring")
         );
         assert_eq!(
             segment_title(Some("notes"), Some("Kitchen")).as_deref(),
