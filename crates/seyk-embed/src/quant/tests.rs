@@ -111,8 +111,7 @@ fn rejects_invalid_inputs_and_corrupted_assets() {
         Err(Error::Length { .. })
     ));
     for value in [0.0, 2.0] {
-        let input =
-            serde_json::from_value::<Embedding>(serde_json::json!(vec![value; 256])).unwrap();
+        let input = Embedding::from_preserved(vec![value; 256]).unwrap();
         assert_eq!(codec.encode(&input), Err(Error::NonUnitEmbedding));
         assert!(matches!(
             QueryLut::new(&input),
@@ -250,7 +249,7 @@ fn preserved_rounding_witness_satisfies_the_amended_absolute_contract() {
         .iter()
         .map(|v| f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap()))
         .collect();
-    let query: Embedding = serde_json::from_value(serde_json::to_value(values).unwrap()).unwrap();
+    let query = Embedding::from_preserved(values).unwrap();
     assert!(query.normalized());
     let hex = witness["row_hex"].as_str().unwrap();
     let codes: Vec<_> = (0..hex.len())

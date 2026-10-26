@@ -152,10 +152,8 @@ impl SqliteCache {
                 }
                 let vector = from_bytes(&r.get::<_, Vec<u8>>(2)?)
                     .map_err(|_| Error::Config("corrupt f32 vector bytes".into()))?;
-                // Deserialize without truncating or renormalizing the retained f32 values.
-                let embedding: crate::Embedding =
-                    serde_json::from_value(serde_json::to_value(vector).map_err(json_err)?)
-                        .map_err(json_err)?;
+                let embedding = crate::Embedding::from_preserved(vector)
+                    .map_err(|e| Error::Config(e.to_string()))?;
                 let codes = codec
                     .encode(&embedding)
                     .map_err(|e| Error::Config(e.to_string()))?;
@@ -204,13 +202,20 @@ mod tests {
     use crate::{Dimension, Embedding};
 
     fn fixture(path: &Path) -> (SqliteCache, String, HashSet<ResourceId>, Vec<f32>) {
+        fixture_with_dimension(path, Dimension::D256)
+    }
+
+    fn fixture_with_dimension(
+        path: &Path,
+        dimension: Dimension,
+    ) -> (SqliteCache, String, HashSet<ResourceId>, Vec<f32>) {
         let mut cache = SqliteCache::open(path).unwrap();
         let profile = CacheProfile {
             model: ModelIdentity {
                 model_id: "google/embeddinggemma-2".into(),
                 revision: "synthetic".into(),
                 variant: "onnx-q8;text-literals-v1".into(),
-                dimension: Dimension::D256,
+                dimension,
                 normalization: "mean-pool;truncate;l2".into(),
                 query_prompt: String::new(),
                 document_prompt: String::new(),
@@ -220,7 +225,7 @@ mod tests {
         };
         let pid = profile.id();
         cache.register_profile(&pid, &profile).unwrap();
-        let vector = Embedding::from_raw(vec![1.0; 256], Dimension::D256)
+        let vector = Embedding::from_raw(vec![1.0; dimension.get()], dimension)
             .unwrap()
             .as_slice()
             .to_vec();
@@ -260,6 +265,51 @@ mod tests {
             paths.insert(id);
         }
         (cache, pid, paths, vector)
+    }
+
+    #[test]
+    fn backfilled_codes_match_serde_restoration_byte_for_byte() {
+        for dim in [256, 768] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut cache, pid, paths, _) = fixture_with_dimension(
+                &temp.path().join("cache.sqlite"),
+                Dimension::try_from(dim).unwrap(),
+            );
+            for phase in [0.0, 0.37, 1.5] {
+                let mut vector = Embedding::from_raw(
+                    (0..dim)
+                        .map(|i| {
+                            if i < 2 {
+                                0.0
+                            } else {
+                                (i as f32 * 0.11 + phase).sin()
+                            }
+                        })
+                        .collect(),
+                    Dimension::try_from(dim).unwrap(),
+                )
+                .unwrap()
+                .into_vec();
+                vector[0] = -0.0;
+                vector[1] = f32::from_bits(1);
+                let legacy: Embedding =
+                    serde_json::from_value(serde_json::to_value(&vector).unwrap()).unwrap();
+                let expected = PhotoAnchorQ4::new(dim).unwrap().encode(&legacy).unwrap();
+                cache
+                    .put_embeddings(&pid, &[("shared".into(), vector.clone())])
+                    .unwrap();
+                cache.sync_image_codes(&pid, &paths).unwrap();
+                let actual: Vec<u8> = cache
+                    .conn
+                    .query_row("SELECT codes FROM image_codes", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(actual, expected, "dim={dim}, phase={phase}");
+                let retained = cache
+                    .selected_image_vectors(&pid, &HashSet::from(["shared".into()]))
+                    .unwrap();
+                assert_eq!(to_bytes(&retained["shared"]), to_bytes(&vector));
+            }
+        }
     }
 
     #[test]

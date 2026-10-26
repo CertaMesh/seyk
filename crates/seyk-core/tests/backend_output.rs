@@ -149,14 +149,13 @@ fn engine_with_cache(backend: &Arc<Scripted>, sqlite: bool, dir: &std::path::Pat
 
 #[test]
 fn successful_outputs_preserve_order_and_exact_bytes_in_both_caches() {
-    // Public serde input deliberately bypasses normalization. Validation must
+    // Preserved input deliberately bypasses normalization. Validation must
     // return these exact bits, including negative zero, in request order.
     let mut first = vec![0.0f32; 128];
     first[..3].copy_from_slice(&[3.0, 4.0, -0.0]);
     let mut second = vec![0.0f32; 128];
     second[..3].copy_from_slice(&[-0.5, 0.25, -0.0]);
-    let embedding =
-        |values: &Vec<f32>| serde_json::from_value::<Embedding>(serde_json::json!(values)).unwrap();
+    let embedding = |values: &Vec<f32>| Embedding::from_preserved(values.clone()).unwrap();
     for sqlite in [false, true] {
         for retry in [false, true] {
             let dir = tempfile::tempdir().unwrap();
