@@ -108,7 +108,8 @@ jobs:
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Verify licence notices in the archive
-        run: python scripts/check_release_archive.py "${{ env.ARCHIVE }}"
+        shell: bash
+        run: python scripts/check_release_archive.py "$ARCHIVE"
 
       - uses: actions/upload-artifact@v4
         with:

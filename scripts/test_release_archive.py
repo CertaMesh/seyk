@@ -46,7 +46,7 @@ class ArchiveTests(unittest.TestCase):
     def test_changed_native_notice_is_rejected(self):
         self.files["third_party/onnxruntime/ThirdPartyNotices.txt"] += b"changed"
         for suffix in (".tar.gz", ".zip"):
-            with self.subTest(suffix=suffix), self.assertRaises(AssertionError):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 self.check(suffix)
 
     def test_missing_licence_bundle_is_rejected(self):
@@ -58,7 +58,7 @@ class ArchiveTests(unittest.TestCase):
     def test_missing_embedded_notices_are_rejected(self):
         self.files["THIRD_PARTY_LICENSES.html"] = b"<html>" + b"x" * 2000 + b"</html>"
         for suffix in (".tar.gz", ".zip"):
-            with self.subTest(suffix=suffix), self.assertRaisesRegex(AssertionError, "embedded ORT"):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "embedded ORT"):
                 self.check(suffix)
 
 

@@ -22,20 +22,28 @@ def check_archive(archive):
 
     with bundle:
         for name in ("LICENSE", "THIRD_PARTY.md"):
-            assert read(f"{root}/{name}") == Path(name).read_bytes(), name
+            if read(f"{root}/{name}") != Path(name).read_bytes():
+                raise ValueError(f"licence file differs: {name}")
         # The generator writes platform-native HTML newlines on Windows.
         content = read(f"{root}/THIRD_PARTY_LICENSES.html").decode("utf-8").replace("\r\n", "\n")
-        assert len(content) > 1000, "empty dependency licence bundle"
+        if len(content) <= 1000:
+            raise ValueError("empty dependency licence bundle")
         notices = Path("third_party/onnxruntime")
         for source in notices.iterdir():
             if source.is_file():
-                assert read(f"{root}/{source.as_posix()}") == source.read_bytes(), source
+                if read(f"{root}/{source.as_posix()}") != source.read_bytes():
+                    raise ValueError(f"native notice file differs: {source}")
         native = (notices / "ThirdPartyNotices.txt").read_bytes()
         expected = (notices / "SHA256SUMS").read_text().split()[0]
-        assert hashlib.sha256(native).hexdigest() == expected, "ORT notice checksum"
-        assert html.escape(native.decode("utf-8")) in content, "embedded ORT notices"
+        if hashlib.sha256(native).hexdigest() != expected:
+            raise ValueError("ORT notice checksum mismatch")
+        if html.escape(native.decode("utf-8")) not in content:
+            raise ValueError("missing embedded ORT notices")
     print(f"Verified licence notices in {archive}")
 
 
 if __name__ == "__main__":
-    check_archive(sys.argv[1])
+    try:
+        check_archive(sys.argv[1])
+    except (ValueError, KeyError, OSError, tarfile.TarError, zipfile.BadZipFile) as error:
+        raise SystemExit(f"Release archive verification failed: {error}")
