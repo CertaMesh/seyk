@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Review crates.io file lists and built archives. Run packaging in CI first."""
 
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -47,7 +48,11 @@ def main():
         # Copy those exact verified bytes to the artifact directory.
         if not archive.exists():
             staged = list(Path("target/package").rglob(archive.name))
-            assert len(staged) == 1, (name, "expected one staged archive", staged)
+            assert staged, (name, "missing staged archive")
+            # Cargo retains copies in both tmp-crate and tmp-registry. Compare
+            # actual contents instead of assuming there is only one path.
+            hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in staged}
+            assert len(hashes) == 1, (name, "staged archive contents differ", staged)
             shutil.copyfile(staged[0], archive)
         with tarfile.open(archive) as package:
             members = package.getmembers()
