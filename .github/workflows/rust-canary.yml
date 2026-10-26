@@ -25,6 +25,4 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - run: rustc --version
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - uses: ./.github/actions/rust-checks
