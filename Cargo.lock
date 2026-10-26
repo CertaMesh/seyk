@@ -3133,6 +3133,7 @@ dependencies = [
  "seyk-embed",
  "seyk-embeddinggemma",
  "seyk-stt",
+ "sha2",
  "tempfile",
  "tokenizers",
  "tokio",

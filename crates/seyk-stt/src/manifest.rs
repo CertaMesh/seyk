@@ -152,26 +152,38 @@ pub(crate) fn verify_layout(dir: &Path) -> Result<()> {
 pub fn verify_directory(dir: &Path) -> Result<()> {
     verify_layout(dir)?;
     for asset in assets() {
-        let file = regular_file(&dir.join(&asset.path))?;
-        let mut reader = file.take(asset.bytes + 1);
-        let mut hash = Sha256::new();
-        let mut count = 0u64;
-        let mut block = [0u8; 64 * 1024];
-        loop {
-            let n = reader
-                .read(&mut block)
-                .map_err(|_| model_error("file unreadable"))?;
-            if n == 0 {
-                break;
-            }
-            count += n as u64;
-            hash.update(&block[..n]);
-        }
-        if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
-            return Err(model_error("file length or checksum mismatch"));
-        }
+        verify_asset(dir, asset)?;
     }
     Ok(())
+}
+
+fn verify_asset(dir: &Path, asset: &Asset) -> Result<()> {
+    let file = regular_file(&dir.join(&asset.path))?;
+    let mut reader = file.take(asset.bytes + 1);
+    let mut hash = Sha256::new();
+    let mut count = 0u64;
+    let mut block = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut block)
+            .map_err(|_| model_error("file unreadable"))?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        hash.update(&block[..n]);
+    }
+    if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
+        return Err(model_error("file length or checksum mismatch"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_asset_permissions(file: &File) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .map_err(|_| model_error("cannot set asset permissions"))
 }
 
 /// Stage a caller's explicitly downloaded files, then atomically publish one
@@ -186,19 +198,27 @@ pub fn install_with(
         .ok_or_else(|| model_error("invalid installation path"))?;
     fs::create_dir_all(parent).map_err(|_| model_error("cannot create installation parent"))?;
     let lock_path = parent.join(".stt-install.lock");
+    // Keep one stable inode. OS locks are released even when the process is killed.
     let _lock = OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&lock_path)
-        .map_err(|_| model_error("installation locked or unwritable"))?;
-    struct Unlock(PathBuf, Option<File>);
-    impl Drop for Unlock {
-        fn drop(&mut self) {
-            drop(self.1.take());
-            let _ = fs::remove_file(&self.0);
-        }
-    }
-    let _unlock = Unlock(lock_path, Some(_lock));
+        .map_err(|source| Error::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    _lock.try_lock().map_err(|error| Error::Io {
+        path: lock_path,
+        source: match error {
+            std::fs::TryLockError::WouldBlock => std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "another STT install is running",
+            ),
+            std::fs::TryLockError::Error(source) => source,
+        },
+    })?;
     if destination.exists() && verify_directory(destination).is_ok() {
         return Ok(destination.into());
     }
@@ -213,7 +233,11 @@ pub fn install_with(
         .tempdir_in(parent)
         .map_err(|_| model_error("cannot stage installation"))?;
     for asset in assets() {
-        let source = fetch(asset)?;
+        let source = if verify_asset(destination, asset).is_ok() {
+            destination.join(&asset.path)
+        } else {
+            fetch(asset)?
+        };
         let target = stage.path().join(&asset.path);
         fs::create_dir_all(target.parent().expect("asset parent"))
             .map_err(|_| model_error("cannot stage asset"))?;
@@ -224,6 +248,8 @@ pub fn install_with(
         if n != asset.bytes {
             return Err(model_error("download length mismatch"));
         }
+        #[cfg(unix)]
+        set_asset_permissions(&output)?;
         output
             .sync_all()
             .map_err(|_| model_error("cannot sync asset"))?;
@@ -234,6 +260,8 @@ pub fn install_with(
     marker
         .write_all(stamp.as_bytes())
         .map_err(|_| model_error("cannot write manifest marker"))?;
+    #[cfg(unix)]
+    set_asset_permissions(&marker)?;
     marker
         .sync_all()
         .map_err(|_| model_error("cannot sync manifest marker"))?;
@@ -260,6 +288,79 @@ pub fn install_with(
 mod tests {
     use super::*;
     #[test]
+    fn stt_install_lock_names_path_and_recovers_from_stale_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".stt-install.lock");
+        fs::write(&lock_path, b"legacy interrupted install").unwrap();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let error = install_with(&dir.path().join("model"), |_| {
+            panic!("must not fetch while locked")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains(&lock_path.display().to_string()));
+        assert!(error.to_string().contains("another STT install is running"));
+        drop(lock);
+        let error = install_with(&dir.path().join("model"), |_| {
+            Err(model_error("fake fetch reached"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("fake fetch reached"));
+    }
+
+    #[test]
+    fn stt_install_lock_releases_after_killed_owner() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        const CHILD: &str = "SEYK_STT_INSTALL_LOCK_CHILD";
+        if let Some(dir) = std::env::var_os(CHILD) {
+            let _ = install_with(&PathBuf::from(dir).join("model"), |_| {
+                println!("STT_LOCK_READY");
+                std::io::stdout().flush().unwrap();
+                loop {
+                    std::thread::park();
+                }
+            });
+            panic!("child failed to acquire the installation lock");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "manifest::tests::stt_install_lock_releases_after_killed_owner",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "child exited before acquiring lock"
+            );
+            if line.trim() == "STT_LOCK_READY" {
+                break;
+            }
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let error = install_with(&dir.path().join("model"), |_| {
+            Err(model_error("fake fetch reached"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("fake fetch reached"));
+    }
+
+    #[test]
     fn missing_corrupt_and_equal_length_tamper_are_typed() {
         let dir = tempfile::tempdir().unwrap();
         let asset = Asset {
@@ -275,7 +376,7 @@ mod tests {
             fs::write(dir.path().join("test"), bytes).unwrap();
             let e = read_asset(dir.path(), &asset).unwrap_err();
             assert!(matches!(e, Error::SttModel { .. }));
-            assert!(e.to_string().contains("seyk model download --stt"));
+            assert!(e.to_string().contains("seyk setup audio"));
         }
         fs::write(dir.path().join("test"), b"good").unwrap();
         assert_eq!(read_asset(dir.path(), &asset).unwrap(), b"good");

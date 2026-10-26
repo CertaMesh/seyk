@@ -11,7 +11,7 @@ how each kind of content becomes searchable evidence.
 | Plain text | `.txt` `.text` `.rst` `.org` `.adoc` `.tex` | ✅ paragraph segments |
 | Source code | `.rs` `.py` `.js` `.ts` `.go` `.java` `.c` `.cpp` `.rb` `.php` `.sh` `.sql` `.toml` `.yaml` and more | ✅ blank-line blocks |
 | Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.tiff` | ✅ one vector per image (`WholeResource`) |
-| Audio | `.wav` `.flac` `.mp3` `.m4a` | Opt-in `audio` feature; 10 s windows, `Time` evidence; search never transcribes, `audio-stt` extracts a transcript on request |
+| Audio | `.wav` `.flac` `.mp3` `.m4a` | Default CLI; `seyk setup audio` installs models; 10 s windows, `Time` evidence; search never transcribes, extraction transcribes on request |
 | Video | — | ❌ not implemented |
 | PDF | Embedded text and scanned pages | Text evidence available; scan text extraction needs OCR |
 

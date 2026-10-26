@@ -7,7 +7,7 @@ may be selected. MPL requires explicit review, including existing
 dependencies. An approved exception is `option-ext 0.2.0` (MPL-2.0), an existing
 transitive dependency of `dirs`. Its unmodified source is available at
 https://crates.io/crates/option-ext/0.2.0 and its MPL text accompanies the crate.
-Additional scoped exceptions for opt-in audio are listed below.
+Additional scoped exceptions for audio in the default CLI are listed below.
 
 Allowed dependency licence classes are MIT, Apache-2.0, BSD-3-Clause, ISC,
 Zlib, Unicode-3.0, CDLA-Permissive-2.0 and CC0-1.0. The Rust MPL-2.0 exceptions
@@ -127,9 +127,10 @@ Hayro also embeds a CC0-1.0 compact CMYK colour profile and a generated LAB
 profile. Their provenance and CGATS notice accompany the pinned
 hayro-interpret archive (`assets/README.md`, `assets/CGATS_LICENSE.txt`).
 
-## Optional audio decoding (Phase 5a)
+## Audio decoding
 
-Unmodified Symphonia crates, approved for the optional `audio` feature. Each is
+Unmodified Symphonia crates, approved for the `audio` feature, now included by
+the default CLI through `audio-stt` (optional for library consumers). Each is
 MPL-2.0, with the license text included at `LICENSE` in its crates.io source
 archive. These are package+version exceptions only; new versions require new
 approval.
@@ -146,9 +147,9 @@ approval.
 - [symphonia-metadata 0.5.5](https://crates.io/crates/symphonia-metadata/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-metadata/0.5.5/download).
 - [symphonia-utils-xiph 0.5.5](https://crates.io/crates/symphonia-utils-xiph/0.5.5) — MPL-2.0; [source and license text](https://crates.io/api/v1/crates/symphonia-utils-xiph/0.5.5/download).
 
-## Optional speech-to-text (Phase 5b-2)
+## Speech-to-text (Phase 5b-2)
 
-`audio-stt` uses the separate FP32 graphs from
+`audio-stt`, included in the default CLI, uses the separate FP32 graphs from
 [Xenova/whisper-tiny at 5332fcc35e32a33b86612b9a57a89be7906102b1](https://huggingface.co/Xenova/whisper-tiny/tree/5332fcc35e32a33b86612b9a57a89be7906102b1).
 The [card at that exact revision](https://huggingface.co/Xenova/whisper-tiny/blob/5332fcc35e32a33b86612b9a57a89be7906102b1/README.md)
 declares `license: apache-2.0` and identifies Transformers.js. Its
@@ -158,7 +159,8 @@ the [exact card](crates/seyk-stt/assets/XENOVA-CARD.md) and
 [Apache-2.0 text](crates/seyk-stt/assets/APACHE-2.0.txt) with the attribution.
 We do not rely on the unlicensed onnx-community export. Model weights and
 runtime tokenizer/configuration assets are not bundled; users explicitly
-provision them with `seyk model download --stt`. The compiled
+provision them with `seyk setup audio` (or separately with
+`seyk model download --stt`). The compiled
 [manifest](crates/seyk-stt/assets/manifest.json) records every length and hash.
 
 Original Whisper weights, reference mel code and mel filters come from

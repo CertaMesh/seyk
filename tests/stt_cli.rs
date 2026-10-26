@@ -88,7 +88,7 @@ fn missing_model_cap_and_stale_hash_fail_without_content() {
     let file = input(dir.path(), 10000, &chirp());
     let out = extract(&file, &missing, false);
     assert!(!out.status.success() && out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("seyk model download --stt"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("seyk setup audio"));
     let file = input(dir.path(), 30001, &chirp());
     let out = extract(&file, &missing, false);
     assert!(!out.status.success() && out.stdout.is_empty());

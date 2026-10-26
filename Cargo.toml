@@ -28,8 +28,8 @@ default = ["onnx", "image", "cli", "mcp", "watch", "pdf-render"]
 onnx = ["dep:seyk-embeddinggemma", "dep:hf-hub"]
 image = ["seyk-embeddinggemma?/image"]
 audio-stt = ["audio", "dep:seyk-stt", "dep:hf-hub"]
-audio = ["seyk-core/audio", "seyk-embeddinggemma?/audio"]
-cli = ["onnx", "dep:clap", "dep:anyhow"]
+audio = ["dep:tempfile", "dep:sha2", "seyk-core/audio", "seyk-embeddinggemma?/audio"]
+cli = ["onnx", "audio-stt", "dep:clap", "dep:anyhow"]
 mcp = ["cli", "watch", "dep:rmcp", "dep:tokio", "dep:schemars"]
 watch = ["seyk-core/watch"]
 
@@ -37,6 +37,8 @@ pdf = ["seyk-core/pdf"]
 pdf-render = ["pdf", "image", "seyk-core/pdf-render"]
 
 [dependencies]
+tempfile = { version = "3", optional = true }
+sha2 = { version = "0.10", optional = true }
 seyk-stt = { path = "crates/seyk-stt", version = "0.1.0", optional = true }
 seyk-core = { path = "crates/seyk-core", version = "0.1.0" }
 seyk-embed = { path = "crates/seyk-embed", version = "0.1.0" }

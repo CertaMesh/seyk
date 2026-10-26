@@ -106,7 +106,7 @@ For stable runtime failure codes, add `--typed-errors` with either raw output or
 [Typed extraction errors](#typed-extraction-errors) for the code table and stream contract.
 
 For raw text, extract writes the exact bytes without an added newline. Text and PDF
-text extraction need no model. Audio speech-to-text (STT) is opt-in and labelled (see below).
+text extraction need no model. Audio speech-to-text (STT) is on-demand and labelled (see below).
 Extraction needs no cache or network. Input must be a complete search JSON envelope
 at `schema_version: 2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`, not a bare hit. The extraction document uses
 version 9 and contains `text`, `source`, `locator`, `metadata`, and optional extraction provenance;
@@ -115,8 +115,8 @@ version 9 and contains `text`, `source`, `locator`, `metadata`, and optional ext
 source content.
 
 Raw text ranges and PDF page-text ranges are supported. Audio `time` ranges are
-supported in builds with `audio-stt` (see
-[Speech-to-text extraction](#speech-to-text-extraction-opt-in)). Images,
+supported in the default CLI (see
+[Speech-to-text extraction](#speech-to-text-extraction)). Images,
 whole-resource and other locators return an unsupported-extraction error. MCP has an explicit `extract`
 tool that takes a selected MCP hit, verifies the hash and confines reads to the
 session roots. Search never transcribes.
@@ -171,12 +171,20 @@ are also outside that contract. Consumers must reject nonzero exits or missing
 valid output even when no typed line arrives. No model is downloaded to
 classify an error.
 
-## Audio (opt-in)
+## Audio
 
-Build with `cargo build --release --features audio`, then provision the extra
-q8 encoder with `seyk model download --audio` (about 325 MiB). This command only
-downloads the two pinned audio files; provision the ordinary model separately.
-Default release builds do not enable `audio`.
+Audio search and speech-to-text are included in the default CLI. Provision both
+pinned models in one command:
+
+```sh
+seyk setup audio
+```
+
+The command prints the download plan first, verifies checksums and skips valid
+files. `seyk setup` shows offline status for every model; use
+`seyk setup audio --dry-run --json` for a machine-readable plan. See
+[Audio in one command](model-setup.md#audio-in-one-command) for sizes and details.
+Provision the ordinary text model separately with `seyk model download`.
 
 `seyk search "repairing a bicycle" ./recordings` embeds sound directly, with no
 transcription. WAV, FLAC, MP3 and AAC-LC/ALAC in M4A are decoded locally into
@@ -194,11 +202,10 @@ lists or iTunSMPB remove encoder priming/padding; files without timing metadata
 use their decoded-sample timeline. See the [audio report](architecture.md#phase-5a-audio-retrieval)
 for timing, parity and retrieval measurements.
 
-## Speech-to-text extraction (opt-in)
+## Speech-to-text extraction
 
-Build with `cargo build --release --features audio-stt`, then explicitly run
-`seyk model download --stt` to install the pinned Xenova Whisper tiny FP32
-model (about 255 MiB). Inference stays offline. A local exact asset directory
+`seyk setup audio` installs the pinned Xenova Whisper tiny FP32 model
+(about 255 MiB); `seyk model download --stt` still installs it separately. Inference stays offline. A local exact asset directory
 can be selected with `--stt-model-dir` or `SEYK_STT_MODEL_DIR`; it receives the
 same manifest check, including rejection of unexpected files.
 

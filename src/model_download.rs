@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Download the files `config` needs into the Hugging Face cache.
 ///
-/// This is the only function in the crate that uses the network. It sends
-/// nothing but file requests for public model weights.
+/// Provisioning functions use the network only for public model file requests.
 pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
     let ModelSource::HuggingFace { repo, revision } = &config.source else {
         return Err(Error::Config(
@@ -27,30 +26,321 @@ pub fn download(config: &GemmaConfig) -> Result<PathBuf> {
     })
 }
 
-/// Explicitly provision only the two pinned q8 audio files; never called by inference.
+/// Pinned q8 assets, from the HF LFS metadata at ONNX_REVISION.
+#[cfg(feature = "audio")]
+pub struct AudioAsset {
+    pub path: &'static str,
+    pub bytes: u64,
+    pub sha256: &'static str,
+}
+
+#[cfg(feature = "audio")]
+pub fn audio_assets() -> &'static [AudioAsset] {
+    &[
+        AudioAsset {
+            path: seyk_embeddinggemma::audio::FILES[0],
+            bytes: 249330,
+            sha256: "04a9a9094ba76fb169e4c69be45a4b621580188654d6be59eab860eadcd42d3c",
+        },
+        AudioAsset {
+            path: seyk_embeddinggemma::audio::FILES[1],
+            bytes: 340058624,
+            sha256: "aa6361d898e1f1d6303f8dd2b5fabf4fd3629e15fd709e9cb06ac5cb9416a030",
+        },
+    ]
+}
+
+#[cfg(feature = "audio")]
+pub fn audio_directory() -> PathBuf {
+    hf_hub::Cache::from_env()
+        .path()
+        .join(format!(
+            "models--{}",
+            seyk_embeddinggemma::ONNX_REPO.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(seyk_embeddinggemma::ONNX_REVISION)
+}
+
+#[cfg(feature = "audio")]
+fn audio_asset_error(asset: &AudioAsset) -> Error {
+    Error::Embedding(format!(
+        "audio asset {} missing or checksum mismatch; run seyk setup audio",
+        asset.path
+    ))
+}
+
+#[cfg(feature = "audio")]
+fn open_audio_asset(path: &Path, asset: &AudioAsset) -> Result<std::fs::File> {
+    let invalid = || audio_asset_error(asset);
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == asset.bytes) {
+        return Err(invalid());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|_| invalid())?;
+    if !file
+        .metadata()
+        .is_ok_and(|m| m.is_file() && m.len() == asset.bytes)
+    {
+        return Err(invalid());
+    }
+    Ok(file)
+}
+
+#[cfg(feature = "audio")]
+fn verify_audio_asset(path: &Path, asset: &AudioAsset) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let file = open_audio_asset(path, asset)?;
+    let mut reader = file.take(asset.bytes + 1);
+    let mut hash = Sha256::new();
+    let mut count = 0;
+    let mut block = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut block)
+            .map_err(|_| audio_asset_error(asset))?;
+        if n == 0 {
+            break;
+        }
+        count += n as u64;
+        hash.update(&block[..n]);
+    }
+    if count != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
+        return Err(audio_asset_error(asset));
+    }
+    Ok(())
+}
+
+/// Verify pinned audio weights offline, without creating an inference session.
+#[cfg(feature = "audio")]
+pub fn verify_audio(dir: &Path) -> Result<()> {
+    for asset in audio_assets() {
+        verify_audio_asset(&dir.join(asset.path), asset)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "audio")]
+fn audio_install_lock(parent: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+        path: parent.into(),
+        source,
+    })?;
+    let path = parent.join(".audio-fetch.lock");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+    file.try_lock().map_err(|error| Error::Io {
+        path,
+        source: error.into(),
+    })?;
+    Ok(file)
+}
+
+#[cfg(feature = "audio")]
+fn sweep_audio_stages(parent: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(parent).map_err(|source| Error::Io {
+        path: parent.into(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| Error::Io {
+            path: parent.into(),
+            source,
+        })?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(".audio-fetch-"))
+            && entry
+                .file_type()
+                .map_err(|source| Error::Io {
+                    path: entry.path(),
+                    source,
+                })?
+                .is_dir()
+        {
+            std::fs::remove_dir_all(entry.path()).map_err(|source| Error::Io {
+                path: entry.path(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove orphaned stages from older audio installers. Explicit setup only.
+#[cfg(feature = "audio")]
+pub fn cleanup_audio_stages() -> Result<()> {
+    let dir = audio_directory();
+    let parent = dir.parent().expect("snapshot parent");
+    let _lock = audio_install_lock(parent)?;
+    sweep_audio_stages(parent)
+}
+
+#[cfg(feature = "audio")]
+fn audio_stage_directory(parent: &Path) -> Result<PathBuf> {
+    let path = parent.join(".audio-fetch");
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.recursive(false).create(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(source) => return Err(Error::Io { path, source }),
+    }
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+        return Err(Error::Config(format!(
+            "audio stage must be a private directory: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |source| Error::Io {
+                path: path.clone(),
+                source,
+            },
+        )?;
+    }
+    Ok(path)
+}
+
+/// Explicitly provision pinned q8 audio files; never called by inference.
 #[cfg(feature = "audio")]
 pub fn download_audio() -> Result<PathBuf> {
+    let dir = audio_directory();
+    let parent = dir.parent().expect("snapshot parent");
+    let _lock = audio_install_lock(parent)?;
+    sweep_audio_stages(parent)?;
+    let stage = audio_stage_directory(parent)?;
+    // hf-hub publishes into this private cache, never the inference snapshot.
     let api = hf_hub::api::sync::ApiBuilder::from_env()
+        .with_cache_dir(stage.join("hub"))
         .with_progress(true)
         .build()
         .map_err(|e| Error::Embedding(format!("cannot start download: {e}")))?;
-    let files: Vec<String> = seyk_embeddinggemma::audio::FILES
-        .iter()
-        .map(|f| f.to_string())
-        .collect();
-    download_files(
-        seyk_embeddinggemma::ONNX_REVISION,
-        &files,
-        |revision, file| {
-            api.repo(hf_hub::Repo::with_revision(
-                seyk_embeddinggemma::ONNX_REPO.into(),
-                hf_hub::RepoType::Model,
-                revision.into(),
-            ))
-            .get(file)
-            .map_err(|e| Error::Embedding(format!("downloading {file}: {e}")))
-        },
-    )
+    let repo = api.repo(hf_hub::Repo::with_revision(
+        seyk_embeddinggemma::ONNX_REPO.into(),
+        hf_hub::RepoType::Model,
+        seyk_embeddinggemma::ONNX_REVISION.into(),
+    ));
+    let cached = stage
+        .join("hub")
+        .join(format!(
+            "models--{}",
+            seyk_embeddinggemma::ONNX_REPO.replace('/', "--")
+        ))
+        .join("snapshots")
+        .join(seyk_embeddinggemma::ONNX_REVISION);
+    let result = install_audio_with(&dir, audio_assets(), |asset| {
+        let path = cached.join(asset.path);
+        if verify_audio_asset(&path, asset).is_ok() {
+            return Ok(path);
+        }
+        // A previous interrupted attempt may have left an invalid regular
+        // snapshot entry in the private cache too (notably on Windows).
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(Error::Io { path, source }),
+        }
+        repo.download(asset.path)
+            .map_err(|e| Error::Embedding(format!("downloading {}: {e}", asset.path)))
+    });
+    if result.is_ok() {
+        std::fs::remove_dir_all(&stage).map_err(|source| Error::Io {
+            path: stage,
+            source,
+        })?;
+    }
+    result
+}
+
+#[cfg(feature = "audio")]
+fn install_audio_with(
+    dir: &Path,
+    assets: &[AudioAsset],
+    mut fetch: impl FnMut(&AudioAsset) -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    use std::io::Read;
+    let mut verified = Vec::new();
+    for asset in assets {
+        let target = dir.join(asset.path);
+        if verify_audio_asset(&target, asset).is_ok() {
+            continue;
+        }
+        // remove_file handles regular files and dangling symlinks on all platforms.
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(Error::Io {
+                    path: target,
+                    source,
+                });
+            }
+        }
+        let source = fetch(asset)?;
+        let mut input = open_audio_asset(&source, asset)?.take(asset.bytes + 1);
+        let parent = target.parent().expect("asset parent");
+        std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+            path: parent.into(),
+            source,
+        })?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|source| Error::Io {
+            path: parent.into(),
+            source,
+        })?;
+        std::io::copy(&mut input, &mut staged).map_err(|source| Error::Io {
+            path: staged.path().into(),
+            source,
+        })?;
+        staged.as_file().sync_all().map_err(|source| Error::Io {
+            path: staged.path().into(),
+            source,
+        })?;
+        verify_audio_asset(staged.path(), asset)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            staged
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o644))
+                .map_err(|source| Error::Io {
+                    path: staged.path().into(),
+                    source,
+                })?;
+        }
+        verified.push((staged, target));
+    }
+    // Publish only after every fetched asset has passed verification. Temp files
+    // share the destination filesystem, so persist uses an atomic rename.
+    for (staged, target) in verified {
+        staged.persist(&target).map_err(|e| Error::Io {
+            path: target,
+            source: e.error,
+        })?;
+    }
+    Ok(dir.into())
 }
 
 fn download_files(
@@ -94,6 +384,224 @@ fn snapshot_root(file: &Path, rel: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_stage_resumes_partial_files_and_cleans_legacy_stages() {
+        let cache = tempfile::tempdir().unwrap();
+        let parent = cache.path().join("snapshots");
+        let snapshot = parent.join("revision");
+        let legacy = parent.join(".audio-fetch-old-random");
+        let unrelated = parent.join("unrelated");
+        let first_stage;
+        {
+            let _lock = audio_install_lock(&parent).unwrap();
+            first_stage = audio_stage_directory(&parent).unwrap();
+            std::fs::create_dir(&legacy).unwrap();
+            std::fs::write(legacy.join("old.partial"), b"old").unwrap();
+            std::fs::create_dir(&unrelated).unwrap();
+            let result = install_audio_with(&snapshot, &[tiny_audio_asset()], |_| {
+                std::fs::write(first_stage.join("asset.sync.part"), b"go").unwrap();
+                Err(Error::Embedding("interrupted fetch".into()))
+            });
+            assert!(result.is_err());
+        }
+        let _lock = audio_install_lock(&parent).unwrap();
+        sweep_audio_stages(&parent).unwrap();
+        let stage = audio_stage_directory(&parent).unwrap();
+        assert_eq!(stage, first_stage);
+        assert!(!legacy.exists());
+        assert!(unrelated.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&stage).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        install_audio_with(&snapshot, &[tiny_audio_asset()], |_| {
+            let partial = stage.join("asset.sync.part");
+            assert_eq!(std::fs::read(&partial).unwrap(), b"go");
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&partial)
+                .unwrap()
+                .write_all(b"od")
+                .unwrap();
+            Ok(partial)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(snapshot.join("audio.bin")).unwrap(), b"good");
+    }
+
+    #[cfg(feature = "audio")]
+    fn tiny_audio_asset() -> AudioAsset {
+        AudioAsset {
+            path: "audio.bin",
+            bytes: 4,
+            sha256: "770e607624d689265ca6c44884d0807d9b054d23c473c106c72be9de08b7376c",
+        }
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_repair_with_hub_like_fetch_that_skips_existing_destinations() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let asset = tiny_audio_asset();
+        let target = dir.path().join(asset.path);
+        std::fs::write(&target, b"evil").unwrap();
+        install_audio_with(dir.path(), &[asset], |asset| {
+            assert!(
+                std::fs::symlink_metadata(&target).is_err(),
+                "invalid snapshot must be removed before fetch"
+            );
+            let path = cache.path().join(asset.path);
+            // hf-hub leaves an existing destination alone instead of overwriting it.
+            if !path.exists() {
+                std::fs::write(&path, b"good").unwrap();
+            }
+            Ok(path)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"good");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+        }
+        install_audio_with(dir.path(), &[tiny_audio_asset()], |_| {
+            panic!("verified file must be skipped")
+        })
+        .unwrap();
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_checksum_failure_leaves_no_snapshot_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let asset = tiny_audio_asset();
+        let target = dir.path().join(asset.path);
+        std::fs::write(&target, b"evil").unwrap();
+        assert!(
+            install_audio_with(dir.path(), &[asset], |asset| {
+                let path = cache.path().join(asset.path);
+                std::fs::write(&path, b"evil").unwrap();
+                Ok(path)
+            })
+            .is_err()
+        );
+        assert!(
+            std::fs::symlink_metadata(&target).is_err(),
+            "bad download must leave no snapshot entry"
+        );
+    }
+
+    #[cfg(all(feature = "audio", unix))]
+    #[test]
+    fn audio_repair_removes_dangling_snapshot_link_before_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let asset = tiny_audio_asset();
+        let target = dir.path().join(asset.path);
+        std::os::unix::fs::symlink(dir.path().join("missing"), &target).unwrap();
+        install_audio_with(dir.path(), &[asset], |asset| {
+            assert!(std::fs::symlink_metadata(&target).is_err());
+            let path = cache.path().join(asset.path);
+            if !path.exists() {
+                std::fs::write(&path, b"good").unwrap();
+            }
+            Ok(path)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"good");
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_verifies_all_fetched_files_before_publishing_any() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let assets = [
+            tiny_audio_asset(),
+            AudioAsset {
+                path: "second.bin",
+                ..tiny_audio_asset()
+            },
+        ];
+        let result = install_audio_with(dir.path(), &assets, |asset| {
+            assert!(assets.iter().all(|a| !dir.path().join(a.path).exists()));
+            let path = cache.path().join(asset.path);
+            std::fs::write(
+                &path,
+                if asset.path == "second.bin" {
+                    b"evil"
+                } else {
+                    b"good"
+                },
+            )
+            .unwrap();
+            Ok(path)
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn audio_install_verifies_repairs_and_skips_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = [AudioAsset {
+            path: "audio.bin",
+            bytes: 4,
+            sha256: "770e607624d689265ca6c44884d0807d9b054d23c473c106c72be9de08b7376c",
+        }];
+        let cache = tempfile::tempdir().unwrap();
+        let mut requests = 0;
+        let mut install = || {
+            install_audio_with(dir.path(), &assets, |asset| {
+                requests += 1;
+                let path = cache.path().join(asset.path);
+                std::fs::write(&path, b"good").unwrap();
+                Ok(path)
+            })
+        };
+        install().unwrap();
+        install().unwrap();
+        std::fs::write(dir.path().join("audio.bin"), b"evil").unwrap();
+        install().unwrap();
+        assert_eq!(requests, 2);
+        assert_eq!(
+            std::fs::read(dir.path().join("audio.bin")).unwrap(),
+            b"good"
+        );
+        install_audio_with(dir.path(), &assets, |_| panic!("must skip verified file")).unwrap();
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn corrupt_audio_download_fails_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let assets = [AudioAsset {
+            path: "audio.bin",
+            bytes: 4,
+            sha256: "invalid",
+        }];
+        let error = install_audio_with(dir.path(), &assets, |asset| {
+            let path = cache.path().join(asset.path);
+            std::fs::write(&path, b"evil").unwrap();
+            Ok(path)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("run seyk setup audio"));
+    }
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
