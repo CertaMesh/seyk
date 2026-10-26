@@ -1362,6 +1362,7 @@ fn skipped_current_versions_do_not_disable_ready_semantic_results() {
         let bad = root.path().join("invalid.txt");
         fs::write(&bad, invalid).unwrap();
         let bad = bad.canonicalize().unwrap();
+        let bad_id = seyk_core::ResourceId::from_path(&bad).unwrap();
         let (engine, _) = engine(MemoryCache::new());
         let report = engine.index().paths([root.path()]).execute().unwrap();
         assert_eq!(report.sync.skipped.len(), 1);
@@ -1377,12 +1378,7 @@ fn skipped_current_versions_do_not_disable_ready_semantic_results() {
         let results = ready();
         assert!(results.degraded.is_none());
         assert!(results.hits.iter().any(|h| h.signals.semantic.is_some()));
-        assert!(
-            results
-                .hits
-                .iter()
-                .all(|h| h.resource.to_file_path().unwrap() != bad)
-        );
+        assert!(results.hits.iter().all(|h| h.resource != bad_id));
         // A changed version is pending again, and a later successful attempt
         // clears the skip without keeping the collection in lexical mode.
         fs::write(&bad, "father quartz repaired document").unwrap();
@@ -1392,12 +1388,7 @@ fn skipped_current_versions_do_not_disable_ready_semantic_results() {
         );
         engine.index().paths([root.path()]).execute().unwrap();
         assert!(ready().degraded.is_none());
-        assert!(
-            ready()
-                .hits
-                .iter()
-                .any(|h| h.resource.to_file_path().unwrap() == bad)
-        );
+        assert!(ready().hits.iter().any(|h| h.resource == bad_id));
     }
 }
 
@@ -1445,6 +1436,7 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
     let db = TempDir::new().unwrap();
     let cache_file = db.path().join("cache.sqlite3");
     let path = root.path().join("father.md").canonicalize().unwrap();
+    let id = seyk_core::ResourceId::from_path(&path).unwrap();
     let open = || engine(SqliteCache::open(&cache_file).unwrap()).0;
     let first = open();
     first.index().paths([root.path()]).execute().unwrap();
@@ -1455,6 +1447,7 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
         // Daemon/MCP lifetimes run an initial index before reporting ready.
         let report = reopened.index().paths([root.path()]).execute().unwrap();
         assert_eq!(report.sync.skipped.len(), 1);
+        assert_eq!(report.sync.skipped[0].resource, id);
         let result = reopened
             .search("father")
             .paths([root.path()])
@@ -1465,12 +1458,7 @@ fn reopened_sqlite_index_reestablishes_skips_without_serving_old_bindings() {
             .unwrap();
         assert!(result.degraded.is_none());
         assert!(result.hits.iter().any(|h| h.signals.semantic.is_some()));
-        assert!(
-            result
-                .hits
-                .iter()
-                .all(|h| h.resource.to_file_path().unwrap() != path)
-        );
+        assert!(result.hits.iter().all(|h| h.resource != id));
     }
 }
 
