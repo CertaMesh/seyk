@@ -798,11 +798,11 @@ impl EmbeddingGemma2 {
         audio_features: Option<(Vec<f32>, usize)>,
         measure: bool,
     ) -> Result<(Vec<Embedding>, TextBatchMetrics)> {
-        let start = measure.then(Instant::now);
         // Admission precedes tensor allocation, including callers outside the pool.
         let mut session = self.text[index]
             .lock()
             .map_err(|_| Error::Embedding("session lock poisoned".into()))?;
+        let start = measure.then(Instant::now);
         let max_len = batch.iter().map(|b| b.len()).max().unwrap_or(0);
         let n = batch.len();
         let mut input_ids = vec![self.pad_id; n * max_len];
@@ -1587,9 +1587,11 @@ mod resolution_tests {
                 attention_cells: 4_194_303,
             },
         ] {
-            let mut config = GemmaConfig::default();
-            config.batch_budget = Some(budget);
-            config.source = ModelSource::Directory(PathBuf::from("missing-model"));
+            let config = GemmaConfig {
+                batch_budget: Some(budget),
+                source: ModelSource::Directory(PathBuf::from("missing-model")),
+                ..GemmaConfig::default()
+            };
             assert!(matches!(
                 EmbeddingGemma2::load(config),
                 Err(Error::Config(_))

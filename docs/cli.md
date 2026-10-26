@@ -72,7 +72,7 @@ To move an indexed collection into a new directory, see
 
 ## Embedding memory controls
 
-Text calls use at most `--batch-size` rows, default 16. Optional
+Plain-text calls use at most `--batch-size` rows, default 16. Optional
 `--batch-token-budget` and `--batch-attention-budget` further limit each call.
 Both flags are required together. The first bounds rows × padded token length;
 the second bounds rows × padded token length squared. Inputs are grouped by
@@ -92,6 +92,7 @@ seyk index ./corpus --text-only --batch-token-budget 8192 --batch-attention-budg
 arena and requests shrinkage after each text inference call. Shrinkage can
 reduce retained memory but cannot reduce the live working set of a call.
 These experiments do not change vision or audio encoder allocators.
+Batch budgets apply to plain-text inputs.
 
 Budgets apply independently to each text session. More sessions multiply the
 inference working set. Input tokenization and queued strings are outside these
