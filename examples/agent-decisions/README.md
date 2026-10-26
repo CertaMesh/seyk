@@ -69,7 +69,7 @@ codex mcp add seyk -- seyk mcp "$PWD/decisions"
 The agent gets `search`, `extract` and `index_status` tools. For a question
 such as "why did we pick SQLite over Postgres?", `search` returns passages of
 `0007-storage-sqlite.md` with line ranges the agent can read and cite.
-See [Use Seyk from an agent](../../docs/mcp.md) for setup details.
+See [Set up an agent](../../docs/mcp.md#set-up-an-agent) for absolute binary paths and Codex timeouts.
 
 `tests/agent_decisions_example.rs` runs the search and extraction above
 without model weights, so this example keeps working.
