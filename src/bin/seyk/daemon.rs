@@ -342,6 +342,18 @@ pub fn run(endpoint: &Endpoint, factory: EngineFactory, idle: Duration) -> Resul
         .enable_all()
         .build()?;
     let result = rt.block_on(serve(endpoint, Hub::new(factory, true), idle));
+    finish_shutdown(endpoint, rt, lock, result)
+}
+
+fn finish_shutdown(
+    endpoint: &Endpoint,
+    runtime: tokio::runtime::Runtime,
+    lock: File,
+    result: Result<()>,
+) -> Result<()> {
+    // Runtime drop waits for outstanding spawn_blocking work. Keep endpoint
+    // ownership until it finishes so stop/restart cannot overlap that work.
+    drop(runtime);
     let cleanup = endpoint.remove_socket();
     drop(lock);
     result.and(cleanup)
@@ -750,6 +762,76 @@ mod tests {
         lock.unlock().unwrap();
         drop(lock);
         endpoint.check_lock_for_missing_socket().unwrap();
+    }
+
+    #[test]
+    fn shutdown_keeps_socket_and_lock_until_blocking_work_finishes() {
+        for failed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let endpoint = Arc::new(Endpoint {
+                socket: temp.path().join("daemon.sock"),
+                private_socket_dir: false,
+                lock: temp.path().join("daemon.lock"),
+                log: temp.path().join("daemon.log"),
+                spawn_args: vec![],
+            });
+            let lock = File::create(&endpoint.lock).unwrap();
+            lock.try_lock().unwrap();
+            let contender = OpenOptions::new().write(true).open(&endpoint.lock).unwrap();
+            let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket).unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let (release, gate) = std::sync::mpsc::channel();
+            let (started, ready) = std::sync::mpsc::channel();
+            rt.spawn_blocking(move || {
+                started.send(()).unwrap();
+                // Dropping release on a test failure also unblocks teardown.
+                let _ = gate.recv();
+            });
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(listener);
+            let (stopping, shutdown_started) = std::sync::mpsc::channel();
+            let (finished, shutdown_finished) = std::sync::mpsc::channel();
+            let shutdown = std::thread::spawn({
+                let endpoint = endpoint.clone();
+                move || {
+                    let result = if failed {
+                        Err(anyhow!("serve failed"))
+                    } else {
+                        Ok(())
+                    };
+                    stopping.send(()).unwrap();
+                    let result = finish_shutdown(&endpoint, rt, lock, result);
+                    finished.send(result).unwrap();
+                }
+            });
+            shutdown_started
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            assert!(matches!(
+                shutdown_finished.recv_timeout(Duration::from_millis(100)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            assert!(endpoint.socket.exists());
+            assert!(matches!(
+                contender.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+            release.send(()).unwrap();
+            let result = shutdown_finished
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            shutdown.join().unwrap();
+            if failed {
+                assert_eq!(result.unwrap_err().to_string(), "serve failed");
+            } else {
+                result.unwrap();
+            }
+            assert!(!endpoint.socket.exists());
+            contender.try_lock().unwrap();
+        }
     }
 
     #[test]
