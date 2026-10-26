@@ -188,6 +188,9 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
   models load at once. ([#56](https://github.com/CertaMesh/seyk/pull/56))
 - Local-content mode works on cold Linux automounts.
   ([#74](https://github.com/CertaMesh/seyk/pull/74))
+- On Windows, MCP diagnostics for skipped files inside the served folders are
+  no longer dropped.
+  ([#89](https://github.com/CertaMesh/seyk/pull/89))
 
 ### Security
 
