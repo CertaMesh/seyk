@@ -3,13 +3,42 @@ use seyk_embeddinggemma::{Embedder, EmbeddingGemma2, Modality, audio};
 #[path = "support/audio_signal.rs"]
 mod fixture;
 fn floats(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect()
+    let (chunks, trailing) = bytes.as_chunks::<4>();
+    assert!(trailing.is_empty(), "incomplete float bytes");
+    chunks.iter().map(|b| f32::from_le_bytes(*b)).collect()
 }
+#[derive(serde::Deserialize)]
+struct AudioReference {
+    features_shape: [usize; 2],
+    mask: Vec<bool>,
+    input_ids: Vec<u32>,
+    embedding: Vec<f32>,
+}
+
+fn reference(json: &str, feature_count: usize) -> AudioReference {
+    let reference: AudioReference = serde_json::from_str(json).unwrap();
+    let [frames, width] = reference.features_shape;
+    assert_eq!(width, 128, "audio feature width");
+    assert_eq!(frames, reference.mask.len(), "audio frame/mask count");
+    assert_eq!(
+        frames.checked_mul(width),
+        Some(feature_count),
+        "audio feature count"
+    );
+    assert_eq!(reference.embedding.len(), 768, "audio embedding width");
+    assert!(
+        reference.embedding.iter().all(|value| value.is_finite()),
+        "non-finite audio embedding"
+    );
+    let norm_squared: f64 = reference
+        .embedding
+        .iter()
+        .map(|&value| f64::from(value).powi(2))
+        .sum();
+    assert!(norm_squared > 0.0, "zero audio embedding norm");
+    reference
+}
+
 #[test]
 fn reference_features_and_token_mask() {
     assert_eq!(
@@ -19,14 +48,8 @@ fn reference_features_and_token_mask() {
     for (name, samples, expected, reference) in cases() {
         let pre = audio::preprocess(&samples).unwrap();
         assert_eq!(pre.values.len(), expected.len());
-        assert_eq!(
-            pre.mask,
-            serde_json::from_value::<Vec<bool>>(reference["mask"].clone()).unwrap()
-        );
-        assert_eq!(
-            pre.mask.len(),
-            reference["features_shape"][0].as_u64().unwrap() as usize
-        );
+        assert_eq!(pre.mask, reference.mask);
+        assert_eq!(pre.mask.len(), reference.features_shape[0]);
         let max = pre
             .values
             .iter()
@@ -34,12 +57,7 @@ fn reference_features_and_token_mask() {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
         assert!(max <= 1e-5, "max_abs_diff={max}");
-        let tokens = reference["input_ids"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|v| v.as_u64() == Some(258881))
-            .count();
+        let tokens = reference.input_ids.iter().filter(|&&v| v == 258881).count();
         assert_eq!(pre.mask.iter().step_by(4).filter(|v| **v).count(), tokens);
         println!(
             "AUDIO_FEATURE_PARITY case={name} max_abs_diff={max} frames={} tokens={tokens}",
@@ -85,12 +103,10 @@ fn reference_embedding_and_text_cache_identity() {
         let ids = model
             .template_token_ids(&format!("<|audio>{}<audio|>", "<|audio|>".repeat(count)))
             .unwrap();
-        assert_eq!(
-            ids,
-            serde_json::from_value::<Vec<u32>>(reference["input_ids"].clone()).unwrap()
-        );
-        let expected: Vec<f32> = serde_json::from_value(reference["embedding"].clone()).unwrap();
+        assert_eq!(ids, reference.input_ids);
+        let expected = reference.embedding;
         let embedding = model.embed_audio(&samples, 16_000).unwrap();
+        assert_eq!(embedding.as_slice().len(), expected.len());
         let dot: f32 = embedding
             .as_slice()
             .iter()
@@ -184,7 +200,7 @@ fn missing_audio_files_leave_text_available() {
     assert!(reloaded.embed_audio(&signal, 16000).is_err());
 }
 
-fn cases() -> impl Iterator<Item = (&'static str, Vec<f32>, Vec<f32>, serde_json::Value)> {
+fn cases() -> impl Iterator<Item = (&'static str, Vec<f32>, Vec<f32>, AudioReference)> {
     [
         (
             "one-second",
@@ -206,12 +222,55 @@ fn cases() -> impl Iterator<Item = (&'static str, Vec<f32>, Vec<f32>, serde_json
         ),
     ]
     .into_iter()
-    .map(|(name, len, features, reference)| {
-        (
-            name,
-            fixture::signal_len(len),
-            floats(features),
-            serde_json::from_str(reference).unwrap(),
-        )
+    .map(|(name, len, features, json)| {
+        let features = floats(features);
+        let reference = reference(json, features.len());
+        (name, fixture::signal_len(len), features, reference)
     })
+}
+
+#[test]
+fn malformed_references_are_rejected() {
+    let valid = serde_json::json!({
+        "features_shape": [1, 128],
+        "mask": [true],
+        "input_ids": [258881],
+        "embedding": vec![1.0; 768],
+        "unrelated_metadata": "accepted",
+    });
+    reference(&valid.to_string(), 128);
+    for (field, value) in [
+        ("features_shape", serde_json::json!([1])),
+        ("features_shape", serde_json::json!([1, 128, 1])),
+        ("features_shape", serde_json::json!(["1", 128])),
+        ("features_shape", serde_json::json!([1, 127])),
+        ("features_shape", serde_json::json!([2, 128])),
+        ("mask", serde_json::json!([])),
+        ("input_ids", serde_json::json!([-1])),
+        ("embedding", serde_json::json!(vec![1.0; 767])),
+        ("embedding", serde_json::json!(vec![1.0; 769])),
+        ("embedding", serde_json::json!(vec![0.0; 768])),
+        ("embedding", serde_json::json!(vec![1e39; 768])),
+    ] {
+        let mut malformed = valid.clone();
+        malformed[field] = value;
+        assert!(
+            std::panic::catch_unwind(|| reference(&malformed.to_string(), 128)).is_err(),
+            "accepted malformed {field}: {malformed}"
+        );
+    }
+    for feature_count in [127, 129] {
+        assert!(std::panic::catch_unwind(|| reference(&valid.to_string(), feature_count)).is_err());
+    }
+}
+
+#[test]
+fn malformed_float_bytes_are_rejected() {
+    let bytes = 1.0f32.to_le_bytes();
+    assert_eq!(floats(&bytes), [1.0]);
+    for trailing in 1..4 {
+        let mut malformed = bytes.to_vec();
+        malformed.extend_from_slice(&bytes[..trailing]);
+        assert!(std::panic::catch_unwind(|| floats(&malformed)).is_err());
+    }
 }
