@@ -16,17 +16,17 @@ Ask a question in your own words, or type an exact name, and get back the
 passages that match. Meaning, keywords and file names are searched together:
 
 ```console
-$ seyk search "turning into my dad" ~/notes -n 1
-1.000  father.md:1-3  § Father  [meaning 0.70]
-       He used to slam the door when he was angry. Last week I caught myself doing exactly the same thing, and my son flinched the way I used to.
+$ seyk search "keeping tomatoes alive in a heatwave" ~/notes -n 1
+1.000  garden.md:1-3  § Garden  [meaning 0.67]
+       Water the vegetable beds at dawn, before the sun climbs. A thick layer of straw mulch holds moisture in the soil through the hottest afternoons.
 
 $ seyk search "INC-18372" ~/notes -n 1
 1.000  work.md:1-3  § Work  [meaning 0.76+words]
        Ship the pricing page before the conference. INC-18372 is still open: the old page lists the beta plan.
 
-$ seyk search "father.md" ~/notes -n 1
-1.000  father.md:1-3  § Father  [meaning 0.74+words+name]
-       He used to slam the door when he was angry. Last week I caught myself doing exactly the same thing, and my son flinched the way I used to.
+$ seyk search "garden.md" ~/notes -n 1
+1.000  garden.md:1-3  § Garden  [meaning 0.73+words+name]
+       Water the vegetable beds at dawn, before the sun climbs. A thick layer of straw mulch holds moisture in the soil through the hottest afternoons.
 ```
 
 This is real output from a three-note folder. The first match shares no words

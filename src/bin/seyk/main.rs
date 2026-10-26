@@ -1593,11 +1593,11 @@ mod tests {
         SearchResults {
             degraded: None,
             kind_counts: None,
-            queries: vec!["father".into()],
+            queries: vec!["garden".into()],
             mode: SearchMode::Semantic,
             hits: vec![
                 hit(
-                    "/book/characters/father.md",
+                    "/book/notes/garden.md",
                     0.9137,
                     ResourceLocator::Text {
                         byte_start: 0,
@@ -1605,7 +1605,7 @@ mod tests {
                         line_start: Some(81),
                         line_end: Some(96),
                     },
-                    Some("He notices himself repeating the same gestures..."),
+                    Some("Water the beds at dawn and mulch them..."),
                 ),
                 hit(
                     "/book/photos/kitchen.jpg",
@@ -1708,18 +1708,18 @@ mod tests {
         let out = format_results(&results(), &test_path("/book"), false);
         assert_eq!(
             out.replace('\\', "/"),
-            "0.914  characters/father.md:81-96\n       He notices himself repeating the same gestures...\n\n0.500  photos/kitchen.jpg\n"
+            "0.914  notes/garden.md:81-96\n       Water the beds at dawn and mulch them...\n\n0.500  photos/kitchen.jpg\n"
         );
     }
 
     #[test]
     fn names_matching_query_when_several() {
         let mut r = results();
-        r.queries.push("dad".into());
+        r.queries.push("tomatoes".into());
         r.hits[1].query_index = 1;
         let out = format_results(&r, &test_path("/book"), false);
-        assert!(out.contains("father.md:81-96  ← \"father\"\n"), "{out}");
-        assert!(out.contains("kitchen.jpg  ← \"dad\"\n"), "{out}");
+        assert!(out.contains("garden.md:81-96  ← \"garden\"\n"), "{out}");
+        assert!(out.contains("kitchen.jpg  ← \"tomatoes\"\n"), "{out}");
     }
 
     #[test]
@@ -1733,7 +1733,7 @@ mod tests {
         };
         let out = format_results(&r, &test_path("/book"), false);
         assert!(
-            out.contains("father.md:81-96  [meaning 0.91+words]\n"),
+            out.contains("garden.md:81-96  [meaning 0.91+words]\n"),
             "{out}"
         );
         assert!(out.contains("kitchen.jpg  [name]\n"), "{out}");
@@ -1786,7 +1786,7 @@ mod tests {
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
-            ResourceId::from_path(test_path("/book/characters/father.md"))
+            ResourceId::from_path(test_path("/book/notes/garden.md"))
                 .unwrap()
                 .as_str()
         );

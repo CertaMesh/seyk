@@ -204,8 +204,8 @@ fn content_words(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// Crude stemming: compare the first five characters, so "fathers" matches
-/// "father" and "memories" matches "memory". Generous on purpose, so that
+/// Crude stemming: compare the first five characters, so "gardens" matches
+/// "garden" and "memories" matches "memory". Generous on purpose, so that
 /// "no keyword overlap" is a conservative label.
 fn stem(word: &str) -> &str {
     match word.char_indices().nth(5) {
