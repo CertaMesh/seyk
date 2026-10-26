@@ -127,7 +127,7 @@ fn human_label_and_json_provenance_with_real_model() {
     let out = extract(&file, &model, true);
     assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(value["schema_version"], 9);
+    assert_eq!(value["schema_version"], 10);
     assert_eq!(value["provenance"]["method"], "speech_to_text");
     let p = &value["provenance"]["speech"];
     assert_eq!(p["fidelity"], "machine_transcription");

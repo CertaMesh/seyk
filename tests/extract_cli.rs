@@ -115,7 +115,7 @@ fn success_is_identical_and_legacy_errors_stay_prose() {
     std::fs::write(&source, bytes).unwrap();
     let input = dir.path().join("hits.json");
     let mut value = envelope(&source, bytes);
-    for version in 2..=9 {
+    for version in 2..=10 {
         value["schema_version"] = version.into();
         std::fs::write(&input, value.to_string()).unwrap();
         for args in [vec![], vec!["--json"]] {
@@ -129,7 +129,7 @@ fn success_is_identical_and_legacy_errors_stay_prose() {
             assert!(legacy.stderr.is_empty() && typed.stderr.is_empty());
             if typed_args.contains(&"--json") {
                 let extracted: Value = serde_json::from_slice(&typed.stdout).unwrap();
-                assert_eq!(extracted["schema_version"], 9);
+                assert_eq!(extracted["schema_version"], 10);
                 assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), bytes);
             } else {
                 assert_eq!(typed.stdout, bytes);

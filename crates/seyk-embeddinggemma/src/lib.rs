@@ -1428,6 +1428,22 @@ mod resolution_tests {
     }
 
     #[test]
+    fn missing_optional_vision_does_not_hide_missing_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = GemmaConfig::default();
+        config.source = ModelSource::Directory(dir.path().into());
+        config.vision = cfg!(feature = "image");
+        let (effective, _) = runtime_config(&config).unwrap();
+        assert!(!effective.vision);
+        let error = match EmbeddingGemma2::load(config) {
+            Ok(_) => panic!("text weights are required"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::ModelNotFound(_)));
+        assert!(error.to_string().contains("tokenizer.json"));
+    }
+
+    #[test]
     fn local_directory_keeps_fingerprint_identity_and_path_only_locate() {
         let dir = tempfile::tempdir().unwrap();
         let config = GemmaConfig {

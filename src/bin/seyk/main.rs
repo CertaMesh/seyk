@@ -24,7 +24,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 9;
+const JSON_SCHEMA_VERSION: u32 = 10;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -1076,10 +1076,10 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=9)
+        Some(2..=10)
     ) {
         return Err(extract_errors::InvalidInput(
-            "expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8 or 9".into(),
+            "expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8, 9 or 10".into(),
         )
         .into());
     }
@@ -1167,10 +1167,26 @@ fn engine_with_provider(
     ephemeral: bool,
     provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
 ) -> Result<SearchEngine> {
+    engine_with_loader(
+        args,
+        ephemeral,
+        provider,
+        GemmaEmbedder::load,
+        &mut std::io::stderr(),
+    )
+}
+
+fn engine_with_loader<E: Embedder + 'static>(
+    args: &ModelArgs,
+    ephemeral: bool,
+    provider: Option<std::sync::Arc<dyn seyk::ResourceProvider>>,
+    load: impl FnOnce(GemmaConfig) -> seyk_embed::Result<E>,
+    warnings: &mut impl Write,
+) -> Result<SearchEngine> {
     let window = args.embedding_window()?;
-    let embedder = GemmaEmbedder::load(gemma_config(args)?).map_err(model_error)?;
+    let embedder = load(gemma_config(args)?).map_err(model_error)?;
     if let Some(reason) = embedder.unavailable_reason(seyk::Modality::Image) {
-        eprintln!("warning: {reason}");
+        writeln!(warnings, "warning: {reason}")?;
     }
     let builder = SearchEngine::builder()
         .embedder(embedder)
@@ -1558,6 +1574,10 @@ fn format_cache_stats(stats: &CacheStats) -> String {
 }
 
 #[cfg(test)]
+#[path = "../../../tests/common/mod.rs"]
+mod common;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use seyk::{MatchSignals, Modality, ResourceId, ResourceMetadata, SearchStats};
@@ -1706,6 +1726,75 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "image")]
+    #[test]
+    fn missing_vision_keeps_semantics_and_warns_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_dir = temp.path().join("model");
+        let docs = temp.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("note.txt"), "quartz lighthouse").unwrap();
+        std::fs::write(docs.join("photo.png"), b"not decoded when unavailable").unwrap();
+        let cli = Cli::try_parse_from([
+            "seyk",
+            "search",
+            "quartz",
+            "--model",
+            model_dir.to_str().unwrap(),
+        ]);
+        // The model option validates the directory when constructing the engine.
+        std::fs::create_dir_all(model_dir.join("onnx")).unwrap();
+        let cli = cli.unwrap();
+        let Command::Search { model, .. } = cli.command else {
+            unreachable!()
+        };
+        let requested = gemma_config(&model).unwrap();
+        assert!(requested.vision);
+        let mut text_only = requested.clone();
+        text_only.vision = false;
+        for file in text_only.files() {
+            std::fs::write(model_dir.join(file), b"fake text weights").unwrap();
+        }
+        let expected =
+            SearchEngine::builder().cache_profile(gemma::model_identity(&text_only).unwrap());
+        let mut warnings = Vec::new();
+        let engine = engine_with_loader(
+            &model,
+            true,
+            None,
+            |config| {
+                let (effective, reason) = gemma::runtime_config(&config)?;
+                assert!(!effective.vision);
+                Ok(
+                    common::FakeEmbedder::with_identity(gemma::model_identity(&effective)?)
+                        .with_missing_vision(reason),
+                )
+            },
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(engine.profile_id(), expected.id());
+        let warning = String::from_utf8(warnings).unwrap();
+        assert_eq!(warning.lines().count(), 1);
+        assert!(warning.starts_with("warning: "));
+        assert!(warning.contains("vision_encoder_quantized.onnx"));
+        assert!(warning.contains("vision_encoder_quantized.onnx_data"));
+        assert!(warning.contains("seyk model download"));
+        for _ in 0..2 {
+            let result = engine
+                .search("quartz")
+                .mode(SearchMode::Semantic)
+                .paths([&docs])
+                .execute()
+                .unwrap();
+            assert!(result.degraded.is_none());
+            assert_eq!(result.hits.len(), 1);
+            assert!(result.hits[0].signals.semantic.is_some());
+            assert_eq!(result.stats.sync.skipped.len(), 1);
+            assert!(warning.contains(&result.stats.sync.skipped[0].reason));
+        }
+    }
+
     #[test]
     fn human_output() {
         let out = format_results(&results(), &test_path("/book"), false);
@@ -1785,7 +1874,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 9);
+        assert_eq!(v["schema_version"], 10);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -1807,7 +1896,7 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 9);
+        assert_eq!(value["schema_version"], 10);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
@@ -1843,7 +1932,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 9);
+        assert_eq!(value["schema_version"], 10);
         assert!(
             value["hits"]
                 .as_array()
@@ -2076,7 +2165,7 @@ mod extract_contract_tests {
         let mut json = Vec::new();
         write_extracted(&mut json, &extracted, true).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
-        assert_eq!(value["schema_version"], 9);
+        assert_eq!(value["schema_version"], 10);
         assert_eq!(value["text"], "Public test transcript");
         assert_eq!(value["provenance"]["method"], "speech_to_text");
     }

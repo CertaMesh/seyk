@@ -15,10 +15,23 @@ seyk model profile --text-only --json  # active index profile, without loading w
 
 Only explicit model setup commands use the network. `seyk model download` fetches the ONNX export
 `onnx-community/embeddinggemma-2-ONNX`, pinned to commit `daa72c5`, into the
-standard Hugging Face cache. Searching never downloads anything: if the weights are
+standard Hugging Face cache. Searching never downloads anything: if the text weights are
 missing, search returns keyword and filename matches with a `no_model` degradation marker
 and CLI exit status 0. Run `model download` to enable semantic search. Indexing still
-requires weights.
+requires text weights.
+
+If only vision encoder files are missing, `search`, `index`, `index --watch`, and
+`mcp` keep semantic text search working without `--text-only`. Images and scanned
+PDF pages are skipped with diagnostics listing the missing files and
+`seyk model download`. PDF pages with usable embedded text remain searchable.
+The CLI warns once when loading the model; MCP exposes the warning in
+`index_status.model_diagnostics` after the model loads. No `no_model` marker is
+reported for this condition. Explicit `--text-only` disables images without a warning.
+
+In this mode, the active profile ID matches `--text-only` for the same text model.
+Cached text vectors remain reusable only for identical embedding inputs under that
+profile. `model profile` reports this effective profile while `model_present` and
+`missing_files` still describe all files requested by the original options.
 
 To use weights you already have, pass a directory with the same layout
 (`tokenizer.json`, `onnx/model_quantized.onnx` + `.onnx_data`, …):
@@ -37,12 +50,12 @@ not load an inference session, download files, or open or create an embedding ca
 `--cache-path` and `SEYK_CACHE` are accepted but ignored. Without `--json`, it
 prints the ID and descriptor.
 
-The JSON object uses the current CLI `schema_version` (9), with `profile_id`
+The JSON object uses the current CLI `schema_version` (10), with `profile_id`
 (the exact `CacheProfile::id()` string) and `profile` (the full descriptor):
 
 ```json
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "profile_id": "<24-character hash>",
   "profile": {
     "model": {

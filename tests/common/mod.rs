@@ -11,6 +11,7 @@ use seyk::{Dimension, Embedder, Embedding, Modality, ModelIdentity, ResourceInpu
 pub struct FakeEmbedder {
     identity: ModelIdentity,
     embedded_resources: Arc<AtomicUsize>,
+    image_unavailable: Option<String>,
 }
 
 impl FakeEmbedder {
@@ -27,6 +28,7 @@ impl FakeEmbedder {
                 max_tokens: 512,
             },
             embedded_resources: Arc::new(AtomicUsize::new(0)),
+            image_unavailable: None,
         }
     }
 
@@ -34,7 +36,13 @@ impl FakeEmbedder {
         Self {
             identity,
             embedded_resources: Arc::new(AtomicUsize::new(0)),
+            image_unavailable: None,
         }
+    }
+
+    pub fn with_missing_vision(mut self, reason: Option<String>) -> Self {
+        self.image_unavailable = reason;
+        self
     }
 
     pub fn resource_count(&self) -> usize {
@@ -63,6 +71,12 @@ impl FakeEmbedder {
 impl Embedder for FakeEmbedder {
     fn identity(&self) -> &ModelIdentity {
         &self.identity
+    }
+
+    fn unavailable_reason(&self, modality: Modality) -> Option<String> {
+        (modality == Modality::Image)
+            .then(|| self.image_unavailable.clone())
+            .flatten()
     }
 
     fn supports(&self, modality: Modality) -> bool {
