@@ -23,6 +23,9 @@ pub struct WatchOptions {
     /// End after the initial pass so debug benchmarks can join the watcher.
     #[cfg(all(feature = "test-support", debug_assertions))]
     pub stop_after_first_pass: bool,
+    /// Supply events and observe completed passes without OS delivery latency.
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    pub test_events: Option<TestEvents>,
 }
 
 impl Default for WatchOptions {
@@ -31,7 +34,35 @@ impl Default for WatchOptions {
             debounce: Duration::from_millis(1500),
             #[cfg(all(feature = "test-support", debug_assertions))]
             stop_after_first_pass: false,
+            #[cfg(all(feature = "test-support", debug_assertions))]
+            test_events: None,
         }
+    }
+}
+
+/// An explicit event source for tests of consumers of the background indexer.
+/// Dropping the change sender stops the loop, so its thread can be joined.
+#[cfg(all(feature = "test-support", debug_assertions))]
+#[derive(Debug, Clone)]
+pub struct TestEvents {
+    changes: std::sync::Arc<std::sync::Mutex<mpsc::Receiver<PathBuf>>>,
+    completed: mpsc::Sender<()>,
+}
+
+#[cfg(all(feature = "test-support", debug_assertions))]
+impl TestEvents {
+    /// Return the source, a change sender, and a completed-pass receiver.
+    pub fn channel() -> (Self, mpsc::Sender<PathBuf>, mpsc::Receiver<()>) {
+        let (tx, rx) = mpsc::channel();
+        let (completed, passes) = mpsc::channel();
+        (
+            Self {
+                changes: std::sync::Arc::new(std::sync::Mutex::new(rx)),
+                completed,
+            },
+            tx,
+            passes,
+        )
     }
 }
 
@@ -58,6 +89,44 @@ pub fn watch(
             absolute_logical_path(&p)
         })
         .collect::<Result<_>>()?;
+    let run = |on_pass: &mut dyn FnMut(Result<IndexReport>)| {
+        let mut req = engine.index().paths(&paths).discovery(discovery.clone());
+        if let Some(p) = progress {
+            req = req.progress(p);
+        }
+        on_pass(req.execute());
+        #[cfg(all(feature = "test-support", debug_assertions))]
+        if let Some(events) = &options.test_events {
+            // A failed test may have already dropped its observer.
+            let _ = events.completed.send(());
+        }
+    };
+
+    #[cfg(all(feature = "test-support", debug_assertions))]
+    if let Some(events) = &options.test_events {
+        let rx = events
+            .changes
+            .lock()
+            .map_err(|_| Error::Config("test event receiver poisoned".into()))?;
+        run(&mut on_pass);
+        if options.stop_after_first_pass {
+            return Ok(());
+        }
+        debounce_loop(
+            &rx,
+            options.debounce,
+            |path| {
+                relevant(
+                    &Ok(notify::Event::new(EventKind::Any).add_path(path.clone())),
+                    &paths,
+                    discovery,
+                )
+            },
+            || run(&mut on_pass),
+        );
+        return Ok(());
+    }
+
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx).map_err(|e| watch_error(&e))?;
     for p in &paths {
@@ -65,14 +134,6 @@ pub fn watch(
             .watch(p, RecursiveMode::Recursive)
             .map_err(|e| watch_error(&e))?;
     }
-
-    let run = |on_pass: &mut dyn FnMut(Result<IndexReport>)| {
-        let mut req = engine.index().paths(&paths).discovery(discovery.clone());
-        if let Some(p) = progress {
-            req = req.progress(p);
-        }
-        on_pass(req.execute());
-    };
 
     // Watch before the first pass so edits made during it are not lost.
     run(&mut on_pass);
