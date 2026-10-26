@@ -16,6 +16,22 @@ file and the third-party licence notices. Two platform limits apply to them:
 - **There is no Intel Mac build**, because ONNX Runtime publishes no prebuilt
   library for it.
 
+When a release is available, `scripts/install.sh` downloads its public archive
+with curl or wget, verifies SHA-256, and installs to `~/.local/bin` without sudo.
+Set `SEYK_INSTALL_DIR` to another writable directory, `SEYK_VERSION=vX.Y.Z` to
+pin a release, or `SEYK_DOWNLOADER=gh` to use the GitHub CLI explicitly. The
+installer reports an error if no release or matching asset is available.
+
+Once a release is published, replace `vX.Y.Z` with its tag and run this on
+macOS or Linux. Both the installer source and the binary use that tag:
+
+```sh
+SEYK_VERSION=vX.Y.Z
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+  "https://raw.githubusercontent.com/CertaMesh/seyk/refs/tags/$SEYK_VERSION/scripts/install.sh" \
+  | env SEYK_VERSION="$SEYK_VERSION" sh
+```
+
 The binary is self-contained. ONNX Runtime is linked statically; its prebuilt
 library is downloaded by the `ort` crate **at build time**. For a fully offline
 build, set `ORT_SKIP_DOWNLOAD=1` and point `ORT_LIB_LOCATION` at a local ONNX
