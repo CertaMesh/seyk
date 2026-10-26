@@ -85,17 +85,27 @@ returns keyword and file-name matches. For every option, see
 ## Use Seyk from an agent (MCP)
 
 `seyk mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server
-over stdio. Agents get a `search` tool that returns ranked passages with path,
-line range, heading, score and preview. The agent then reads those lines and
-writes the answer.
+over stdio. Agents get three tools: `search` finds ranked passages with path,
+line range, heading, score and preview; `extract` reads evidence from a selected
+hit; `index_status` reports indexing progress and model diagnostics. The agent
+reads the evidence and writes the answer.
 
 ```bash
 # Claude Code: make your notes searchable in every session
-claude mcp add --scope user seyk -- seyk mcp ~/notes
+claude mcp add --scope user seyk -- seyk mcp /absolute/path/to/notes
 
 # Or per project, for a codebase
-claude mcp add seyk -- seyk mcp .
+claude mcp add seyk -- seyk mcp /absolute/path/to/codebase
+
+# Codex
+codex mcp add seyk -- seyk mcp /absolute/path/to/codebase
 ```
+
+Replace the example folders with absolute paths. `seyk mcp .` indexes the
+agent's start folder, which can be `$HOME`. GUI-launched agents may lack `seyk`
+on `PATH`; use the absolute binary path from `command -v seyk` in their setup.
+For Codex, the default 10 s startup and 60 s tool timeouts can be too short for a
+cold first search. See [Codex setup](docs/mcp.md#codex) to raise them.
 
 On Unix, a shared background daemon loads the model once for all sessions.
 The server indexes your folders in the background and re-indexes when files

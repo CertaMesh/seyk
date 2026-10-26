@@ -1,19 +1,60 @@
 # Use Seyk from an agent (MCP)
 
 `seyk mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server
-over stdio. Agents get one tool, `search`, that takes one to eight phrasings and
-returns ranked passages as path, line range, heading, score, preview and
-`matched` (`meaning`, `words`, `name`). An optional `mode` switches between
-`hybrid` (default), `semantic` and `lexical`. The agent then reads those lines
-and writes the answer. Seyk never generates text.
+over stdio. Agents get three tools:
+
+- `search` takes one to eight phrasings and returns ranked passages with path,
+  line range, heading, score, preview and `matched` (`meaning`, `words`, `name`).
+  An optional `mode` selects `hybrid` (default), `semantic` or `lexical` search.
+- `extract` reads evidence from a selected search hit. Pass the entire hit object.
+- `index_status` reports indexing progress, per-root counts and model diagnostics.
+
+The agent reads the evidence and writes the answer. Seyk never generates text.
+
+## Set up an agent
+
+Use an absolute directory. `seyk mcp .` indexes the agent's start folder, which
+can be `$HOME`, rather than the project you intended.
+
+GUI-launched agents may not have `seyk` on `PATH`. Run `command -v seyk` in your
+terminal and use that absolute binary path in place of `seyk` after `--` below.
+For example, a Cargo install normally uses `/Users/you/.cargo/bin/seyk` on macOS.
+Replace all example paths with your own.
+
+### Claude Code
 
 ```bash
-# Claude Code: make your notes searchable in every session
-claude mcp add --scope user seyk -- seyk mcp ~/notes
+# Make your notes searchable in every session
+claude mcp add --scope user seyk -- seyk mcp /absolute/path/to/notes
 
 # Or per project, for a codebase
-claude mcp add seyk -- seyk mcp .
+claude mcp add seyk -- seyk mcp /absolute/path/to/codebase
 ```
+
+### Codex
+
+```bash
+codex mcp add seyk -- seyk mcp /absolute/path/to/codebase
+```
+
+Codex defaults to 10 s for MCP startup and 60 s per tool call. These limits can
+be too short for a cold first search. Raise them in the existing
+`[mcp_servers.seyk]` table in `~/.codex/config.toml`, for example:
+
+```toml
+[mcp_servers.seyk]
+command = "/Users/you/.cargo/bin/seyk"
+args = ["mcp", "/absolute/path/to/codebase"]
+startup_timeout_sec = 60
+tool_timeout_sec = 300
+```
+
+Use your absolute binary and directory paths. These example timeouts are not a
+latency guarantee; large folders can need longer. See the
+[Codex MCP configuration reference](https://developers.openai.com/codex/mcp/#other-configuration-options)
+for the timeout settings.
+
+## How sessions work
 
 - **One model for every session.** `seyk mcp` is a small relay (about 9 MB).
   The first one starts a shared background daemon that loads the model once,

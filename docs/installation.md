@@ -68,4 +68,11 @@ Runtime build.
 Older Seyk binaries reset caches whose schema they do not recognize. Use separate
 `--cache-path` values when running builds with different cache schemas.
 
+For agent setup, use an absolute binary path. GUI-launched agents may not inherit
+your terminal's `PATH`. Run `command -v seyk` to find the installed binary.
+Cargo normally installs it to `~/.cargo/bin/seyk`; the release installer defaults
+to `~/.local/bin/seyk`. Expand `~` to your full home path in agent configuration.
+Use an absolute directory to index too. See [agent setup](mcp.md#set-up-an-agent)
+for Claude Code and Codex commands, including Codex timeout settings.
+
 Next, [download the model](model-setup.md).
