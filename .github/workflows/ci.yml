@@ -47,6 +47,17 @@ jobs:
       - name: Test core with PDF rendering
         run: cargo test -p seyk-core --no-default-features --features pdf,pdf-render --locked
 
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sh -n scripts/install.sh
+      - run: python -m unittest discover -s scripts -p test_install.py
+      - run: python -m unittest discover -s scripts -p test_release_archive.py
+
   retrieval-harness:
     runs-on: ubuntu-24.04
     steps:
@@ -58,6 +69,23 @@ jobs:
         run: uv run --no-project --python 3.12 python -m unittest discover -s scripts/bench -p test_chart.py
       - name: Check retrieval metrics and data adapters (synthetic inputs only)
         run: UV_CACHE_DIR="$HOME/.cache/seyk-bench/uv" uv run --locked --python 3.12 scripts/bench/bench.py test
+
+  photo-calibration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Export synthetic production scores without loading models
+        run: cargo run --locked --example photo_calibration_export -- --synthetic calibration-reference.json
+      - name: Test calibration preparation without network or models
+        env:
+          SEYK_CALIBRATION_REFERENCE: calibration-reference.json
+          SEYK_CALIBRATION_EXPORTER: target/debug/examples/photo_calibration_export
+        run: uv run --python 3.12 --with-requirements scripts/photo_calibration/requirements.txt python -m unittest discover -s scripts/photo_calibration -p 'test_*.py'
 
   licenses:
     runs-on: ubuntu-24.04
