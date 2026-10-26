@@ -8,8 +8,8 @@ written down.
 Run the commands from this folder. Every output below was captured from a real
 run **without model weights**, so it shows keyword and file-name matches only.
 With the model downloaded (`seyk model download`), the default hybrid search
-also matches by meaning, so a question can find a passage that shares none of
-its key terms.
+also matches by meaning, so a question can find a passage that uses different
+words.
 
 ## Find the passage
 

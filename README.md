@@ -7,34 +7,71 @@
   <a href="https://github.com/CertaMesh/seyk/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
 </p>
 
-Seyk is local hybrid search over your own files and code. It combines semantic
-meaning, BM25 keywords and file names. Semantic retrieval runs on Google's
-[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2).
-Use the CLI, embed the Rust library, or connect an agent through MCP.
+Seyk is local search for AI agents over private files. It finds passages by
+meaning, keywords and file names, and returns exact source locations: a line
+range, a PDF page, an audio time window. Use it alongside grep: grep finds
+every exact string, Seyk finds the passage that answers a question in other
+words, including in PDFs and recordings.
 
-Ask a question in your own words, or type an exact name, and get back the
-passages that match. Meaning, keywords and file names are searched together:
+When you extract a passage, Seyk re-checks the file and refuses text that
+changed since indexing. It never writes answers; your agent reads the evidence
+and decides what it means. Seyk runs as an MCP server, a CLI, and a Rust
+library (pre-1.0).
+
+> **Status:** pre-1.0. Install from source for now; the model is a 0.5 GB
+> download. Indexing can use several GB of memory on dense files, and a fix is
+> in progress ([#95](https://github.com/CertaMesh/seyk/pull/95)).
+
+## What you can do with it
+
+- **Let an agent cite your decision records.** An agent asks "why did we pick
+  SQLite over Postgres?", gets `0007-storage-sqlite.md:13-18`, and reads
+  exactly those lines. Try it on the
+  [example decision records](https://github.com/CertaMesh/seyk/tree/main/examples/agent-decisions).
+- **Search the files grep can't read well.** Ask a question of notes, PDFs or
+  meeting recordings and get back a line range, a page, or a time window. For
+  code, Seyk complements grep; it does not parse functions yet.
+- **Embed retrieval in a Rust application.** Link the library, point it at a
+  folder, get hits with byte ranges, with no server to run. Pre-1.0 and not on
+  crates.io yet; see [examples/embed_search.rs](https://github.com/CertaMesh/seyk/blob/main/examples/embed_search.rs).
+
+## See it work
+
+Three searches over the [example decision records](https://github.com/CertaMesh/seyk/tree/main/examples/agent-decisions),
+run from that folder. Results are trimmed to the top hit or two:
 
 ```console
-$ seyk search "keeping tomatoes alive in a heatwave" ~/notes -n 1
-1.000  garden.md:1-3  § Garden  [meaning 0.67]
-       Water the vegetable beds at dawn, before the sun climbs. A thick layer of straw mulch holds moisture in the soil through the hottest afternoons.
+$ seyk search "how do we sign someone out right away?" decisions -n 1
+0.908  decisions/0015-auth-sessions.md:6-10  § 0015. Use server-side sessions instead of JWTs for the web app > Context  [meaning 0.72+words]
+       The web app stored a signed JWT in local storage. Logging a user out, or locking an account after a password reset, could not take effect until the token expired an hour later.
 
-$ seyk search "INC-18372" ~/notes -n 1
-1.000  work.md:1-3  § Work  [meaning 0.76+words]
-       Ship the pricing page before the conference. INC-18372 is still open: the old page lists the beta plan.
+$ seyk search "Sunset header" decisions -n 1
+1.000  decisions/0009-api-versioning.md:12-17  § 0009. Version the public API in the URL path > Decision  [meaning 0.70+words]
+       Every public endpoint lives under a version prefix such as `/api/v2/`. A breaking change creates a new version. The previous version keeps working for at least twelve months after its replacement ships, and responses from a deprecated…
 
-$ seyk search "garden.md" ~/notes -n 1
-1.000  garden.md:1-3  § Garden  [meaning 0.73+words+name]
-       Water the vegetable beds at dawn, before the sun climbs. A thick layer of straw mulch holds moisture in the soil through the hottest afternoons.
+$ seyk search "0015-auth-sessions.md" decisions -n 1
+1.000  decisions/0015-auth-sessions.md:1-4  § 0015. Use server-side sessions instead of JWTs for the web app  [meaning 0.82+words+name]
+       Date: 2026-08-27 Status: Accepted. Supersedes the token section of 0003.
 ```
 
-This is real output from a three-note folder. The first match shares no words
-with the question. The tag in brackets shows which signals found each hit.
+The first question shares only the word "out" with the record it found;
+meaning ranked it first. The tag in brackets shows which signals found each
+hit: meaning (with its similarity), words, or the file name. The score at the
+start ranks hits within one search; 1.000 means first on every signal that
+found anything.
 
-Seyk is for developers, applications and AI agents that need to search their
-own files without sending those files anywhere. It returns relevant resources
-and exact locations inside them. It does not generate answers or summaries.
+To use a hit as evidence, extract it. Seyk re-hashes the whole file first and
+fails instead of returning text from a file that changed since the search:
+
+```console
+$ seyk search "why did we pick SQLite over Postgres?" decisions --json -n 1 | seyk extract --from-json -
+## Decision
+
+We store tickets in a single SQLite database file in write-ahead-log mode,
+next to the application. Backups copy that one file with the SQLite online
+backup API. We keep the schema portable so a move to Postgres stays possible
+if a customer outgrows one machine.
+```
 
 ## Why Seyk
 
@@ -43,15 +80,17 @@ and exact locations inside them. It does not generate answers or summaries.
   use the network.
 - **Meaning, keywords and file names together.** The default hybrid mode
   combines semantic similarity, BM25 keyword scores and file-name matches. A
-  question can find a passage that shares none of its words. An identifier such
-  as `INC-18372` or `Session::restore` still matches exactly.
-- **Evidence you can verify.** Hits point at exact locations, such as a line
-  range, a PDF page, or an audio time window. `seyk extract` checks the full
-  file hash before it returns the passage, and fails instead of returning
-  different text if the file changed.
-- **CLI, Rust library and MCP.** The `seyk` CLI is a thin layer over the
-  library, so your application can embed the same engine. `seyk mcp` gives AI
-  agents the same search. On Unix, all agent sessions share one loaded model.
+  question can find a passage that uses different words, and an
+  identifier such as `INC-18372` or `Session::restore` still finds the passage
+  that contains it. Each hit reports which signals matched.
+- **Exact locations.** Line and byte ranges for text and code, pages for PDFs,
+  time windows for audio.
+- **Evidence you can re-check.** `seyk extract` hashes the whole file and fails
+  instead of returning text if the file changed since indexing. Search leaves
+  out a preview it cannot verify. A matching hash shows the file is unchanged;
+  it does not show who wrote it or whether it is true.
+- **One engine, three interfaces.** The MCP server and the CLI are thin layers
+  over the Rust library. On Unix, all agent sessions share one loaded model.
 
 ## Quickstart
 
@@ -148,6 +187,9 @@ let results = engine
 
 You can also use only the EmbeddingGemma 2 backend, without the search engine.
 See the [Rust library guide](https://github.com/CertaMesh/seyk/blob/main/docs/library.md).
+[examples/embed_search.rs](https://github.com/CertaMesh/seyk/blob/main/examples/embed_search.rs) is a complete program
+that searches and extracts with `SearchEngine::lexical()`, which needs no model
+weights: `cargo run --example embed_search`.
 
 ## Supported content
 
@@ -171,6 +213,9 @@ Seyk is at version 0.1.0. Know these before you adopt it:
   10,000 segments on a busy machine. After that, Seyk embeds only what changed.
 - **Hybrid can push a good meaning match down.** Use `--mode semantic` for
   purely thematic queries.
+- **Indexing can use several GB of memory.** Files that tokenize densely, such
+  as numeric JSON, make embedding batches large. A fix is in progress
+  ([#95](https://github.com/CertaMesh/seyk/pull/95)).
 - **Video and scanned-page OCR are not implemented.**
 - **The library API can still change.** Resource provider types may change
   before 1.0, and the filesystem is the only supported provider.
@@ -182,7 +227,9 @@ See all [Known limitations](https://github.com/CertaMesh/seyk/blob/main/docs/lim
 ![Seyk hybrid, semantic and lexical retrieval next to QMD, DigUp and LEANN measured on Seyk's harness, and sourced published model scores; higher nDCG@10 is better](https://raw.githubusercontent.com/CertaMesh/seyk/main/docs/assets/benchmarks.svg)
 
 nDCG@10 measures how well the first ten results rank relevant documents. Higher
-is better. The default hybrid mode still trails semantic-only search on SciFact. See
+is better. The default hybrid mode still trails semantic-only search on SciFact.
+The hybrid fusion setting was tuned on these same datasets, so they are not a
+held-out test. See
 [Performance](https://github.com/CertaMesh/seyk/blob/main/docs/performance.md) for the full setup and
 [Benchmarks](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md) for sources and reproduction steps.
 
@@ -196,6 +243,9 @@ is better. The default hybrid mode still trails semantic-only search on SciFact.
 - [Caching and storage](https://github.com/CertaMesh/seyk/blob/main/docs/caching-and-storage.md): what is cached, where, and how to erase it
 - [Performance](https://github.com/CertaMesh/seyk/blob/main/docs/performance.md) and [Known limitations](https://github.com/CertaMesh/seyk/blob/main/docs/limitations.md)
 - [Development](https://github.com/CertaMesh/seyk/blob/main/docs/development.md) and [Architecture](https://github.com/CertaMesh/seyk/blob/main/docs/architecture.md)
+- [What Seyk is for](https://github.com/CertaMesh/seyk/blob/main/docs/product.md): purpose, evidence contract, non-goals
+- [Roadmap](https://github.com/CertaMesh/seyk/blob/main/docs/roadmap.md)
+- [Examples](https://github.com/CertaMesh/seyk/blob/main/examples/README.md)
 - [All documentation](https://github.com/CertaMesh/seyk/blob/main/docs/README.md)
 
 ## License
