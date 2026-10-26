@@ -1816,11 +1816,8 @@ mod tests {
         assert!(matches!(server.status().unwrap(), Some(IndexStatus::Ready)));
         let r = search(&server, "grandmother bread");
         assert_eq!(r.hits.len(), 2);
-        assert!(
-            r.hits.iter().any(|hit| {
-                hit.resource.to_file_path().unwrap() == bread.canonicalize().unwrap()
-            })
-        );
+        let bread_id = ResourceId::from_path(bread.canonicalize().unwrap()).unwrap();
+        assert!(r.hits.iter().any(|hit| hit.resource == bread_id));
         assert_eq!(
             r.segments_embedded, 0,
             "searches read the updated cache only"
