@@ -318,7 +318,7 @@ forensic-erasure limitations of old keyword indexes remain unchanged.
 
 ### JSON and public API migration
 
-The current JSON schema is v10. MCP `index_status.model_diagnostics` reports
+The current JSON schema is v11. MCP `index_status.model_diagnostics` reports
 optional model availability after loading without blocking status requests.
 Missing vision assets keep text semantics and use the same cache profile as
 `--text-only`; cache schema v7 is unchanged. Extract accepts search envelopes

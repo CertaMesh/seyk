@@ -26,6 +26,9 @@ use seyk::{
     DiscoveryOptions, ProgressEvent, ResourceId, ResourceLocator, SearchEngine, SearchResults,
 };
 
+#[path = "mcp_wire.rs"]
+mod wire;
+
 const MAX_QUERIES: usize = 8;
 const MAX_LIMIT: usize = 50;
 
@@ -33,7 +36,7 @@ const INSTRUCTIONS: &str = "Local search over the user's files, by meaning (Embe
 keywords and file names at once. Describe what the passage would say rather than only asking \
 the question, or name a file or identifier directly (\"pricing.md\", \"INC-18372\"). Pass 2-4 \
 different phrasings in one call. Each hit says what matched: \"meaning\", \"words\" or \"name\". \
-Hits are pointers: read the file at the given lines before answering, and cite path:lines. \
+Hits are pointers: cite path:lines. lines reflect the indexed version; call extract for verified text. \
 The server indexes its folders in the background. A `degraded` marker means keywords and \
 file names only: semantic retrieval is unavailable while the model loads, files await \
 embedding, or weights are absent.";
@@ -215,6 +218,9 @@ fn combine_diagnostics(records: impl IntoIterator<Item = IndexDiagnostics>) -> I
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchParams {
+    /// Compact by default; full includes extraction descriptors and detailed diagnostics.
+    #[serde(default)]
+    pub detail: wire::Detail,
     /// Include counts of returned hits by locator kind (after the limit).
     #[serde(default)]
     pub kind_counts: bool,
@@ -240,16 +246,23 @@ pub struct SearchParams {
     pub mode: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
 pub struct ExtractParams {
-    /// The complete selected hit object returned by search, including locator and metadata.
     pub hit: serde_json::Value,
 }
-#[derive(Deserialize)]
-struct SelectedHit {
-    resource: ResourceId,
-    locator: ResourceLocator,
-    metadata: seyk::ResourceMetadata,
+impl<'de> Deserialize<'de> for ExtractParams {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        let hit = wire::parameters(value).map_err(serde::de::Error::custom)?;
+        Ok(Self { hit })
+    }
+}
+impl JsonSchema for ExtractParams {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ExtractParams".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        wire::selection_schema().try_into().expect("object schema")
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +298,8 @@ struct Response {
     hits: Vec<Hit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind_counts: Option<std::collections::BTreeMap<String, usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index_warnings: Option<wire::IndexWarnings>,
     index_progress: Vec<RootProgress>,
     segments_searched: usize,
     files: usize,
@@ -626,9 +641,7 @@ impl SeykServer {
 
     fn run_extract(&self, params: ExtractParams) -> Result<seyk::ExtractedContent> {
         self.validate_roots()?;
-        let hit: SelectedHit = serde_json::from_value(params.hit).map_err(|_| {
-            anyhow!("invalid selected hit: resource, locator and metadata are required")
-        })?;
+        let hit = wire::selection(&params.hit)?;
         let path = hit
             .resource
             .to_file_path()
@@ -785,7 +798,14 @@ impl SeykServer {
         for g in p.exclude {
             req = req.exclude(g);
         }
-        let mut resp = to_response(req.execute()?);
+        let result = req.execute()?;
+        let warnings = wire::query_warnings(&result.stats.sync, |resource| {
+            resource
+                .to_file_path()
+                .is_some_and(|path| self.confine(&path).is_ok())
+        });
+        let mut resp = to_response(result);
+        resp.index_warnings = warnings;
         if loading {
             resp.degraded = Some(seyk::SearchDegradation::lexical(
                 seyk::DegradedReason::ModelLoading,
@@ -1017,6 +1037,7 @@ fn to_response(r: SearchResults) -> Response {
         degraded: r.degraded,
         hits,
         kind_counts: r.kind_counts,
+        index_warnings: None,
         index_progress: Vec::new(),
         segments_searched: r.stats.segments_searched,
         files: r.stats.sync.resources_discovered,
@@ -1049,7 +1070,7 @@ impl SeykServer {
     }
 
     #[tool(
-        description = "Extract readable evidence from one selected search hit. Pass the entire hit object. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
+        description = "Extract readable evidence from a selected hit. Pass {hit: hit}, or {ref: hit.ref, path: hit.path}. Examples: {ref: hit.ref, path: hit.path} works; {ref: hit.ref} fails if the URI is omitted. For an explicit-URI ref, {ref: explicitRef, path: /edited/ignored} ignores that display path. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
     )]
     async fn extract(
         &self,
@@ -1071,18 +1092,24 @@ impl SeykServer {
         description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
         and audio once its models are installed) by meaning, keywords and file names. Returns \
         ranked passages as path + location + preview. Read the files at those locations, or call \
-        `extract`, before answering. Pass several phrasings of the same need in `queries`."
+        `extract`, before answering. lines reflect the indexed version; call extract for verified text. Compact hits are the default; detail: full restores descriptors and diagnostics. Pass several phrasings of the same need in `queries`."
     )]
     async fn search(
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
         let server = self.clone();
+        let detail = params.detail;
         let outcome = tokio::task::spawn_blocking(move || server.run_search(params))
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(match outcome {
-            Ok(resp) => CallToolResult::success(vec![ContentBlock::json(resp)?]),
+            Ok(resp) => match wire::response_value(&resp)
+                .and_then(|value| wire::project(value, detail))
+            {
+                Ok(value) => CallToolResult::success(vec![ContentBlock::json(value)?]),
+                Err(error) => CallToolResult::error(vec![ContentBlock::text(format!("{error:#}"))]),
+            },
             // Tool errors go back to the agent as results it can read and correct.
             Err(e) => CallToolResult::error(vec![ContentBlock::text(format!("{e:#}"))]),
         })
@@ -1359,7 +1386,7 @@ mod tests {
             env!("SEYK_BUILD_VERSION")
         );
         let valid = search(&server, "quartz");
-        assert_eq!(valid.schema_version, 10);
+        assert_eq!(valid.schema_version, 11);
         assert_eq!(valid.hits.len(), 1);
         let hit = serde_json::to_value(&valid.hits[0]).unwrap();
         assert!(
@@ -1470,6 +1497,7 @@ mod tests {
     fn search(server: &SeykServer, q: &str) -> Response {
         server
             .run_search(SearchParams {
+                detail: wire::Detail::Slim,
                 kind_counts: false,
                 queries: vec![q.into()],
                 paths: vec![],
@@ -1571,7 +1599,7 @@ mod tests {
         )
         .unwrap();
         let response = serde_json::to_value(search(&server, "lighthouse")).unwrap();
-        assert_eq!(response["schema_version"], 10);
+        assert_eq!(response["schema_version"], 11);
         assert_eq!(response["hits"][0]["match"]["semantic_rank"], 1);
         assert_eq!(response["hits"][0]["match"]["keyword_rank"], 1);
         assert_eq!(
@@ -1592,6 +1620,87 @@ mod tests {
         );
         assert!(response["hits"][0]["lines"].is_string());
         assert!(response["hits"][0]["preview"].is_string());
+    }
+
+    #[tokio::test]
+    async fn public_slim_full_and_ref_extraction_preserve_verification() {
+        use serde_json::{Value, json};
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = inside.path().join("evidence.txt");
+        std::fs::write(&file, "quartz pebble").unwrap();
+        let server = SeykServer::new(
+            vec![inside.path().into()],
+            Hub::new(Box::new(fake_engine), false),
+        )
+        .unwrap();
+        let mut outputs = Vec::new();
+        for detail in [None, Some("slim"), Some("full")] {
+            let mut request = json!({"queries":["quartz"]});
+            if let Some(detail) = detail {
+                request["detail"] = detail.into();
+            }
+            let result = server
+                .search(Parameters(serde_json::from_value(request).unwrap()))
+                .await
+                .unwrap();
+            let result = serde_json::to_value(result).unwrap();
+            let response: Value =
+                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(response["schema_version"], 11);
+            assert!(response["hits"][0]["ref"].is_string());
+            assert_eq!(
+                response["hits"][0].get("resource").is_some(),
+                detail == Some("full")
+            );
+            outputs.push(response);
+        }
+        assert_eq!(outputs[0], outputs[1]);
+        let slim = outputs[0]["hits"][0].clone();
+        let full = outputs[2]["hits"][0].clone();
+        for input in [
+            json!({"hit":slim}),
+            json!({"hit":full}),
+            json!({"ref":slim["ref"],"path":slim["path"]}),
+        ] {
+            let extracted = server
+                .run_extract(serde_json::from_value(input).unwrap())
+                .unwrap();
+            assert_eq!(extracted.text, "quartz pebble");
+        }
+        assert!(serde_json::from_value::<ExtractParams>(json!({"ref":slim["ref"]})).is_err());
+        let mut legacy = full.clone();
+        legacy.as_object_mut().unwrap().remove("ref");
+        assert_eq!(
+            server
+                .run_extract(ExtractParams { hit: legacy })
+                .unwrap()
+                .text,
+            "quartz pebble"
+        );
+        let mut edited = slim.clone();
+        edited["lines"] = "1-99999".into();
+        assert_eq!(
+            server
+                .run_extract(ExtractParams { hit: edited })
+                .unwrap()
+                .text,
+            "quartz pebble"
+        );
+        let escaped = outside.path().join("evidence.txt");
+        std::fs::write(&escaped, "quartz pebble").unwrap();
+        assert!(
+            server
+                .run_extract(ExtractParams {
+                    hit: json!({"ref":slim["ref"],"path":escaped})
+                })
+                .is_err()
+        );
+        // These checks use the original reference after a source mutation, not a fresh search.
+        std::fs::write(&file, "changed source").unwrap();
+        assert!(server.run_extract(ExtractParams { hit: slim }).is_err());
+        let schema = serde_json::to_value(schemars::schema_for!(ExtractParams)).unwrap();
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -1991,6 +2100,7 @@ mod tests {
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let response = server
             .run_search(SearchParams {
+                detail: wire::Detail::Slim,
                 queries: vec!["quartz".into()],
                 kind_counts: true,
                 paths: vec![],
@@ -2295,6 +2405,7 @@ mod tests {
 
     fn params(paths: &[PathBuf]) -> SearchParams {
         SearchParams {
+            detail: wire::Detail::Slim,
             kind_counts: false,
             queries: vec!["quartz".into()],
             paths: paths.iter().map(|p| p.to_str().unwrap().into()).collect(),

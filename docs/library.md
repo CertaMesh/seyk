@@ -82,11 +82,12 @@ use the optional path when opening a local file. `ResourceId::from_path(path)?`
 now requires an absolute path and returns a `Result`. Request `.paths(...)`
 still accepts relative paths and `~/...`.
 
-CLI JSON objects and MCP search responses include `schema_version: 10`. Version 7 added result-kind counts, per-root
+CLI JSON objects and MCP search responses include `schema_version: 11`. Version 7 added result-kind counts, per-root
 indexing progress and `index_status`; version 8 added optional lexical-only
 `degraded` metadata and its reason. Version 9 added cache image-code counts;
 version 10 adds MCP `index_status.model_diagnostics` for optional model availability.
-Every hit also includes `match` (`SearchHit::r#match` in Rust): optional one-based
+Every CLI/library hit and full MCP hit also includes `match` (`SearchHit::r#match`
+in Rust): optional one-based
 `semantic_rank`, `keyword_rank` (BM25), and `filename_rank`, plus `matched_terms`
 containing only normalized query tokens confirmed by the keyword index. Ranks
 precede fusion and the final limit; `null` means the leg did not contribute.
@@ -177,3 +178,6 @@ migration from the old `Embedder` and cache write APIs.
 
 For CPU scheduling controls in Rust, see
 [CPU throughput controls](performance.md#cpu-throughput-controls).
+
+Protocol 11 changes MCP search defaults. CLI payload fields remain unchanged apart
+from the version label. See the [mixed-version compatibility matrix](mcp.md#protocol-compatibility).

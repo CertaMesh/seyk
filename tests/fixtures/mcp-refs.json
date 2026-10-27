@@ -1,0 +1,382 @@
+[
+  {
+    "name": "0-whole_resource-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "whole_resource"
+      },
+      "metadata": {
+        "modality": "text",
+        "size_bytes": 0,
+        "modified_ns": null,
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "0-whole_resource-uri",
+    "selection": {
+      "resource": "file:///fixture/%FF",
+      "locator": {
+        "kind": "whole_resource"
+      },
+      "metadata": {
+        "modality": "text",
+        "size_bytes": 0,
+        "modified_ns": null,
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001366696c653a2f2f2f666978747572652f25464605010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBABNmaWxlOi8vL2ZpeHR1cmUvJUZGBQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "1-text-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "text",
+        "byte_start": 0,
+        "byte_end": 128,
+        "line_start": 1,
+        "line_end": 127
+      },
+      "metadata": {
+        "modality": "document",
+        "size_bytes": 127,
+        "modified_ns": 0,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "application/pdf"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "53520101000080010101017f007f010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQAAgAEBAQF_AH8BAAEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw"
+  },
+  {
+    "name": "1-text-uri",
+    "selection": {
+      "resource": "https://example.org/fixture",
+      "locator": {
+        "kind": "text",
+        "byte_start": 0,
+        "byte_end": 128,
+        "line_start": 1,
+        "line_end": 127
+      },
+      "metadata": {
+        "modality": "document",
+        "size_bytes": 127,
+        "modified_ns": 0,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "application/pdf"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001b68747470733a2f2f6578616d706c652e6f72672f66697874757265000080010101017f007f010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABtodHRwczovL2V4YW1wbGUub3JnL2ZpeHR1cmUAAIABAQEBfwB_AQABAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  {
+    "name": "2-page_text-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "page_text",
+        "page": 128,
+        "byte_start": 127,
+        "byte_end": 16384,
+        "text_version": "unknown-文-v1",
+        "page_text_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "metadata": {
+        "modality": "image",
+        "size_bytes": 128,
+        "modified_ns": -1,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": ""
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "535201010180017f8080010e756e6b6e6f776e2de696872d7631ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff02800101010200000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQGAAX-AgAEOdW5rbm93bi3mloctdjH__________________________________________wKAAQEBAgAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw"
+  },
+  {
+    "name": "2-page_text-uri",
+    "selection": {
+      "resource": "file:///fixture/%FF",
+      "locator": {
+        "kind": "page_text",
+        "page": 128,
+        "byte_start": 127,
+        "byte_end": 16384,
+        "text_version": "unknown-文-v1",
+        "page_text_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "metadata": {
+        "modality": "image",
+        "size_bytes": 128,
+        "modified_ns": -1,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": ""
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001366696c653a2f2f2f666978747572652f2546460180017f8080010e756e6b6e6f776e2de696872d7631ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff02800101010200000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABNmaWxlOi8vL2ZpeHR1cmUvJUZGAYABf4CAAQ51bmtub3duLeaWhy12Mf__________________________________________AoABAQECAAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "3-page-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "page",
+        "page": 4294967295
+      },
+      "metadata": {
+        "modality": "audio",
+        "size_bytes": 16383,
+        "modified_ns": -9223372036854775808,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "audio/custom-文"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "5352010102ffffffff0f03ff7f01ffffffffffffffffff010210617564696f2f637573746f6d2de69687000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQL_____DwP_fwH___________8BAhBhdWRpby9jdXN0b20t5paHAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  {
+    "name": "3-page-uri",
+    "selection": {
+      "resource": "https://example.org/fixture",
+      "locator": {
+        "kind": "page",
+        "page": 4294967295
+      },
+      "metadata": {
+        "modality": "audio",
+        "size_bytes": 16383,
+        "modified_ns": -9223372036854775808,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "audio/custom-文"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001b68747470733a2f2f6578616d706c652e6f72672f6669787475726502ffffffff0f03ff7f01ffffffffffffffffff010210617564696f2f637573746f6d2de69687000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABtodHRwczovL2V4YW1wbGUub3JnL2ZpeHR1cmUC_____w8D_38B____________AQIQYXVkaW8vY3VzdG9tLeaWhwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "4-time-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "time",
+        "start_ms": 0,
+        "end_ms": 18446744073709551615
+      },
+      "metadata": {
+        "modality": "video",
+        "size_bytes": 16384,
+        "modified_ns": 9223372036854775807,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "535201010300ffffffffffffffffff010480800101feffffffffffffffff0100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQMA____________AQSAgAEB_v__________AQAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw"
+  },
+  {
+    "name": "4-time-uri",
+    "selection": {
+      "resource": "file:///fixture/%FF",
+      "locator": {
+        "kind": "time",
+        "start_ms": 0,
+        "end_ms": 18446744073709551615
+      },
+      "metadata": {
+        "modality": "video",
+        "size_bytes": 16384,
+        "modified_ns": 9223372036854775807,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001366696c653a2f2f2f666978747572652f2546460300ffffffffffffffffff010480800101feffffffffffffffff0100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABNmaWxlOi8vL2ZpeHR1cmUvJUZGAwD___________8BBICAAQH-__________8BAAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "5-image_region-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "image_region",
+        "x": 0,
+        "y": 127,
+        "width": 128,
+        "height": 4294967295
+      },
+      "metadata": {
+        "modality": "text",
+        "size_bytes": 18446744073709551615,
+        "modified_ns": null,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "application/pdf"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "5352010104007f8001ffffffff0f01ffffffffffffffffff010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQQAf4AB_____w8B____________AQABAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  {
+    "name": "5-image_region-uri",
+    "selection": {
+      "resource": "https://example.org/fixture",
+      "locator": {
+        "kind": "image_region",
+        "x": 0,
+        "y": 127,
+        "width": 128,
+        "height": 4294967295
+      },
+      "metadata": {
+        "modality": "text",
+        "size_bytes": 18446744073709551615,
+        "modified_ns": null,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "application/pdf"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001b68747470733a2f2f6578616d706c652e6f72672f6669787475726504007f8001ffffffff0f01ffffffffffffffffff010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABtodHRwczovL2V4YW1wbGUub3JnL2ZpeHR1cmUEAH-AAf____8PAf___________wEAAQABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "6-text-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "text",
+        "byte_start": 127,
+        "byte_end": 128,
+        "line_start": null,
+        "line_end": null
+      },
+      "metadata": {
+        "modality": "document",
+        "size_bytes": 0,
+        "modified_ns": 0,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": ""
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "53520101007f80010000000001000200000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQB_gAEAAAAAAQACAAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "6-text-uri",
+    "selection": {
+      "resource": "file:///fixture/%FF",
+      "locator": {
+        "kind": "text",
+        "byte_start": 127,
+        "byte_end": 128,
+        "line_start": null,
+        "line_end": null
+      },
+      "metadata": {
+        "modality": "document",
+        "size_bytes": 0,
+        "modified_ns": 0,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": ""
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": true,
+    "hex": "535201001366696c653a2f2f2f666978747572652f254646007f80010000000001000200000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABNmaWxlOi8vL2ZpeHR1cmUvJUZGAH-AAQAAAAABAAIAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  {
+    "name": "7-text-path",
+    "selection": {
+      "resource": "file:///fixture/a",
+      "locator": {
+        "kind": "text",
+        "byte_start": 0,
+        "byte_end": 0,
+        "line_start": 0,
+        "line_end": 0
+      },
+      "metadata": {
+        "modality": "image",
+        "size_bytes": 127,
+        "modified_ns": -1,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "audio/custom-文"
+      }
+    },
+    "path": "/fixture/a",
+    "omit_resource": true,
+    "valid_selection": false,
+    "hex": "5352010100000001000100027f01010210617564696f2f637573746f6d2de69687000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBAQAAAAEAAQACfwEBAhBhdWRpby9jdXN0b20t5paHAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  {
+    "name": "7-text-uri",
+    "selection": {
+      "resource": "https://example.org/fixture",
+      "locator": {
+        "kind": "text",
+        "byte_start": 0,
+        "byte_end": 0,
+        "line_start": 0,
+        "line_end": 0
+      },
+      "metadata": {
+        "modality": "image",
+        "size_bytes": 127,
+        "modified_ns": -1,
+        "content_hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "media_type": "audio/custom-文"
+      }
+    },
+    "path": "/edited/ignored",
+    "omit_resource": false,
+    "valid_selection": false,
+    "hex": "535201001b68747470733a2f2f6578616d706c652e6f72672f6669787475726500000001000100027f01010210617564696f2f637573746f6d2de69687000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ref": "seyk-ref-v1:U1IBABtodHRwczovL2V4YW1wbGUub3JnL2ZpeHR1cmUAAAABAAEAAn8BAQIQYXVkaW8vY3VzdG9tLeaWhwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  }
+]

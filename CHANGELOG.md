@@ -86,6 +86,18 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ### Changed
 
+- **Breaking (JSON protocol 11):** MCP search returns compact hits by default.
+  Pass `detail:"full"` for the previous descriptor and diagnostic fields, plus
+  the new `ref`, audio `time` and query-warning fields. Compact hits carry a
+  self-contained extraction reference; legacy full-hit extraction still works.
+  Index degradation and state remain visible. CLI search, index and extraction
+  payloads keep their fields; only the shared `schema_version` label changes
+  from 10 to 11. Installed v10 CLI extract rejects v11 documents; v11 extract
+  accepts full CLI documents from v2 through v11. MCP documents remain invalid
+  CLI extraction input. Consumers pinning v10 or using `deny_unknown_fields`
+  must update explicitly; full restores fields, not exact-object compatibility.
+  See the [complete compatibility matrix](docs/mcp.md#protocol-compatibility).
+
 - **Breaking:** search defaults to hybrid mode; `--mode semantic` gives the
   0.1.0 behaviour. Hybrid fusion now uses k=5, so a strong meaning match is no
   longer overtaken by a weak hit that only shares a keyword.

@@ -66,7 +66,7 @@ fn typed_input_failures_are_one_static_line() {
     for schema in [
         Value::Null,
         json!(1),
-        json!(11),
+        json!(12),
         json!("10"),
         json!(10.5),
         json!(true),
@@ -115,7 +115,7 @@ fn success_is_identical_and_legacy_errors_stay_prose() {
     std::fs::write(&source, bytes).unwrap();
     let input = dir.path().join("hits.json");
     let mut value = envelope(&source, bytes);
-    for version in 2..=10 {
+    for version in 2..=11 {
         value["schema_version"] = version.into();
         std::fs::write(&input, value.to_string()).unwrap();
         for args in [vec![], vec!["--json"]] {
@@ -129,7 +129,7 @@ fn success_is_identical_and_legacy_errors_stay_prose() {
             assert!(legacy.stderr.is_empty() && typed.stderr.is_empty());
             if typed_args.contains(&"--json") {
                 let extracted: Value = serde_json::from_slice(&typed.stdout).unwrap();
-                assert_eq!(extracted["schema_version"], 10);
+                assert_eq!(extracted["schema_version"], 11);
                 assert_eq!(extracted["text"].as_str().unwrap().as_bytes(), bytes);
             } else {
                 assert_eq!(typed.stdout, bytes);
@@ -145,6 +145,23 @@ fn success_is_identical_and_legacy_errors_stay_prose() {
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("resource changed since search:"));
+}
+
+#[test]
+fn mcp_documents_are_not_cli_search_documents_even_in_full_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("mcp.json");
+    for hit in [
+        json!({"path":"/fixture/a","ref":"seyk-ref-v1:U1IBAQUBAAAA"}),
+        json!({"resource":"file:///fixture/a","locator":{"kind":"whole_resource"},"metadata":{"modality":"text","size_bytes":0,"modified_ns":null,"content_hash":"00".repeat(32)},"matched":[]}),
+    ] {
+        std::fs::write(
+            &input,
+            json!({"schema_version":11,"hits":[hit]}).to_string(),
+        )
+        .unwrap();
+        denied(run(&input, &["--typed-errors"]), 3, "invalid_input");
+    }
 }
 
 #[test]

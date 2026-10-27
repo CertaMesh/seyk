@@ -3116,6 +3116,7 @@ name = "seyk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "assert_cmd",
  "blake3",
  "clap",
