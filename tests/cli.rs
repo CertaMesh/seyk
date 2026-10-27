@@ -407,10 +407,21 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
             .any(|t| t["name"] == "extract")
     );
     assert!(
-        search["inputSchema"]["required"]
+        !search["inputSchema"]["required"]
             .as_array()
             .unwrap()
             .contains(&Value::from("queries"))
+    );
+    assert_eq!(
+        search["inputSchema"]["properties"]["query"]["type"],
+        "string"
+    );
+    assert_eq!(
+        search["inputSchema"]["oneOf"],
+        serde_json::json!([
+            {"required":["queries"], "not":{"required":["query"]}},
+            {"required":["query"], "not":{"required":["queries"]}}
+        ])
     );
 }
 

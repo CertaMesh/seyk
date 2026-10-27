@@ -217,6 +217,8 @@ fn combine_diagnostics(records: impl IntoIterator<Item = IndexDiagnostics>) -> I
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(remote = "Self")]
+#[schemars(transform = search_query_schema)]
 pub struct SearchParams {
     /// Compact by default; full includes extraction descriptors and detailed diagnostics.
     #[serde(default)]
@@ -227,7 +229,8 @@ pub struct SearchParams {
     /// One to eight phrasings of what you are looking for. Describe the passage
     /// ("the protagonist's name and role"), not only the question.
     pub queries: Vec<String>,
-    /// Files or folders to search, absolute or relative to the first server root.
+    /// Files or folders to search, absolute or relative to any server root.
+    /// A root name selects that root. Relative paths must match unambiguously.
     /// Must lie inside the server's roots. Defaults to all roots.
     #[serde(default)]
     pub paths: Vec<String>,
@@ -244,6 +247,41 @@ pub struct SearchParams {
     /// "hybrid" (default: meaning, keywords and file names), "semantic" or
     /// "lexical" (keywords and file names only).
     pub mode: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SearchParams {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(d)?;
+        if let Some(object) = value.as_object_mut()
+            && let Some(query) = object.remove("query")
+        {
+            if object.contains_key("queries") {
+                return Err(serde::de::Error::custom("give query or queries, not both"));
+            }
+            let query = query
+                .as_str()
+                .ok_or_else(|| serde::de::Error::custom("query must be a string"))?;
+            object.insert("queries".into(), serde_json::json!([query]));
+        }
+        Self::deserialize(value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn search_query_schema(schema: &mut schemars::Schema) {
+    let object = schema.as_object_mut().expect("object schema");
+    if let Some(required) = object.get_mut("required").and_then(|v| v.as_array_mut()) {
+        required.retain(|field| field != "queries");
+    }
+    object.get_mut("properties").expect("properties")["query"] = serde_json::json!({
+        "type": "string", "description": "One phrasing; an alternative to queries."
+    });
+    object.insert(
+        "oneOf".into(),
+        serde_json::json!([
+            {"required":["queries"], "not":{"required":["query"]}},
+            {"required":["query"], "not":{"required":["queries"]}}
+        ]),
+    );
 }
 
 pub struct ExtractParams {
@@ -738,7 +776,7 @@ impl SeykServer {
             explicit_paths = p
                 .paths
                 .iter()
-                .map(|s| self.confine(Path::new(s)))
+                .map(|s| self.resolve_search_path(Path::new(s)))
                 .collect::<Result<Vec<_>>>()?;
             &explicit_paths
         };
@@ -817,6 +855,54 @@ impl SeykServer {
         resp.index_progress = self.root_progress();
         resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
+    }
+
+    fn resolve_search_path(&self, path: &Path) -> Result<PathBuf> {
+        let path = seyk::expand_tilde(path);
+        if path.is_absolute() {
+            return self.confine(&path);
+        }
+        let mut matches = Vec::new();
+        let mut failures = Vec::new();
+        for root in self.roots.iter() {
+            let root = root.uri_path();
+            let mut candidates = vec![root.join(&path)];
+            if root.file_name().is_some_and(|name| path == Path::new(name)) {
+                candidates.push(root.to_path_buf());
+            }
+            for candidate in candidates {
+                match self.confine(&candidate) {
+                    Ok(resolved) => {
+                        if !matches.contains(&resolved) {
+                            matches.push(resolved);
+                        }
+                    }
+                    Err(error) => failures.push(format!("{}: {error}", candidate.display())),
+                }
+            }
+        }
+        match matches.len() {
+            1 => Ok(matches.remove(0)),
+            0 => Err(anyhow!(
+                "{} has no allowed match in server roots ({}): {}",
+                path.display(),
+                self.logical_paths()
+                    .iter()
+                    .map(|r| r.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                failures.join("; ")
+            )),
+            _ => Err(anyhow!(
+                "AMBIGUITY: {} matches multiple candidates ({}); use an absolute path",
+                path.display(),
+                matches
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
 
     fn confine(&self, path: &Path) -> Result<PathBuf> {
@@ -1122,7 +1208,7 @@ impl SeykServer {
         description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
         and audio once its models are installed) by meaning, keywords and file names. Returns \
         ranked passages as path + location + preview. Read the files at those locations, or call \
-        `extract`, before answering. lines reflect the indexed version; call extract for verified text. Compact hits are the default; detail: full restores descriptors and diagnostics. Pass several phrasings of the same need in `queries`."
+        `extract`, before answering. lines reflect the indexed version; call extract for verified text. Compact hits are the default; detail: full restores descriptors and diagnostics. Pass one phrasing in `query`, or several phrasings of the same need in `queries` (never both)."
     )]
     async fn search(
         &self,
@@ -3177,6 +3263,154 @@ mod tests {
             .run_search(params(&[root.join("id_rsa.txt")]))
             .unwrap_err();
         assert!(error.to_string().contains("refusing secret file"));
+    }
+
+    #[test]
+    fn relative_search_paths_resolve_every_root_and_report_ambiguity() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let a = base.join("notes");
+        let b = base.join("repo");
+        for root in [&a, &b] {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("shared.txt"), "quartz").unwrap();
+        }
+        std::fs::write(b.join("unique.txt"), "quartz").unwrap();
+        let (server, _) = ownership_server(vec![a.clone(), b.clone()], vec![]);
+        assert_eq!(
+            server.resolve_search_path(Path::new("unique.txt")).unwrap(),
+            b.join("unique.txt")
+        );
+        assert_eq!(server.resolve_search_path(Path::new("notes")).unwrap(), a);
+        assert_eq!(server.resolve_search_path(Path::new("repo")).unwrap(), b);
+        let error = server
+            .resolve_search_path(Path::new("shared.txt"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("AMBIGUITY"), "{error}");
+        for root in [&a, &b] {
+            assert!(error.contains(root.join("shared.txt").to_str().unwrap()));
+        }
+        let error = server
+            .resolve_search_path(Path::new("missing"))
+            .unwrap_err()
+            .to_string();
+        for root in [&a, &b] {
+            assert!(error.contains(root.to_str().unwrap()));
+        }
+        std::fs::write(base.join("outside.txt"), "private").unwrap();
+        assert!(
+            server
+                .resolve_search_path(Path::new("../outside.txt"))
+                .is_err()
+        );
+        assert!(server.resolve_search_path(Path::new("../../")).is_err());
+        let mut request = params(&[]);
+        request.paths = vec!["unique.txt".into()];
+        assert_eq!(server.run_search(request).unwrap().hits.len(), 1);
+        let request: SearchParams = serde_json::from_value(serde_json::json!({
+            "query": "quartz", "paths": ["unique.txt"]
+        }))
+        .unwrap();
+        assert_eq!(server.run_search(request).unwrap().hits.len(), 1);
+        std::fs::create_dir(a.join("notes")).unwrap();
+        let error = server
+            .resolve_search_path(Path::new("notes"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("AMBIGUITY"));
+        assert!(error.contains(a.to_str().unwrap()));
+        assert!(error.contains(a.join("notes").to_str().unwrap()));
+    }
+
+    #[test]
+    fn relative_search_paths_do_not_choose_between_roots_with_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let roots = [base.join("a/notes"), base.join("b/notes")];
+        for root in &roots {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        let (server, _) = ownership_server(roots.to_vec(), vec![]);
+        let error = server
+            .resolve_search_path(Path::new("notes"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("AMBIGUITY"));
+        for root in &roots {
+            assert!(error.contains(root.to_str().unwrap()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_search_paths_keep_symlink_and_local_content_policy() {
+        let dir = tempfile::Builder::new()
+            .prefix("mcp-paths-")
+            .tempdir()
+            .unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let root = base.join("notes");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("safe.txt"), "quartz").unwrap();
+        std::fs::write(base.join("outside.txt"), "private").unwrap();
+        std::os::unix::fs::symlink(base.join("outside.txt"), root.join("escape")).unwrap();
+        std::os::unix::fs::symlink(root.join("safe.txt"), root.join("alias")).unwrap();
+        let (server, _) = ownership_server(vec![root.clone()], vec![]);
+        assert!(server.resolve_search_path(Path::new("escape")).is_err());
+        assert!(server.resolve_search_path(Path::new("alias")).is_ok());
+        let hidden = root.join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("private.txt"), "private").unwrap();
+        assert!(
+            seyk::local_content::LocalContentProvider::new(std::slice::from_ref(&hidden)).is_err()
+        );
+        let provider = Arc::new(
+            seyk::local_content::LocalContentProvider::new(std::slice::from_ref(&root)).unwrap(),
+        );
+        let server =
+            local_content_server(provider, Hub::new(Box::new(fake_engine), false)).unwrap();
+        assert!(
+            server
+                .resolve_search_path(Path::new(".hidden/private.txt"))
+                .is_err()
+        );
+        assert!(
+            server
+                .resolve_search_path(Path::new("../outside.txt"))
+                .is_err()
+        );
+        assert!(server.resolve_search_path(Path::new("alias")).is_err());
+        assert!(server.resolve_search_path(Path::new("escape")).is_err());
+        assert_eq!(
+            server.resolve_search_path(Path::new("notes")).unwrap(),
+            root
+        );
+    }
+
+    #[test]
+    fn search_query_alias_and_schema_are_exclusive() {
+        use serde_json::json;
+        let params: SearchParams = serde_json::from_value(json!({"query":"quartz"})).unwrap();
+        assert_eq!(params.queries, ["quartz"]);
+        for value in [
+            json!({}),
+            json!({"query":null}),
+            json!({"query":[]}),
+            json!({"query":"quartz", "queries":["quartz"]}),
+            json!({"query":null, "queries":["quartz"]}),
+        ] {
+            assert!(serde_json::from_value::<SearchParams>(value).is_err());
+        }
+        let schema = serde_json::to_value(schemars::schema_for!(SearchParams)).unwrap();
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+        assert_eq!(schema["properties"]["query"]["type"], "string");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("queries"))
+        );
     }
 
     #[cfg(unix)]
