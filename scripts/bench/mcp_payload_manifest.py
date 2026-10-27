@@ -71,7 +71,7 @@ def synthetic():
                                     'size_bytes': 4096, 'modified_ns': 1720000000000000000, 'content_hash': '22' * 32},
                        'path': path, 'heading': 'Invented fixture', 'score': .8,
                        'preview': 'Public invented evidence. ' * 4, 'matched': ['meaning'],
-                       'match': {'kind': 'semantic'}, 'matched_query': 'invented fixture'}
+                       'match': {'semantic_rank': 1, 'keyword_rank': None, 'filename_rank': None, 'matched_terms': []}, 'matched_query': 'invented fixture'}
                 if kind == 'text': hit['lines'] = '1-4'
                 if kind in ['page', 'page_text']: hit['page'] = 1
                 hits.append(hit)

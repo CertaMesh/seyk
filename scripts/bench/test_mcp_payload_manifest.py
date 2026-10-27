@@ -50,7 +50,10 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(len(fixture["calls"]), 13)
         for call in fixture["calls"]:
             self.assertEqual(call["raw_sha256"], manifest.digest(call["raw"].encode()))
-            self.assertEqual(len(json.loads(call["raw"])["hits"]), 10)
+            hits = json.loads(call["raw"])["hits"]
+            self.assertEqual(len(hits), 10)
+            for hit in hits:
+                self.assertEqual(set(hit["match"]), {"semantic_rank", "keyword_rank", "filename_rank", "matched_terms"})
 
 
 if __name__ == "__main__":

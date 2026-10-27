@@ -86,8 +86,8 @@ omitted URIs. Other locator costs below come from public synthetic fixtures.
 |---|---:|---:|---:|---:|
 | All successful recorded calls | 59 | 463,019 | 232,713 | 1.990 |
 | Recorded ten-hit calls | 30 | 289,747 | 147,529 | 1.964 |
-| Synthetic ten-hit text, omitted URI | 1 | 6,329 | 3,406 | 1.858 |
-| Synthetic ten-hit PageText, omitted URI | 1 | 7,519 | 3,976 | 1.891 |
+| Synthetic ten-hit text, omitted URI | 1 | 6,929 | 3,406 | 2.034 |
+| Synthetic ten-hit PageText, omitted URI | 1 | 8,119 | 3,976 | 2.042 |
 
 The 34 successful Claude calls reproduce the historical midpoint median of
 9,535 as-recorded characters. This utility uses nearest-rank percentiles, so
