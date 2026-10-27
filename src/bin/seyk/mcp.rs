@@ -1038,9 +1038,25 @@ fn to_response(r: SearchResults) -> Response {
     }
 }
 
+// rmcp 3.5's MCP 2026-07-28 ToolAnnotations serialize these snake_case
+// macro fields as readOnlyHint, destructiveHint, idempotentHint and openWorldHint.
+// index_status only observes state: it never initializes the engine or syncs.
+// search can sync inline, replacing/pruning derived cache entries. extract can
+// lazily open the cache and start its scrubber through Hub::engine. Both are
+// write-capable but non-destructive: Seyk only adds/prunes its own derived,
+// rebuildable cache and never modifies or deletes user files. None contacts
+// external services. Repetition converges for unchanged sources, model and
+// configuration (idempotent does not mean immutable
+// results while files change or background indexing progresses).
 #[tool_router]
 impl SeykServer {
     #[tool(
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Current indexing state, model availability diagnostics, and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
@@ -1051,6 +1067,12 @@ impl SeykServer {
     }
 
     #[tool(
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Extract readable evidence from one selected search hit. Pass the entire hit object. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
     )]
     async fn extract(
@@ -1070,6 +1092,12 @@ impl SeykServer {
     }
 
     #[tool(
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
         and audio once its models are installed) by meaning, keywords and file names. Returns \
         ranked passages as path + location + preview. Read the files at those locations, or call \
