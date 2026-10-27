@@ -12,6 +12,20 @@ over stdio. Agents get three tools:
 
 The agent reads the evidence and writes the answer. Seyk never generates text.
 
+## Search inputs
+
+Pass `queries` (an array of one to eight phrasings), or `query` (one string).
+Exactly one form is required; supplying both is an error.
+
+Optional `paths` default to all configured roots. Absolute paths must remain
+inside those roots. Relative paths are tried against every root; a root's own
+final name also selects that root. Exactly one allowed match is required.
+No match reports the roots; multiple matches report `AMBIGUITY` and the
+candidate paths. With several roots, `.` is ambiguous; omit `paths` to search
+all roots, or use an absolute path to select one. Root-name shortcuts use exact
+case and Unicode spelling. Existing confinement,
+secret-file and local-content restrictions still apply, including to symlinks.
+
 ## Search results and extraction
 
 JSON protocol 11 returns compact hits by default. `detail` accepts `"slim"`
@@ -66,8 +80,9 @@ There is no new model-readiness flag in compact results.
 
 ### Extract selection
 
-The advertised input schema uses `oneOf`: exactly one top-level `hit`, or a
-`ref` with optional `path`. Unknown top-level fields, null selections and
+The advertised input schema is a flat object with optional `hit`, `ref` and
+`path`. The server requires exactly one top-level `hit`, or a `ref` with optional
+`path`. Unknown top-level fields, null selections and
 combined forms are invalid. Nested hits follow this table:
 
 | Descriptor fields | `ref` | Result |
@@ -152,6 +167,9 @@ terminal and use that absolute binary path in place of `seyk` after `--` below.
 For example, a Cargo install normally uses `/Users/you/.cargo/bin/seyk` on macOS.
 Replace all example paths with your own.
 
+If you downloaded only text weights, add `--text-only` to `seyk mcp`
+(for example, `seyk mcp --text-only /absolute/path/to/notes`).
+
 ### Claude Code
 
 ```bash
@@ -225,7 +243,10 @@ The agent's provider can still receive the returned evidence, as described under
 - **One model for every session.** `seyk mcp` is a small relay (about 9 MB).
   The first one starts a shared background daemon that loads the model once,
   owns the cache and watches every folder any session asked for. Five agent
-  sessions cost one model's memory, not five. The daemon exits after 15 minutes
+  sessions share the query model. Indexing needs more
+  memory: the full benchmark corpus peaked at about 2.8 GB on 2026-10-27 after
+  the indexing memory fix in #95. This measurement is not a memory bound for
+  other corpora. The daemon exits after 15 minutes
   without sessions, and the next `seyk mcp` starts it again.
 - **The model stays loaded.** After the first call, a search takes well under a
   second on a warm cache.
