@@ -129,6 +129,7 @@ fn batching_does_not_change_vectors() {
 }
 
 /// Check budget-induced shape changes against the existing same-model batching tolerance.
+/// This `#[ignore]` test needs real weights and is not run in CI.
 #[test]
 #[ignore = "needs EmbeddingGemma 2 weights and memory-measurement approval"]
 fn memory_budget_batching_parity() {

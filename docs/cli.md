@@ -88,6 +88,9 @@ select the defaults:
 seyk index ./corpus --text-only --batch-token-budget 5120 --batch-attention-budget 4194304
 ```
 
+A running daemon keeps its old batching until restarted with the new binary.
+Clients with a different build identity use a separate daemon endpoint.
+
 `--cpu-allocator default` preserves ONNX Runtime's allocator settings.
 `no-arena` disables the CPU arena for text sessions. `arena-shrink` keeps the
 arena and requests shrinkage after each text inference call. Shrinkage can

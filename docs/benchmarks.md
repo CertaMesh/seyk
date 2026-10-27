@@ -219,6 +219,9 @@ of 5120 padded tokens and 4194304 attention cells. The control used row-count-on
 batching. Both kept the 16-row cap. The model revision was
 `onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
 
+These measurements selected the same budgets through flags at `37ec971`, and
+the final implementation enables those defaults without changing the planner.
+
 Each configuration indexed a fresh cache and ran every query in hybrid, semantic,
 and lexical modes at depth 200. SciFact contained 5,183 documents, 11,145 embedding
 inputs, and 300 queries. NFCorpus contained 3,633 documents, 7,960 embedding inputs,
