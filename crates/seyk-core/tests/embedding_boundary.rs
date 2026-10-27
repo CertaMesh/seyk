@@ -116,3 +116,78 @@ fn embedding_errors_keep_existing_search_variants() {
         C::UnsupportedTask { .. }
     ));
 }
+
+#[test]
+fn dense_fixture_restart_reuses_all_cached_document_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let database = cache_dir.path().join("index.sqlite");
+    // Invented dense numeric text exercises many character-sized segments.
+    let dense = (0..8000).map(|i| format!("{i},")).collect::<String>();
+    std::fs::write(root.path().join("dense.txt"), dense).unwrap();
+    let embedder = Arc::new(Recording {
+        inner: common::FakeEmbedder::new(Dimension::D128, "dense-restart"),
+        tasks: Mutex::new(vec![]),
+    });
+    let build = || {
+        SearchEngine::builder()
+            .shared_embedder(embedder.clone())
+            .batch_size(16)
+            .cache(seyk_core::SqliteCache::open(&database).unwrap())
+            .build()
+            .unwrap()
+    };
+    let first = build();
+    let report = first.index().paths([root.path()]).execute().unwrap();
+    assert_eq!(report.sync.resources_discovered, 1);
+    assert!(report.sync.segments_embedded > 16);
+    let recorded = embedder.tasks.lock().unwrap().len();
+    assert!(recorded > 16);
+    drop(first);
+    let restarted = build();
+    let report = restarted.index().paths([root.path()]).execute().unwrap();
+    assert_eq!(report.sync.segments_embedded, 0);
+    assert_eq!(embedder.tasks.lock().unwrap().len(), recorded);
+}
+
+#[test]
+fn cached_index_diagnostic_child() {
+    if std::env::var_os("SEYK_INDEX_DIAGNOSTIC_CHILD").is_none() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("quartz.txt"), "quartz orchard notes").unwrap();
+    let semantic = SearchEngine::builder()
+        .embedder(common::FakeEmbedder::new(Dimension::D128, "diagnostics"))
+        .build()
+        .unwrap();
+    semantic.index().paths([root.path()]).execute().unwrap();
+    let cached = semantic.index().paths([root.path()]).execute().unwrap();
+    assert_eq!(cached.sync.segments_embedded, 0);
+    let lexical = SearchEngine::lexical().unwrap();
+    lexical.index().paths([root.path()]).execute().unwrap();
+    lexical.index().paths([root.path()]).execute().unwrap();
+}
+
+#[test]
+fn cached_and_lexical_passes_report_zero_inference_work() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "cached_index_diagnostic_child", "--nocapture"])
+        .env("SEYK_INDEX_DIAGNOSTIC_CHILD", "1")
+        .env("SEYK_MEMORY_DIAGNOSTICS", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let work: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.contains("event=index_work "))
+        .collect();
+    assert_eq!(work.len(), 4);
+    assert!(work[0].contains("missing_inputs=1 "));
+    assert!(
+        work[1..]
+            .iter()
+            .all(|line| line.contains("missing_inputs=0 "))
+    );
+}

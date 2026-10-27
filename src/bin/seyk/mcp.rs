@@ -392,6 +392,7 @@ impl Hub {
         if let Some(e) = slot.as_ref() {
             return Ok(e.clone());
         }
+        let _phase = seyk_embed::diagnostics::Phase::new("hub_engine_load");
         let e = Arc::new((self.factory)()?);
         e.start_cache_scrubber();
         *slot = Some(e.clone());
@@ -716,6 +717,7 @@ impl SeykServer {
     }
 
     fn run_search(&self, p: SearchParams) -> Result<Response> {
+        let _phase = seyk_embed::diagnostics::Phase::new("query");
         self.validate_roots()?;
         let queries: Vec<String> = p
             .queries
@@ -1057,9 +1059,25 @@ fn to_response(r: SearchResults) -> Response {
     }
 }
 
+// rmcp 3.5's MCP 2026-07-28 ToolAnnotations serialize these snake_case
+// macro fields as readOnlyHint, destructiveHint, idempotentHint and openWorldHint.
+// index_status only observes state: it never initializes the engine or syncs.
+// search can sync inline, replacing/pruning derived cache entries. extract can
+// lazily open the cache and start its scrubber through Hub::engine. Both are
+// write-capable but non-destructive: Seyk only adds/prunes its own derived,
+// rebuildable cache and never modifies or deletes user files. None contacts
+// external services. Repetition converges for unchanged sources, model and
+// configuration (idempotent does not mean immutable
+// results while files change or background indexing progresses).
 #[tool_router]
 impl SeykServer {
     #[tool(
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Current indexing state, model availability diagnostics, and per-root resource counts with an observed-throughput ETA. Counts describe the current or last completed pass; null progress is unavailable."
     )]
     async fn index_status(&self) -> Result<CallToolResult, McpError> {
@@ -1070,6 +1088,12 @@ impl SeykServer {
     }
 
     #[tool(
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Extract readable evidence from a selected hit. Pass {hit: hit}, or {ref: hit.ref, path: hit.path}. Examples: {ref: hit.ref, path: hit.path} works; {ref: hit.ref} fails if the URI is omitted. For an explicit-URI ref, {ref: explicitRef, path: /edited/ignored} ignores that display path. Audio returns a machine transcript that may contain errors, with provenance, and is limited to 30 seconds. Never called by search."
     )]
     async fn extract(
@@ -1089,6 +1113,12 @@ impl SeykServer {
     }
 
     #[tool(
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
         and audio once its models are installed) by meaning, keywords and file names. Returns \
         ranked passages as path + location + preview. Read the files at those locations, or call \
@@ -2026,20 +2056,28 @@ mod tests {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let release_rx = Mutex::new(release_rx);
+        let loads = Arc::new(AtomicUsize::new(0));
+        let factory_loads = loads.clone();
+        let documents = Arc::new(AtomicUsize::new(0));
+        let factory_documents = documents.clone();
         let hub = Hub::new(
             Box::new(move || {
+                factory_loads.fetch_add(1, Ordering::SeqCst);
                 entered_tx.send(()).unwrap();
                 release_rx
                     .lock()
                     .unwrap()
                     .recv_timeout(Duration::from_secs(10))
                     .unwrap();
-                fake_engine()
+                counted_engine(factory_documents.clone())
             }),
             true,
         );
-        let server = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        let server = SeykServer::new(vec![dir.path().into()], hub.clone()).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let sibling = SeykServer::new(vec![dir.path().into()], hub).unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(documents.load(Ordering::SeqCst), 0);
         let started = Instant::now();
         let response = search(&server, "quartz");
         release_tx.send(()).unwrap();
@@ -2054,6 +2092,9 @@ mod tests {
         assert_eq!(response.segments_embedded, 0);
         wait_for(&server, |s| matches!(s, IndexStatus::Ready));
         assert!(search(&server, "quartz").degraded.is_none());
+        wait_for(&sibling, |s| matches!(s, IndexStatus::Ready));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(documents.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]

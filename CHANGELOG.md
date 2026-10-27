@@ -13,6 +13,9 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ### Added
 
+- Opt-in CPU allocator policies (`no-arena` and `arena-shrink`) and content-free
+  memory phase diagnostics.
+  ([#95](https://github.com/CertaMesh/seyk/pull/95))
 - Hybrid search: one query now combines meaning, keywords (BM25) and file names,
   so both a question and `garden.md` find the right file. Each hit shows which
   signals matched, as CLI tags and the `matched` MCP field.
@@ -98,6 +101,13 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
   must update explicitly; full restores fields, not exact-object compatibility.
   See the [complete compatibility matrix](docs/mcp.md#protocol-compatibility).
 
+- Text embedding calls now default to budgets of 5120 padded tokens and 4194304
+  attention cells, with a 16-row cap. Full SciFact and NFCorpus measurements had
+  about 2.8 GB peak physical footprint versus about 5.7 GB with row-count-only
+  batching. This is not a universal 2 GB cap. Five paired prose runs had a 5.2%
+  higher median time, with overlapping ranges. See the [measurement conditions
+  and results](docs/benchmarks.md#text-batch-memory-budgets).
+  ([#95](https://github.com/CertaMesh/seyk/pull/95))
 - **Breaking:** search defaults to hybrid mode; `--mode semantic` gives the
   0.1.0 behaviour. Hybrid fusion now uses k=5, so a strong meaning match is no
   longer overtaken by a weak hit that only shares a keyword.

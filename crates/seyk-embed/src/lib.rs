@@ -1,4 +1,5 @@
 //! Lightweight task-aware embedding interfaces, independent of search and runtimes.
+pub mod diagnostics;
 mod embedder;
 mod embedding;
 mod error;

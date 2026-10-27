@@ -368,6 +368,30 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
             .iter()
             .any(|tool| tool["name"] == "index_status")
     );
+    // Assert the tools/list wire contract, including camelCase field names.
+    // Search and extraction may maintain the derived cache; status only reads.
+    for (name, read_only, destructive) in [
+        ("search", false, false),
+        ("extract", false, false),
+        ("index_status", true, false),
+    ] {
+        let tool = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        assert_eq!(
+            tool["annotations"],
+            serde_json::json!({
+                "readOnlyHint": read_only,
+                "destructiveHint": destructive,
+                "idempotentHint": true,
+                "openWorldHint": false,
+            }),
+            "{name} annotations in tools/list"
+        );
+    }
     let search = tools
         .as_array()
         .unwrap()

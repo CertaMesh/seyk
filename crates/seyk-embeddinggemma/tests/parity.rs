@@ -9,6 +9,8 @@ use serde::Deserialize;
 use seyk_embed::{Dimension, Embedder};
 use seyk_embeddinggemma::{GemmaEmbedder, Precision};
 
+const MIN_BATCHING_COSINE: f32 = 0.9999;
+
 #[derive(Deserialize)]
 struct Item {
     text: String,
@@ -119,9 +121,119 @@ fn batching_does_not_change_vectors() {
     for (d, b) in r.docs.iter().zip(&batched) {
         let single = e.embed_text_document(d.title.as_deref(), &d.text).unwrap();
         assert!(
-            single.cosine(b) > 0.9999,
+            single.cosine(b) > MIN_BATCHING_COSINE,
             "padding changed the vector for {:?}",
             d.text
         );
     }
+}
+
+/// Check budget-induced shape changes against the existing same-model batching tolerance.
+/// This `#[ignore]` test needs real weights and is not run in CI.
+#[test]
+#[ignore = "needs EmbeddingGemma 2 weights and memory-measurement approval"]
+fn memory_budget_batching_parity() {
+    use seyk_embeddinggemma::{BatchBudget, CpuAllocator};
+    let r = reference();
+    let long = "the ".repeat(1100);
+    let medium = "the ".repeat(700);
+    let mut inputs: Vec<_> = r
+        .docs
+        .iter()
+        .map(|d| seyk_embed::ResourceInput::Text {
+            title: d.title.as_deref(),
+            text: &d.text,
+        })
+        .collect();
+    inputs.extend([
+        seyk_embed::ResourceInput::Text {
+            title: None,
+            text: &long,
+        },
+        seyk_embed::ResourceInput::Text {
+            title: None,
+            text: &medium,
+        },
+    ]);
+    let mut failures = Vec::new();
+    for dimension in Dimension::ALL {
+        let mut base_config = model_support::config(dimension);
+        base_config.threads = Some(1);
+        base_config.batch_budget = None;
+        let baseline = GemmaEmbedder::load(base_config.clone()).unwrap();
+        let max_length = inputs
+            .iter()
+            .map(|input| match input {
+                seyk_embed::ResourceInput::Text { title, text } => baseline
+                    .text_token_ids(&GemmaEmbedder::document_input(*title, text))
+                    .unwrap()
+                    .len(),
+                _ => unreachable!(),
+            })
+            .max()
+            .unwrap();
+        assert!(
+            inputs.len().min(base_config.batch_size) * max_length * max_length
+                > BatchBudget::DEFAULT.attention_cells,
+            "fixture must force subdivision under the default budget"
+        );
+        let expected_docs = baseline.embed_resources(&inputs).unwrap();
+        let expected_queries: Vec<_> = r
+            .queries
+            .iter()
+            .map(|q| baseline.embed_query(&q.text).unwrap())
+            .collect();
+        drop(baseline);
+        for (sessions, policy) in [
+            (1, CpuAllocator::Default),
+            (1, CpuAllocator::NoArena),
+            (1, CpuAllocator::ArenaShrink),
+            (2, CpuAllocator::ArenaShrink),
+        ] {
+            let mut config = base_config.clone();
+            config.sessions = sessions;
+            config.batch_budget = Some(BatchBudget::DEFAULT);
+            config.cpu_allocator = policy;
+            let candidate = GemmaEmbedder::load(config).unwrap();
+            let actual_docs = candidate.embed_resources(&inputs).unwrap();
+            let actual_queries: Vec<_> = r
+                .queries
+                .iter()
+                .map(|q| candidate.embed_query(&q.text).unwrap())
+                .collect();
+            assert_eq!(actual_docs.len(), expected_docs.len());
+            assert_eq!(actual_queries.len(), expected_queries.len());
+            let mut max_abs_delta = 0.0_f64;
+            let mut min_cosine = f32::INFINITY;
+            let mut outside_tolerance = 0;
+            for (a, b) in expected_docs
+                .iter()
+                .chain(&expected_queries)
+                .zip(actual_docs.iter().chain(&actual_queries))
+            {
+                let cosine = a.cosine(b);
+                if cosine.is_nan() || cosine < min_cosine {
+                    min_cosine = cosine;
+                }
+                if cosine.is_nan() || cosine <= MIN_BATCHING_COSINE {
+                    outside_tolerance += 1;
+                }
+                for (&x, &y) in a.as_slice().iter().zip(b.as_slice()) {
+                    max_abs_delta = max_abs_delta.max((f64::from(x) - f64::from(y)).abs());
+                }
+            }
+            if outside_tolerance > 0 {
+                failures.push(format!(
+                    "dimension={} sessions={sessions} allocator={} outside_tolerance={outside_tolerance} max_abs_delta={max_abs_delta:e} min_cosine={min_cosine:.9}",
+                    dimension.get(),
+                    policy.name()
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "memory budget exceeded batching tolerance (cosine > {MIN_BATCHING_COSINE}):\n{}",
+        failures.join("\n")
+    );
 }
