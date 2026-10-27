@@ -92,10 +92,7 @@ pub fn selection_schema() -> Value {
     let full_properties = json!({"resource":{"type":"string"},"locator":{"type":"object"},"metadata":{"type":"object"},"ref":reference,"path":path});
     let full = json!({"type":"object","required":["resource","locator","metadata"],"properties":full_properties});
     let slim = json!({"type":"object","required":["ref"],"properties":{"ref":reference,"path":path},"not":{"anyOf":[{"required":["resource"]},{"required":["locator"]},{"required":["metadata"]}]}});
-    json!({"type":"object","description":"An omitted-URI ref requires path. A ref alone then fails. An explicit-URI ref ignores edited display path.","examples":[{"ref":"seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/fixture/a"},{"ref":"seyk-ref-v1:U1IBABFmaWxlOi8vL2ZpeHR1cmUvYQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/edited/ignored"}],"oneOf":[
-        {"required":["hit"],"properties":{"hit":{"oneOf":[full,slim]}},"additionalProperties":false},
-        {"required":["ref"],"properties":{"ref":reference,"path":path},"additionalProperties":false}
-    ]})
+    json!({"type":"object","description":"Pass hit, or ref with optional path, never both forms. An omitted-URI ref requires path. An explicit-URI ref ignores edited display path.","examples":[{"ref":"seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/fixture/a"},{"ref":"seyk-ref-v1:U1IBABFmaWxlOi8vL2ZpeHR1cmUvYQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/edited/ignored"}],"properties":{"hit":{"oneOf":[full,slim]},"ref":reference,"path":path},"additionalProperties":false})
 }
 
 /// Input is the current full response. Errors never silently remove a hit.

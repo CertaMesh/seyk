@@ -273,15 +273,10 @@ fn search_query_schema(schema: &mut schemars::Schema) {
         required.retain(|field| field != "queries");
     }
     object.get_mut("properties").expect("properties")["query"] = serde_json::json!({
-        "type": "string", "description": "One phrasing; an alternative to queries."
+        "type": "string", "description": "One phrasing; use query or queries, never both."
     });
-    object.insert(
-        "oneOf".into(),
-        serde_json::json!([
-            {"required":["queries"], "not":{"required":["query"]}},
-            {"required":["query"], "not":{"required":["queries"]}}
-        ]),
-    );
+    object.get_mut("properties").expect("properties")["queries"]["description"] =
+        serde_json::json!("One to eight phrasings; use query or queries, never both.");
 }
 
 pub struct ExtractParams {
@@ -1033,42 +1028,51 @@ fn confine(path: &Path, roots: &[PolicyRoot]) -> Result<PathBuf> {
     } else {
         roots[0].uri_path().join(path)
     };
-    seyk::discovery::ensure_allowed_path(&joined)?;
-    let real = joined
-        .canonicalize()
-        .with_context(|| format!("{} does not exist", joined.display()))?;
-    let mut logical = None;
-    for root in roots {
-        let root = root
-            .current()
-            .with_context(|| format!("root {}", root.uri_path().display()))?;
-        if let Some(candidate) = root.logical_child(&real) {
-            // Check every applicable logical root, including for absolute cached IDs.
-            seyk::discovery::ensure_allowed_path(&candidate)?;
-            let supplied = if joined.starts_with(root.uri_path()) {
-                joined.clone()
-            } else if let Ok(relative) = joined.strip_prefix(root.authorize_path()) {
-                root.uri_path().join(relative)
-            } else {
-                candidate
-            };
-            // Keep directory symlinks supplied below a broader server root too.
-            let candidate = seyk::discovery::absolute_logical_path(&supplied)?;
-            logical.get_or_insert(candidate);
-        }
-    }
-    if let Some(logical) = logical {
-        Ok(logical)
-    } else {
-        Err(anyhow!(
-            "{} is outside the server roots ({})",
-            real.display(),
+    let unavailable = || {
+        anyhow!(
+            "path is unavailable or outside the server roots ({})",
             roots
                 .iter()
                 .map(|r| r.uri_path().display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        ))
+        )
+    };
+    let policy = seyk::discovery::ensure_allowed_path(&joined);
+    let real = joined.canonicalize().map_err(|_| unavailable())?;
+    let mut applicable = Vec::new();
+    for root in roots {
+        let root = root
+            .current()
+            .with_context(|| format!("root {}", root.uri_path().display()))?;
+        if let Some(candidate) = root.logical_child(&real) {
+            applicable.push((root, candidate));
+        }
+    }
+    if applicable.is_empty() {
+        return Err(unavailable());
+    }
+    // Reveal policy errors only after establishing that the target is in scope.
+    policy?;
+    let mut logical = None;
+    for (root, candidate) in applicable {
+        // Check every applicable logical root, including for absolute cached IDs.
+        seyk::discovery::ensure_allowed_path(&candidate)?;
+        let supplied = if joined.starts_with(root.uri_path()) {
+            joined.clone()
+        } else if let Ok(relative) = joined.strip_prefix(root.authorize_path()) {
+            root.uri_path().join(relative)
+        } else {
+            candidate
+        };
+        // Keep directory symlinks supplied below a broader server root too.
+        let candidate = seyk::discovery::absolute_logical_path(&supplied)?;
+        logical.get_or_insert(candidate);
+    }
+    if let Some(logical) = logical {
+        Ok(logical)
+    } else {
+        Err(unavailable())
     }
 }
 
@@ -1816,7 +1820,7 @@ mod tests {
         std::fs::write(&file, "changed source").unwrap();
         assert!(server.run_extract(ExtractParams { hit: slim }).is_err());
         let schema = serde_json::to_value(schemars::schema_for!(ExtractParams)).unwrap();
-        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+        assert!(schema.get("oneOf").is_none());
     }
 
     #[test]
@@ -3342,6 +3346,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn relative_root_names_preserve_case_and_unicode_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let names = ["Nötés", "REPO"];
+        let roots: Vec<_> = names.iter().map(|name| base.join(name)).collect();
+        for root in &roots {
+            std::fs::create_dir(root).unwrap();
+        }
+        let (server, _) = ownership_server(roots.clone(), vec![]);
+        for (name, root) in names.into_iter().zip(roots) {
+            assert_eq!(server.resolve_search_path(Path::new(name)).unwrap(), root);
+        }
+        assert!(server.resolve_search_path(Path::new("nötés")).is_err());
+        assert!(server.resolve_search_path(Path::new("repo")).is_err());
+        let error = server
+            .resolve_search_path(Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("AMBIGUITY"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outside_resolution_errors_hide_canonical_targets_and_existence() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let root = base.join("allowed");
+        std::fs::create_dir(&root).unwrap();
+        let outside = base.join("outside-target.txt");
+        std::fs::write(&outside, "private").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("alias")).unwrap();
+        let (server, _) = ownership_server(vec![root], vec![]);
+        let direct_existing = format!("{:#}", server.confine(&outside).unwrap_err());
+        let alias_existing = format!(
+            "{:#}",
+            server.resolve_search_path(Path::new("alias")).unwrap_err()
+        );
+        assert!(!direct_existing.contains(outside.to_str().unwrap()));
+        assert!(!alias_existing.contains(outside.to_str().unwrap()));
+        let not_directory = server
+            .confine(&outside.join("child"))
+            .unwrap_err()
+            .to_string();
+        std::fs::remove_file(&outside).unwrap();
+        assert_eq!(
+            direct_existing,
+            format!("{:#}", server.confine(&outside).unwrap_err())
+        );
+        assert_eq!(
+            alias_existing,
+            format!(
+                "{:#}",
+                server.resolve_search_path(Path::new("alias")).unwrap_err()
+            )
+        );
+        assert_eq!(direct_existing, not_directory);
+        let secret = base.join("id_rsa");
+        std::fs::write(&secret, "private").unwrap();
+        let existing_secret = format!("{:#}", server.confine(&secret).unwrap_err());
+        std::fs::remove_file(&secret).unwrap();
+        assert_eq!(
+            existing_secret,
+            format!("{:#}", server.confine(&secret).unwrap_err())
+        );
+        assert_eq!(existing_secret, direct_existing);
+    }
+
     #[cfg(unix)]
     #[test]
     fn relative_search_paths_keep_symlink_and_local_content_policy() {
@@ -3403,7 +3475,7 @@ mod tests {
             assert!(serde_json::from_value::<SearchParams>(value).is_err());
         }
         let schema = serde_json::to_value(schemars::schema_for!(SearchParams)).unwrap();
-        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+        assert!(schema.get("oneOf").is_none());
         assert_eq!(schema["properties"]["query"]["type"], "string");
         assert!(
             !schema["required"]

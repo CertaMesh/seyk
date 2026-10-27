@@ -21,7 +21,9 @@ Optional `paths` default to all configured roots. Absolute paths must remain
 inside those roots. Relative paths are tried against every root; a root's own
 final name also selects that root. Exactly one allowed match is required.
 No match reports the roots; multiple matches report `AMBIGUITY` and the
-candidate paths. Use an absolute path to disambiguate. Existing confinement,
+candidate paths. With several roots, `.` is ambiguous; omit `paths` to search
+all roots, or use an absolute path to select one. Root-name shortcuts use exact
+case and Unicode spelling. Existing confinement,
 secret-file and local-content restrictions still apply, including to symlinks.
 
 ## Search results and extraction
@@ -78,8 +80,9 @@ There is no new model-readiness flag in compact results.
 
 ### Extract selection
 
-The advertised input schema uses `oneOf`: exactly one top-level `hit`, or a
-`ref` with optional `path`. Unknown top-level fields, null selections and
+The advertised input schema is a flat object with optional `hit`, `ref` and
+`path`. The server requires exactly one top-level `hit`, or a `ref` with optional
+`path`. Unknown top-level fields, null selections and
 combined forms are invalid. Nested hits follow this table:
 
 | Descriptor fields | `ref` | Result |
@@ -240,7 +243,7 @@ The agent's provider can still receive the returned evidence, as described under
 - **One model for every session.** `seyk mcp` is a small relay (about 9 MB).
   The first one starts a shared background daemon that loads the model once,
   owns the cache and watches every folder any session asked for. Five agent
-  sessions share the query model (about 340 MiB observed). Indexing needs more
+  sessions share the query model. Indexing needs more
   memory: the full benchmark corpus peaked at about 2.8 GB on 2026-10-27 after
   the indexing memory fix in #95. This measurement is not a memory bound for
   other corpora. The daemon exits after 15 minutes

@@ -59,7 +59,12 @@ fn strict_selection_table_never_falls_back_from_malformed_full_fields() {
     }
     assert!(serde_json::from_value::<Detail>(Value::Null).is_err());
     assert!(serde_json::from_value::<Detail>(json!("other")).is_err());
-    assert_eq!(selection_schema()["oneOf"].as_array().unwrap().len(), 2);
+    let schema = selection_schema();
+    assert!(schema.get("oneOf").is_none());
+    assert!(schema.get("required").is_none());
+    for field in ["hit", "ref", "path"] {
+        assert!(schema["properties"].get(field).is_some());
+    }
 }
 
 #[test]

@@ -392,6 +392,17 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
             "{name} annotations in tools/list"
         );
     }
+    for tool in tools.as_array().unwrap() {
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object");
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                schema.get(keyword).is_none(),
+                "{} has top-level {keyword}",
+                tool["name"]
+            );
+        }
+    }
     let search = tools
         .as_array()
         .unwrap()
@@ -416,12 +427,11 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
         search["inputSchema"]["properties"]["query"]["type"],
         "string"
     );
-    assert_eq!(
-        search["inputSchema"]["oneOf"],
-        serde_json::json!([
-            {"required":["queries"], "not":{"required":["query"]}},
-            {"required":["query"], "not":{"required":["queries"]}}
-        ])
+    assert!(
+        !search["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("query"))
     );
 }
 
