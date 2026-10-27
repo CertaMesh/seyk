@@ -779,6 +779,7 @@ impl SearchEngine {
         resources: &[ProvidedResource],
         progress: Option<ProgressFn>,
     ) -> Result<SyncStats> {
+        let _phase = seyk_embed::diagnostics::Phase::new("index_pass");
         let stats = self.sync_resources(resources, progress)?;
         let skipped: HashSet<_> = stats.skipped.iter().map(|s| &s.resource).collect();
         // A descriptor can depend on model identity (audio). If identity itself
@@ -1110,6 +1111,10 @@ impl SearchEngine {
             )?;
             stats.progress = Some(telemetry.snapshot());
             stats.skipped_counts = skipped_counts(&stats.skipped);
+            seyk_embed::diagnostics::counts(
+                "index_work",
+                &[("missing_inputs", 0), ("resources", pending.len())],
+            );
             return Ok(stats);
         }
 
@@ -1131,6 +1136,10 @@ impl SearchEngine {
             }
         }
 
+        seyk_embed::diagnostics::counts(
+            "index_work",
+            &[("missing_inputs", work.len()), ("resources", pending.len())],
+        );
         let total = work.len();
         let started = Instant::now();
         // Keyed by input, not resource: a deduplicated input belongs to every

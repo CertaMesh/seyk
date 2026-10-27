@@ -70,6 +70,74 @@ To move an indexed collection into a new directory, see
 | `--model` | Model directory or `REPO[@REVISION]` |
 | `--cache-path` | Use a different cache file |
 
+## Embedding memory controls
+
+Plain-text calls use at most `--batch-size` rows, default 16, with budgets of
+5120 padded tokens and 4194304 attention cells per call. Use
+`--batch-token-budget` and `--batch-attention-budget` together to override them.
+The first bounds rows × padded token length;
+the second bounds rows × padded token length squared. Inputs are grouped by
+length inside each engine dispatch and results return in their original order.
+The limits must fit one maximum-length input, currently 2048 tokens.
+
+The defaults keep 16 rows of 298 tokens together and admit at most 10 rows of
+512 tokens. Longer inputs use smaller calls. For example, these flags explicitly
+select the defaults:
+
+```sh
+seyk index ./corpus --text-only --batch-token-budget 5120 --batch-attention-budget 4194304
+```
+
+A running daemon keeps its old batching until restarted with the new binary.
+Clients with a different build identity use a separate daemon endpoint.
+
+`--cpu-allocator default` preserves ONNX Runtime's allocator settings.
+`no-arena` disables the CPU arena for text sessions. `arena-shrink` keeps the
+arena and requests shrinkage after each text inference call. Shrinkage can
+reduce retained memory but cannot reduce the live working set of a call.
+These experiments do not change vision or audio encoder allocators.
+Batch budgets apply to plain-text inputs.
+
+Budgets apply independently to each text session. More sessions multiply the
+inference working set. Input tokenization and queued strings are outside these
+limits, so the budgets are not a process-memory cap. `--embedding-window`
+bounds the number of inputs per engine dispatch and defaults to sessions ×
+batch-size. Model prompts, segmentation and cache identities stay unchanged.
+Changing a padded shape can still change floating-point rounding. The measured
+defaults satisfy the existing batching cosine tolerance and the full SciFact
+and NFCorpus retrieval gate. See [measurements and trade-offs](benchmarks.md#text-batch-memory-budgets).
+
+Set `SEYK_MEMORY_DIAGNOSTICS=1` before starting a fresh process to emit phase
+markers on stderr. Each line starts with `seyk_memory` and includes PID,
+monotonic microseconds since the first marker, an event and a state. Numeric
+counts report session count, batch shape, configured budgets and missing index
+inputs. Diagnostics contain no source text, token IDs, vectors or paths.
+An existing daemon keeps the environment it started with. Start a fresh daemon
+with the same flags as its clients to collect load and first-query markers.
+No synthetic warm-up is performed.
+
+For a measurement run with sufficient memory, library callers can set
+`GemmaConfig.batch_budget = None` to measure the row-count-only baseline.
+The CLI uses the calibrated budgets when both budget flags are absent.
+Compare allocator policies with `--cpu-allocator no-arena` and
+`--cpu-allocator arena-shrink`. Use a fresh
+cache for each cold index. Sample current and peak physical footprint externally;
+RSS alone can understate macOS memory use. Record completed inputs, cold-index
+time, ordinary-prose throughput, first-query latency and retained memory after
+a dense batch. For startup measurements, reuse a fully indexed cache and connect
+one MCP client to register the root and issue one query. Merely starting
+`seyk daemon run` does not trigger model loading.
+
+The ignored real-weight test `memory_budget_batching_parity` compares budgeted
+and row-count-only embeddings across dimensions, allocator policies, and session
+counts. Every vector must have cosine greater than 0.9999, the existing
+same-model batching tolerance. A failure prints each failing case's maximum
+absolute element delta and minimum cosine. Run it in the measurement environment:
+
+```sh
+cargo test -p seyk-embeddinggemma --test parity memory_budget_batching_parity -- --ignored --nocapture
+```
+
 ## Keyword search
 
 The default `hybrid` mode combines meaning, BM25 keyword relevance, and file-name
