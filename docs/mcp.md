@@ -6,10 +6,141 @@ over stdio. Agents get three tools:
 - `search` takes one to eight phrasings and returns ranked passages with path,
   line range, heading, score, preview and `matched` (`meaning`, `words`, `name`).
   An optional `mode` selects `hybrid` (default), `semantic` or `lexical` search.
-- `extract` reads evidence from a selected search hit. Pass the entire hit object.
+- `extract` reads verified evidence from a selected hit. Pass `{"hit": hit}` or
+  `{"ref": hit.ref, "path": hit.path}`. A reference that omits its URI needs `path`.
 - `index_status` reports indexing progress, per-root counts and model diagnostics.
 
 The agent reads the evidence and writes the answer. Seyk never generates text.
+
+## Search results and extraction
+
+JSON protocol 11 returns compact hits by default. `detail` accepts `"slim"`
+(default) or `"full"`; null and other values are invalid. For example:
+
+```json
+{"queries":["keeping plants alive in heat"],"detail":"full"}
+```
+
+A slim hit has required `ref`, `score` and `matched`, plus optional `path`,
+`lines`, `page`, `time`, `heading` and `preview`. Absent optional fields are
+omitted. `lines` is a 1-based inclusive string such as `"12"` or `"12-19"`;
+`page` is a 1-based physical page number. Audio `time` contains integer
+`start_ms` and `end_ms`, not word alignment. Image hits can have none of these
+location display fields. `matched` lists `meaning`, `words` and/or `name`.
+
+lines reflect the indexed version; call extract for verified text
+
+The opaque `ref` retains the exact locator, resource identity and original
+metadata. Search never calls OCR or speech-to-text. The reference is
+self-contained and survives process restarts and cache deletion; extraction
+still checks current access policy and the indexed whole-resource hash.
+Encoding is not encryption, authentication or proof of a previous search.
+
+`detail:"full"` adds `resource`, `locator`, `metadata`, `match` and
+`matched_query` with their existing semantics. Full hits also contain `ref`
+and the audio `time` display field. Added fields can break strict parsers.
+
+The default response contains `schema_version`, `hits`, requested
+`kind_counts`, and `degraded`, `index` and `index_warnings` when present.
+`kind_counts` describes returned hits after the limit. Full responses also
+retain `index_progress`, `segments_searched`, `files`, `skipped`,
+`page_diagnostics`, `page_diagnostics_total`, `index_diagnostics`,
+`segments_embedded` and `took_ms`.
+
+`degraded` reports semantic fallback. `index` retains loading, indexing,
+ready, failed-pass and stopped states; combined state reflects the least
+settled authorized root. An omitted `index` means no active watcher, not
+proof of freshness.
+
+`index_warnings`, when present, is exactly
+`{"skipped_resources":N,"unindexed_pages":N}`. Counts are distinct resource
+identities and distinct resource/page pairs from this query's synchronization,
+confined before counting. Repeated reasons or overlapping watcher histories
+do not increase these counts. Both members are present; the object is omitted
+when both are zero. Unknown page inventories do not contribute invented pages.
+Cached-only queries can have no sync diagnostics even while the index is
+partial. Zero warnings does not certify completeness. Watcher history stays in
+full results; `index_status` retains its existing fields. Last successful-pass
+diagnostics can outlive a failed pass, whose `index` state reports the failure.
+There is no new model-readiness flag in compact results.
+
+### Extract selection
+
+The advertised input schema uses `oneOf`: exactly one top-level `hit`, or a
+`ref` with optional `path`. Unknown top-level fields, null selections and
+combined forms are invalid. Nested hits follow this table:
+
+| Descriptor fields | `ref` | Result |
+|---|---|---|
+| All of `resource`, `locator`, `metadata`, valid | Absent | Legacy full selection |
+| None | Valid | Decode reference; require path if URI omitted |
+| All three, valid | Valid | Require equality with decoded descriptor |
+| Partial, malformed or null descriptor | Any | Reject |
+| None | Absent, null, empty or invalid | Reject |
+| Complete descriptor | Present but invalid | Reject |
+
+Clients that round 64-bit metadata integers can pass only `ref` and `path`.
+Mixed full/ref inputs must preserve every descriptor field exactly.
+
+There is no fallback from malformed full fields to a reference. A mixed full
+hit whose reference omits its URI still requires `path`. Current root checks,
+local-content restrictions and source-hash verification apply to every form.
+Non-file resources remain unsupported by MCP extraction.
+
+A typical compact hit omits the URI from `ref` because its absolute `path`
+reconstructs the resource identity exactly. Copy both fields:
+
+```json
+{"ref":"seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/fixture/a"}
+```
+
+This fails selection parsing because that same reference requires a path:
+
+```json
+{"ref":"seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+```
+
+An explicit-URI reference carries its own identity. The edited display path
+below is ignored; this selection still identifies `file:///fixture/a`:
+
+```json
+{"ref":"seyk-ref-v1:U1IBABFmaWxlOi8vL2ZpeHR1cmUvYQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","path":"/edited/ignored"}
+```
+
+These invented examples use a zero hash to illustrate decoding, not successful
+extraction. A real reference comes from search and must match the source bytes.
+In omitted-URI mode, editing `path` changes the asserted resource identity,
+subject to the same access and hash checks as an edited legacy `resource`.
+`lines`, `page`, `time` and other display fields never change the decoded span.
+The [reference encoding specification](mcp-reference.md) defines flags, bounds
+and the complete binary format, including lossless non-UTF8 paths.
+
+### Protocol compatibility
+
+Protocol 11 changes MCP defaults and the shared version label. CLI search,
+index and extraction payload fields are unchanged apart from `schema_version`;
+Rust library types and the cache schema are unchanged.
+
+| Producer and consumer | Behavior |
+|---|---|
+| CLI full search v2–10 into v11 CLI extract | Accepted |
+| CLI full search v11 into v11 CLI extract | Accepted |
+| CLI full search v11 into installed v10 CLI extract | Rejected before source reads, despite identical payload fields |
+| v12, missing, null, malformed or unsupported version into v11 CLI extract | Rejected |
+| Slim or full MCP response into CLI `extract --from-json` | Rejected; MCP is not CLI `SearchResults` |
+| Legacy full MCP hit into new MCP extract | Accepted without a version wrapper |
+| New full hit into old permissive MCP `SelectedHit` parser | Old descriptor fields work; the parser ignores added fields |
+| New slim hit into old MCP extract | Rejected; descriptor fields are absent |
+| Old MCP search caller against new default | Breaking; request `detail:"full"` or adopt slim plus ref |
+| Consumer requiring `schema_version == 10` | Must explicitly accept protocol 11 for all machine output |
+| Consumer using `deny_unknown_fields` against new full output | Must update its schema for ref/time/warnings; full is not exact-object compatibility |
+
+MCP full output has `matched`, not the CLI `signals` representation, and lacks
+the CLI `queries`, `mode` and `stats` envelope. The full opt-in restores field
+availability, not version equality or document interchangeability. A new JSON
+protocol selects a separate shared daemon endpoint; an older daemon can remain
+running for its compatible clients. This change does not freeze extraction
+output or introduce a new MCP typed-error contract.
 
 ## Set up an agent
 
@@ -224,7 +355,7 @@ require a separately evaluated finer GC/lease design.
 
 ## Per-hit match provenance
 
-Every MCP and CLI JSON search hit includes an additive `match` object:
+Every full MCP hit and CLI JSON search hit includes an additive `match` object:
 
 ```json
 {"semantic_rank": 2, "keyword_rank": 1, "filename_rank": null, "matched_terms": ["cafe", "restore"]}
@@ -247,11 +378,11 @@ confirmed against the existing keyword index, never recovered from source text,
 and no new text is persisted in the cache. Without a contributing keyword leg,
 the list is empty.
 
-Existing `matched`, `matched_query`, scores and CLI/library `signals` keep their
-meaning. Current JSON `schema_version` is **10**. Version 7 added optional result-kind
+Existing `matched`, full-mode `matched_query`, scores and CLI/library `signals` keep their
+meaning. Current JSON `schema_version` is **11**. Version 7 added optional result-kind
 counts, per-root indexing progress and `index_status`; version 8 adds optional
 lexical-only `degraded` metadata and its reason. Version 9 added per-profile derived image-code counts to cache statistics. Version 10 adds `model_diagnostics` to MCP index status.
-Extraction accepts versions 2–10.
+Version 11 makes MCP search compact by default; full CLI extraction accepts versions 2–11.
 Match provenance does not change existing fields or extraction requirements. Older
 search JSON without `match` deserializes to empty provenance. No cache migration is
 needed. Rust callers constructing `SearchHit` literals add `r#match:
@@ -260,3 +391,6 @@ Default::default()`; custom cache implementations implement
 in request order. The engine calls this batch method only for final returned
 hits ranked by the keyword leg. SQLite checks each query group in one statement
 over the selected rowids; candidate ranking does no term-membership probes.
+
+For reproducible model-free character/byte accounting, see
+[offline MCP payload accounting](benchmarks/mcp-payloads.md).

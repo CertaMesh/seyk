@@ -1212,6 +1212,10 @@ mod tests {
         assert_ne!(id, endpoint_id(&args, "0.1.0+g123", 9, "8"));
         assert_ne!(id, endpoint_id(&args, "0.1.0+g123", 10, "7"));
         assert_ne!(
+            endpoint_id(&args, "0.1.0+g123", 10, "7"),
+            endpoint_id(&args, "0.1.0+g123", 11, "7")
+        );
+        assert_ne!(
             id,
             endpoint_id(&["--dimension".into(), "128".into()], "0.1.0+g123", 9, "7")
         );

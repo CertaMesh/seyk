@@ -24,7 +24,7 @@ use seyk::{
 
 /// Machine-output protocol; legacy output had no version field.
 /// Any field addition, removal or rename after release requires a version bump.
-const JSON_SCHEMA_VERSION: u32 = 10;
+const JSON_SCHEMA_VERSION: u32 = 11;
 
 #[derive(serde::Serialize)]
 struct JsonOutput<'a, T: serde::Serialize> {
@@ -1096,10 +1096,10 @@ fn read_search_hit(input: impl Read, index: usize) -> Result<SearchHit> {
         value
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(2..=10)
+        Some(2..=11)
     ) {
         return Err(extract_errors::InvalidInput(
-            "expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8, 9 or 10".into(),
+            "expected search JSON schema_version 2, 3, 4, 5, 6, 7, 8, 9, 10 or 11".into(),
         )
         .into());
     }
@@ -1995,7 +1995,7 @@ mod tests {
     #[test]
     fn json_output_mirrors_library_types() {
         let v: serde_json::Value = serde_json::to_value(json_output(&results())).unwrap();
-        assert_eq!(v["schema_version"], 10);
+        assert_eq!(v["schema_version"], 11);
         let first = &v["hits"][0];
         assert_eq!(
             first["resource"],
@@ -2017,12 +2017,12 @@ mod tests {
         let mut r = results();
         r.hits[0].resource = "mem://book/chapter".parse().unwrap();
         let value = serde_json::to_value(json_output(&r)).unwrap();
-        assert_eq!(value["schema_version"], 10);
+        assert_eq!(value["schema_version"], 11);
         assert_eq!(value["hits"][0]["resource"], "mem://book/chapter");
         assert!(format_results(&r, &test_path("/"), false).contains("mem://book/chapter"));
         assert_eq!(
             serde_json::to_value(json_output(&IndexReport::default())).unwrap()["schema_version"],
-            10
+            11
         );
     }
 
@@ -2053,7 +2053,7 @@ mod tests {
             hit.preview = None;
         }
         let value = serde_json::to_value(json_output(&results)).unwrap();
-        assert_eq!(value["schema_version"], 10);
+        assert_eq!(value["schema_version"], 11);
         assert!(
             value["hits"]
                 .as_array()
@@ -2286,7 +2286,7 @@ mod extract_contract_tests {
         let mut json = Vec::new();
         write_extracted(&mut json, &extracted, true).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
-        assert_eq!(value["schema_version"], 10);
+        assert_eq!(value["schema_version"], 11);
         assert_eq!(value["text"], "Public test transcript");
         assert_eq!(value["provenance"]["method"], "speech_to_text");
     }

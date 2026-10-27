@@ -89,6 +89,18 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ### Changed
 
+- **Breaking (JSON protocol 11):** MCP search returns compact hits by default.
+  Pass `detail:"full"` for the previous descriptor and diagnostic fields, plus
+  the new `ref`, audio `time` and query-warning fields. Compact hits carry a
+  self-contained extraction reference; legacy full-hit extraction still works.
+  Index degradation and state remain visible. CLI search, index and extraction
+  payloads keep their fields; only the shared `schema_version` label changes
+  from 10 to 11. Installed v10 CLI extract rejects v11 documents; v11 extract
+  accepts full CLI documents from v2 through v11. MCP documents remain invalid
+  CLI extraction input. Consumers pinning v10 or using `deny_unknown_fields`
+  must update explicitly; full restores fields, not exact-object compatibility.
+  See the [complete compatibility matrix](docs/mcp.md#protocol-compatibility).
+
 - Text embedding calls now default to budgets of 5120 padded tokens and 4194304
   attention cells, with a 16-row cap. Full SciFact and NFCorpus measurements had
   about 2.8 GB peak physical footprint versus about 5.7 GB with row-count-only

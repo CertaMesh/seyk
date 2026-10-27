@@ -50,12 +50,12 @@ not load an inference session, download files, or open or create an embedding ca
 `--cache-path` and `SEYK_CACHE` are accepted but ignored. Without `--json`, it
 prints the ID and descriptor.
 
-The JSON object uses the current CLI `schema_version` (10), with `profile_id`
+The JSON object uses the current CLI `schema_version` (11), with `profile_id`
 (the exact `CacheProfile::id()` string) and `profile` (the full descriptor):
 
 ```json
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "profile_id": "<24-character hash>",
   "profile": {
     "model": {
@@ -119,7 +119,7 @@ seyk setup audio --dry-run --json   # offline plan; no downloads
 seyk setup audio --json             # install; versioned completion on stdout
 ```
 
-JSON uses the existing schema v10 envelope, with `action` (`status`, `plan` or
+JSON uses the schema v11 envelope, with `action` (`status`, `plan` or
 `complete`), `models`, `total_bytes`, `download_bytes` and `next_step`. Each
 model reports `present`, `verification`, `bytes`, `repo` and `revision`.
 Text status checks file presence only (`bytes: null`); audio and STT status check
