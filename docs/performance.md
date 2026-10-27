@@ -28,7 +28,14 @@ listed in [Known limitations](limitations.md).
 ## CPU throughput controls
 
 Defaults are one CPU session, ONNX Runtime's automatic intra-op thread count,
-16 inputs per batch and q8 weights. For measured tuning, the CLI accepts:
+at most 16 inputs per batch, and q8 weights. Text calls also have budgets of
+5120 padded tokens and 4194304 attention cells. On the full SciFact and NFCorpus
+benchmarks, the measured peak physical footprint was about 2.8 GB with these
+budgets and about 5.7 GB with row-count-only batching. These are workload-specific
+measurements, not a universal 2 GB cap. Five paired prose runs had a 5.2% higher
+median time with the budgets; the timing ranges overlapped.
+See [memory measurements](benchmarks.md#text-batch-memory-budgets) for conditions
+and retrieval results. For measured tuning, the CLI accepts:
 
 ```bash
 seyk index --text-only --sessions 2 --threads 4 --batch-size 16 --embedding-window 32 ./notes
@@ -36,8 +43,9 @@ seyk index --text-only --sessions 2 --threads 4 --batch-size 16 --embedding-wind
 
 `--threads` is per session. `--batch-size` limits one model call;
 `--embedding-window` controls how many inputs the engine sends at once and defaults
-to `sessions × batch-size`. A window no larger than one batch cannot use two
-sessions concurrently; use at least two full batches to keep both busy. Each
+to `sessions × batch-size`. A dispatch that fits one inference call uses one
+session. Budgets can split a dispatch into several calls; larger windows also
+provide work for several sessions. Each
 additional text session has its own weights/allocator arena (several GiB each;
 measure memory use). Avoid automatic thread counts in a multi-session experiment,
 because several full-machine thread teams can be slower.

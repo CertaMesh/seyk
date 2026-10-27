@@ -10,9 +10,9 @@ pub struct BatchBudget {
 }
 
 impl BatchBudget {
-    /// Candidate limits for measurement: 16 rows of 512 tokens.
-    pub const CANDIDATE: Self = Self {
-        padded_tokens: 8192,
+    /// Default per-call limits, calibrated with real weights and retrieval benchmarks.
+    pub const DEFAULT: Self = Self {
+        padded_tokens: 5120,
         attention_cells: 4_194_304,
     };
 
@@ -82,7 +82,7 @@ mod tests {
             vec![2048, 1, 512, 1024, 0, 512, 1700],
             vec![],
         ] {
-            let b = BatchBudget::CANDIDATE;
+            let b = BatchBudget::DEFAULT;
             let plan = plan(&lengths, 16, Some(b)).unwrap();
             let mut seen = Vec::new();
             for range in plan.ranges {
@@ -99,10 +99,14 @@ mod tests {
 
     #[test]
     fn ordinary_prose_and_boundaries_keep_full_batches() {
-        let b = BatchBudget::CANDIDATE;
+        let b = BatchBudget::DEFAULT;
+        assert_eq!(
+            plan(&[298; 32], 16, Some(b)).unwrap().ranges,
+            vec![0..16, 16..32]
+        );
         assert_eq!(
             plan(&[512; 32], 16, Some(b)).unwrap().ranges,
-            vec![0..16, 16..32]
+            vec![0..10, 10..20, 20..30, 30..32]
         );
         assert_eq!(
             plan(&[1024; 5], 16, Some(b)).unwrap().ranges,
@@ -138,7 +142,7 @@ mod tests {
                 padded_tokens: 1,
                 attention_cells: 0,
             },
-            BatchBudget::CANDIDATE,
+            BatchBudget::DEFAULT,
         ] {
             assert!(plan(&[2049], 16, Some(b)).is_err());
         }

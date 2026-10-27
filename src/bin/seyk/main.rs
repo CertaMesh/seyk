@@ -90,11 +90,11 @@ struct ModelArgs {
     #[arg(long, default_value_t = 16, value_parser = positive_count, global = true)]
     batch_size: usize,
 
-    /// Optional padded tokens per text call; use with --batch-attention-budget.
+    /// Override padded tokens per text call (default 5120); use with --batch-attention-budget.
     #[arg(long, value_parser = positive_count, requires = "batch_attention_budget", global = true)]
     batch_token_budget: Option<usize>,
 
-    /// Optional rows × padded length squared per text call (per session).
+    /// Override rows × padded length squared per text call (default 4194304).
     #[arg(long, value_parser = positive_count, requires = "batch_token_budget", global = true)]
     batch_attention_budget: Option<usize>,
 
@@ -1144,7 +1144,7 @@ fn gemma_config(args: &ModelArgs) -> Result<GemmaConfig> {
                 padded_tokens,
                 attention_cells,
             }),
-            (None, None) => None,
+            (None, None) => config.batch_budget,
             _ => bail!("both batch budgets must be provided"),
         };
         if let Some(budget) = config.batch_budget {
@@ -1692,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_controls_are_opt_in_and_forward_to_daemon() {
+    fn memory_controls_keep_calibrated_defaults_and_forward_overrides_to_daemon() {
         let parse = |args: &[&str]| {
             let Cli {
                 command: Command::Search { model, .. },
@@ -1703,7 +1703,13 @@ mod tests {
             model
         };
         let defaults = parse(&["seyk", "search", "test"]);
-        assert_eq!(gemma_config(&defaults).unwrap().batch_budget, None);
+        assert_eq!(
+            gemma_config(&defaults).unwrap().batch_budget,
+            Some(gemma::BatchBudget {
+                padded_tokens: 5120,
+                attention_cells: 4_194_304,
+            })
+        );
         assert_eq!(defaults.cpu_allocator, gemma::CpuAllocator::Default);
         for policy in ["default", "no-arena", "arena-shrink"] {
             let args = [
@@ -1719,7 +1725,13 @@ mod tests {
             ];
             let model = parse(&args);
             let config = gemma_config(&model).unwrap();
-            assert_eq!(config.batch_budget, Some(gemma::BatchBudget::CANDIDATE));
+            assert_eq!(
+                config.batch_budget,
+                Some(gemma::BatchBudget {
+                    padded_tokens: 8192,
+                    attention_cells: 4_194_304,
+                })
+            );
             assert_eq!(config.cpu_allocator.name(), policy);
             #[cfg(all(feature = "mcp", unix))]
             {

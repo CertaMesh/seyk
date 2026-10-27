@@ -209,6 +209,54 @@ cooking, caching, gardening, and pottery. Its model-backed tests cover semantic
 retrieval, section locators, and every embedding dimension. They are regression
 checks, not a retrieval benchmark.
 
+## Text batch memory budgets
+
+Measured on 2026-10-27 with source commit `37ec971fca009078d86119db6cc522e9d4f95584`,
+Apple M5 Max, 18 logical CPUs, 64 GiB, and macOS 26.5. Both configurations used
+the same release binary, Q8 weights, 256 dimensions, one session, two inference
+threads, and ONNX Runtime's default CPU allocator. The candidate used budgets
+of 5120 padded tokens and 4194304 attention cells. The control used row-count-only
+batching. Both kept the 16-row cap. The model revision was
+`onnx-community/embeddinggemma-2-ONNX@daa72c51243991dfcaf9f9137d2c573d8f7790c0`.
+
+Each configuration indexed a fresh cache and ran every query in hybrid, semantic,
+and lexical modes at depth 200. SciFact contained 5,183 documents, 11,145 embedding
+inputs, and 300 queries. NFCorpus contained 3,633 documents, 7,960 embedding inputs,
+and 323 queries. Both runs used the pinned public retrieval inputs described
+below, with no skipped documents or queries.
+
+| Dataset | Control peak physical footprint | Budgeted peak physical footprint | Control hybrid nDCG@10 | Budgeted hybrid nDCG@10 |
+|---|---:|---:|---:|---:|
+| SciFact | 5.729 GB | 2.800 GB | 0.806999534 | 0.806999534 |
+| NFCorpus | 5.639 GB | 2.815 GB | 0.359715558 | 0.359715558 |
+
+GB values are decimal. Physical footprint includes the kernel's process
+high-water counter; these are not RSS measurements. Semantic and lexical nDCG@10
+also matched between configurations. Both datasets passed the maximum-drop gate
+of 0.005. Each full configuration ran once, so these results make no throughput
+claim. The OS file cache was not flushed.
+
+In a separate epoch on the same machine, five alternating pairs indexed 80
+invented prose segments with fresh caches, one session, and automatic inference
+threads. Control median time was 18.473 seconds, with a range of 17.216 to 20.010.
+Budgeted median time was 19.435 seconds, with a range of 16.869 to 20.625.
+The budgeted median was 5.2% higher; the ranges overlapped. This does not establish
+a throughput improvement or a bound on regressions.
+
+The budgets limit tensor shapes per text session. They do not bound tokenizer
+queues, concurrent callers, allocator retention, or the total process footprint.
+The measured peaks are about 2.8 GB for the candidate and about 5.7 GB for the
+control on these full corpora. There is no universal 2 GB cap. Media text stages
+bypass the plain-text budgets.
+
+Changing padding shapes caused small floating-point differences in the real-weight
+parity fixture. Across four dimensions and four allocator/session configurations,
+the largest absolute element delta was `2.561137080192566e-7`. The minimum f32
+batching cosine was `0.9999997615814209`. Every comparison exceeded the existing
+same-model batching threshold of `0.9999`. The test uses that tolerance and reports
+per-case deltas on failure. Batch composition does not change model input hashes
+or cache profiles. Retrieval quality is checked separately by the full gate above.
+
 ## Paired CPU throughput harness
 
 `bench_cpu_pool` compares **this run's** baseline and candidate with alternating

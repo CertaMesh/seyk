@@ -72,19 +72,20 @@ To move an indexed collection into a new directory, see
 
 ## Embedding memory controls
 
-Plain-text calls use at most `--batch-size` rows, default 16. Optional
-`--batch-token-budget` and `--batch-attention-budget` further limit each call.
-Both flags are required together. The first bounds rows × padded token length;
+Plain-text calls use at most `--batch-size` rows, default 16, with budgets of
+5120 padded tokens and 4194304 attention cells per call. Use
+`--batch-token-budget` and `--batch-attention-budget` together to override them.
+The first bounds rows × padded token length;
 the second bounds rows × padded token length squared. Inputs are grouped by
 length inside each engine dispatch and results return in their original order.
 The limits must fit one maximum-length input, currently 2048 tokens.
 
-Candidate limits for calibration are 8192 padded tokens and 4194304 attention
-cells. They keep 16 rows at 512 tokens and reduce long inputs to smaller calls.
-These limits are opt-in until real-weight measurements select defaults:
+The defaults keep 16 rows of 298 tokens together and admit at most 10 rows of
+512 tokens. Longer inputs use smaller calls. For example, these flags explicitly
+select the defaults:
 
 ```sh
-seyk index ./corpus --text-only --batch-token-budget 8192 --batch-attention-budget 4194304
+seyk index ./corpus --text-only --batch-token-budget 5120 --batch-attention-budget 4194304
 ```
 
 `--cpu-allocator default` preserves ONNX Runtime's allocator settings.
@@ -99,8 +100,9 @@ inference working set. Input tokenization and queued strings are outside these
 limits, so the budgets are not a process-memory cap. `--embedding-window`
 bounds the number of inputs per engine dispatch and defaults to sessions ×
 batch-size. Model prompts, segmentation and cache identities stay unchanged.
-Changing a padded shape can still change floating-point results, so compare
-embedding bits or run retrieval benchmarks before selecting new defaults.
+Changing a padded shape can still change floating-point rounding. The measured
+defaults satisfy the existing batching cosine tolerance and the full SciFact
+and NFCorpus retrieval gate. See [measurements and trade-offs](benchmarks.md#text-batch-memory-budgets).
 
 Set `SEYK_MEMORY_DIAGNOSTICS=1` before starting a fresh process to emit phase
 markers on stderr. Each line starts with `seyk_memory` and includes PID,
@@ -111,9 +113,11 @@ An existing daemon keeps the environment it started with. Start a fresh daemon
 with the same flags as its clients to collect load and first-query markers.
 No synthetic warm-up is performed.
 
-For a measurement run with sufficient memory, compare a baseline command with
-no budget flags against the candidate command above, then repeat the candidate
-with `--cpu-allocator no-arena` and `--cpu-allocator arena-shrink`. Use a fresh
+For a measurement run with sufficient memory, library callers can set
+`GemmaConfig.batch_budget = None` to measure the row-count-only baseline.
+The CLI uses the calibrated budgets when both budget flags are absent.
+Compare allocator policies with `--cpu-allocator no-arena` and
+`--cpu-allocator arena-shrink`. Use a fresh
 cache for each cold index. Sample current and peak physical footprint externally;
 RSS alone can understate macOS memory use. Record completed inputs, cold-index
 time, ordinary-prose throughput, first-query latency and retained memory after
@@ -121,13 +125,14 @@ a dense batch. For startup measurements, reuse a fully indexed cache and connect
 one MCP client to register the root and issue one query. Merely starting
 `seyk daemon run` does not trigger model loading.
 
-The ignored real-weight test `memory_budget_bit_identity` compares reference
-queries and documents across dimensions and allocator policies. It is a parity
-check, not a peak-memory or dense-corpus acceptance test. Run it only in the
-measurement environment:
+The ignored real-weight test `memory_budget_batching_parity` compares budgeted
+and row-count-only embeddings across dimensions, allocator policies, and session
+counts. Every vector must have cosine greater than 0.9999, the existing
+same-model batching tolerance. A failure prints each failing case's maximum
+absolute element delta and minimum cosine. Run it in the measurement environment:
 
 ```sh
-cargo test -p seyk-embeddinggemma --test parity memory_budget_bit_identity -- --ignored --nocapture
+cargo test -p seyk-embeddinggemma --test parity memory_budget_batching_parity -- --ignored --nocapture
 ```
 
 ## Keyword search

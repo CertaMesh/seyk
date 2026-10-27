@@ -150,8 +150,8 @@ pub struct GemmaConfig {
     pub threads: Option<usize>,
     /// Inputs per model call.
     pub batch_size: usize,
-    /// Optional padded-token and quadratic-attention limits per text session.
-    /// None preserves row-count batching until real-weight calibration.
+    /// Padded-token and quadratic-attention limits per text session.
+    /// Defaults to 5120 tokens and 4194304 attention cells. None uses only the row cap.
     pub batch_budget: Option<BatchBudget>,
     /// CPU tensor allocator policy. Default preserves ONNX Runtime defaults.
     pub cpu_allocator: CpuAllocator,
@@ -173,7 +173,7 @@ impl Default for GemmaConfig {
             audio: cfg!(feature = "audio"),
             threads: None,
             batch_size: 16,
-            batch_budget: None,
+            batch_budget: Some(BatchBudget::DEFAULT),
             cpu_allocator: CpuAllocator::Default,
             sessions: 1,
         }
@@ -1339,9 +1339,9 @@ mod scheduler_tests {
         for workers in [None, Some(&pool)] {
             let seen = Mutex::new(Vec::new());
             let (actual, _) =
-                embed_token_ids(&ids, 16, Some(BatchBudget::CANDIDATE), workers, |batch| {
+                embed_token_ids(&ids, 16, Some(BatchBudget::DEFAULT), workers, |batch| {
                     let max = batch.iter().map(|row| row.len()).max().unwrap();
-                    assert!(batch.len() * max <= 8192);
+                    assert!(batch.len() * max <= 5120);
                     assert!(batch.len() * max * max <= 4_194_304);
                     for row in batch {
                         let index = row[0] as usize;
@@ -1373,25 +1373,19 @@ mod scheduler_tests {
         let active = AtomicUsize::new(0);
         let finished = AtomicUsize::new(0);
         let ids = vec![vec![0; 2048], vec![1; 2048]];
-        let result = embed_token_ids(
-            &ids,
-            16,
-            Some(BatchBudget::CANDIDATE),
-            Some(&pool),
-            |batch| {
-                assert_eq!(batch.len(), 1);
-                let cost = batch[0].len() * batch[0].len();
-                assert!(active.fetch_add(cost, Ordering::SeqCst) + cost <= 2 * 4_194_304);
-                entered.wait();
-                active.fetch_sub(cost, Ordering::SeqCst);
-                finished.fetch_add(1, Ordering::SeqCst);
-                if batch[0][0] == 0 {
-                    Err(Error::Embedding("injected failure".into()))
-                } else {
-                    success(batch)
-                }
-            },
-        );
+        let result = embed_token_ids(&ids, 16, Some(BatchBudget::DEFAULT), Some(&pool), |batch| {
+            assert_eq!(batch.len(), 1);
+            let cost = batch[0].len() * batch[0].len();
+            assert!(active.fetch_add(cost, Ordering::SeqCst) + cost <= 2 * 4_194_304);
+            entered.wait();
+            active.fetch_sub(cost, Ordering::SeqCst);
+            finished.fetch_add(1, Ordering::SeqCst);
+            if batch[0][0] == 0 {
+                Err(Error::Embedding("injected failure".into()))
+            } else {
+                success(batch)
+            }
+        });
         assert!(result.is_err());
         assert_eq!(finished.load(Ordering::SeqCst), 2);
         assert_eq!(active.load(Ordering::SeqCst), 0);
@@ -1404,7 +1398,7 @@ mod scheduler_tests {
             embed_token_ids(
                 &[vec![1; 2049]],
                 16,
-                Some(BatchBudget::CANDIDATE),
+                Some(BatchBudget::DEFAULT),
                 None,
                 |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -1556,12 +1550,18 @@ mod resolution_tests {
             revision: Some(ONNX_REVISION.into()),
         };
         let mut config = GemmaConfig::default();
+        assert_eq!(config.batch_budget, Some(BatchBudget::DEFAULT));
         let original = resolved.identity(&config).unwrap();
         config.sessions = 3;
         config.threads = Some(2);
         config.batch_size = 8;
-        config.batch_budget = Some(BatchBudget::CANDIDATE);
+        config.batch_budget = Some(BatchBudget {
+            padded_tokens: 8192,
+            attention_cells: 4_194_304,
+        });
         config.cpu_allocator = CpuAllocator::NoArena;
+        assert_eq!(original, resolved.identity(&config).unwrap());
+        config.batch_budget = None;
         assert_eq!(original, resolved.identity(&config).unwrap());
         config.sessions = 0;
         assert!(matches!(
