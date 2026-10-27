@@ -47,12 +47,46 @@ command = "/Users/you/.cargo/bin/seyk"
 args = ["mcp", "/absolute/path/to/codebase"]
 startup_timeout_sec = 60
 tool_timeout_sec = 300
+default_tools_approval_mode = "approve"
 ```
 
 Use your absolute binary and directory paths. These example timeouts are not a
 latency guarantee; large folders can need longer. See the
 [Codex MCP configuration reference](https://developers.openai.com/codex/mcp/#other-configuration-options)
 for the timeout settings.
+
+For unattended `codex exec`, set `default_tools_approval_mode = "approve"`
+in that server table. Without it, a call that requires approval fails when the
+run's approval policy is `never`. To override just one run after adding the server:
+
+```bash
+codex exec -c 'mcp_servers.seyk.default_tools_approval_mode="approve"' \
+  'Use seyk search to find the retry policy in this codebase.'
+```
+
+This setting accepts `auto`, `prompt`, `writes`, or `approve`; per-tool settings
+can override it. See the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/).
+[Codex documents `writes` as prompting for tools that are not read-only](https://learn.chatgpt.com/docs/extend/mcp#other-configuration-options).
+It auto-approves `index_status`, but still prompts for `search` and `extract`
+even with `destructiveHint = false`. Use `approve` to auto-approve all three.
+
+`search` advertises `readOnlyHint = false` because inline indexing can update
+and prune its derived local cache. `extract` also advertises false because lazy engine initialization
+can open the cache and start cache maintenance. `index_status` advertises true:
+it only observes existing state and never starts inline indexing. A background
+watcher can still update the cache independently of a status call.
+
+`approve` is appropriate when you trust the Seyk binary and authorize the agent
+to read the configured folders. The tools never edit source files or send their
+contents to external services; writes maintain the local derived cache.
+Seyk only adds/prunes its own derived, rebuildable cache and never modifies or
+deletes user files, so all three tools advertise `destructiveHint = false`.
+They also advertise `idempotentHint = true` and `openWorldHint = false`.
+Repeated calls converge for
+unchanged sources and configuration; results can change as indexing progresses.
+The agent's provider can still receive the returned evidence, as described under
+[Privacy](#privacy). Approval settings do not widen Seyk's configured roots.
 
 ## How sessions work
 
