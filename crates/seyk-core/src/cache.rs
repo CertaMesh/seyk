@@ -1203,7 +1203,9 @@ fn json_err(e: serde_json::Error) -> Error {
 
 impl EmbeddingCache for SqliteCache {
     fn parser_state_dir(&self) -> Option<PathBuf> {
-        Some(self.path.with_extension("rust-parser"))
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(".rust-parser");
+        Some(path.into())
     }
 
     fn scrub(&mut self) -> Result<CacheCleanup> {
@@ -1791,6 +1793,13 @@ impl EmbeddingCache for SqliteCache {
         tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
         mark_cleanup(&tx, None)?;
         tx.commit()?;
+        if let Some(directory) = self.parser_state_dir() {
+            match std::fs::remove_dir_all(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::io(&directory, error)),
+            }
+        }
         if self.run_scrub()?.pending {
             return Err(Error::CacheCleanupPending);
         }

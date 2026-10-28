@@ -38,6 +38,44 @@ impl ResourceProvider for LegacyRust {
 
 const SOURCE: &str = "impl Garden {\n    fn water_orchid(&self) {\n        // orchid watering keeps the plant alive during the summer heatwave.\n    }\n\n    fn shade_orchid(&self) {\n        // orchid shade prevents wilting in a dry summer heatwave.\n    }\n}\n";
 
+fn seed_main_code_descriptor(db: &std::path::Path) {
+    // Plain and main's Code preparation produce identical legacy text inputs.
+    // Replace only the descriptor with main's exact Code-kind fingerprint.
+    let fingerprint = |format| {
+        blake3::hash(&serde_json::to_vec(&(ResourceKind::Text(format), Some("symbols"))).unwrap())
+            .to_hex()
+            .to_string()
+    };
+    let changed = rusqlite::Connection::open(db)
+        .unwrap()
+        .execute(
+            "UPDATE resources SET descriptor_hash=?1 WHERE descriptor_hash=?2",
+            [
+                fingerprint(TextFormat::Code),
+                fingerprint(TextFormat::Plain),
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+#[test]
+fn parser_state_isolated_by_full_cache_filename_and_removed_by_clear() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = SqliteCache::open(temp.path().join("cache.db")).unwrap();
+    let second = SqliteCache::open(temp.path().join("cache.sqlite")).unwrap();
+    let a = first.parser_state_dir().unwrap();
+    let b = second.parser_state_dir().unwrap();
+    assert_ne!(a, b);
+    for directory in [&a, &b] {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(directory.join("marker.parsing"), b"test marker").unwrap();
+    }
+    first.clear().unwrap();
+    assert!(!a.exists());
+    assert!(b.join("marker.parsing").exists());
+}
+
 #[test]
 fn old_hits_remain_valid_until_sync_then_only_rust_preparation_changes() {
     let temp = tempfile::tempdir().unwrap();
@@ -62,6 +100,7 @@ fn old_hits_remain_valid_until_sync_then_only_rust_preparation_changes() {
         .build()
         .unwrap();
     old.index().paths([&files]).execute().unwrap();
+    seed_main_code_descriptor(&db);
     let profile = old.profile_id().to_owned();
     let id = ResourceId::from_path(&rust).unwrap();
     let cache = SqliteCache::open(&db).unwrap();
@@ -266,6 +305,7 @@ fn failed_upgrade_keeps_old_bindings_atomic_and_retryable() {
         .build()
         .unwrap();
     old.index().paths([&path]).execute().unwrap();
+    seed_main_code_descriptor(&db);
     let id = ResourceId::from_path(&path).unwrap();
     let cache = SqliteCache::open(&db).unwrap();
     let previous = cache.resource(old.profile_id(), &id).unwrap().unwrap();
@@ -387,6 +427,7 @@ fn unknown_versions_keep_cached_hits_then_reprepare_rust_during_sync() {
         .build()
         .unwrap();
     old.index().paths([&path]).execute().unwrap();
+    seed_main_code_descriptor(&db);
     let engine = SearchEngine::builder()
         .provider(Unknown { legacy: false })
         .shared_embedder(fake)

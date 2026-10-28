@@ -1,30 +1,81 @@
 //! Rust item ranges always refer to the original source, never printed tokens.
 
 use std::ops::Range;
-use std::{collections::HashSet, io::Write, path::PathBuf, sync::Mutex};
+use std::{
+    io::Write,
+    path::PathBuf,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use proc_macro2::Span;
 use syn::spanned::Spanned;
 
+use crate::process_owner::ProcessOwner;
 use crate::segment::{LineIndex, TextSegment, TextSegmenter};
 
 // Bump for pinned parser or policy changes: this versions both cache bindings
 // and crash markers, so the new parser retries previously interrupted files.
-pub(crate) const RUST_PREPARATION_VERSION: &str = "rust-symbols-v1";
+pub(crate) const RUST_PREPARATION_VERSION: &str = "rust-symbols-v2";
 const MAX_PARSE_BYTES: usize = 1024 * 1024;
 const MAX_DELIMITER_DEPTH: usize = 128;
 
+pub(crate) struct PreparedSegments {
+    pub(crate) segments: Vec<TextSegment>,
+    pub(crate) retry: bool,
+}
+
 pub(crate) struct ParserState {
     directory: Option<PathBuf>,
-    warned: Mutex<HashSet<String>>,
+    directory_ready: Mutex<bool>,
+    owner: OnceLock<ProcessOwner>,
+    warned: AtomicBool,
+    #[cfg(test)]
+    warning_count: std::sync::atomic::AtomicUsize,
 }
 
 impl ParserState {
     pub(crate) fn new(directory: Option<PathBuf>) -> Self {
         Self {
             directory: directory.map(|dir| dir.join(RUST_PREPARATION_VERSION)),
-            warned: Mutex::new(HashSet::new()),
+            directory_ready: Mutex::new(false),
+            owner: OnceLock::new(),
+            warned: AtomicBool::new(false),
+            #[cfg(test)]
+            warning_count: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    fn warn_once(&self) -> bool {
+        let first = !self.warned.swap(true, Ordering::Relaxed);
+        if first {
+            #[cfg(test)]
+            self.warning_count.fetch_add(1, Ordering::Relaxed);
+            eprintln!(
+                "warning: Rust parser recovery state requires heading-free fallback; transient ownership or access failures retry on the next sync"
+            );
+        }
+        first
+    }
+
+    fn fallback(&self, segmenter: &TextSegmenter, source: &str, retry: bool) -> PreparedSegments {
+        self.warn_once();
+        PreparedSegments {
+            segments: render(segmenter, source, vec![Unit::gap(0..source.len())]),
+            retry,
+        }
+    }
+
+    pub(crate) fn marker_path(&self, id: &crate::ResourceId, source: &str) -> Option<PathBuf> {
+        let content_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
+        let identity =
+            serde_json::to_vec(&(id.as_str(), content_hash)).expect("marker identity serializes");
+        let key = blake3::hash(&identity).to_hex().to_string();
+        self.directory
+            .as_ref()
+            .map(|directory| directory.join(format!("{key}.parsing")))
     }
 
     pub(crate) fn segment(
@@ -32,51 +83,93 @@ impl ParserState {
         id: &crate::ResourceId,
         segmenter: &TextSegmenter,
         source: &str,
-    ) -> Vec<TextSegment> {
+    ) -> PreparedSegments {
         if !within_parse_budget(source) {
-            return render(segmenter, source, vec![Unit::gap(0..source.len())]);
+            return PreparedSegments {
+                segments: render(segmenter, source, vec![Unit::gap(0..source.len())]),
+                retry: false,
+            };
         }
         let Some(directory) = &self.directory else {
-            return segment(segmenter, source);
+            return PreparedSegments {
+                segments: segment(segmenter, source),
+                retry: false,
+            };
         };
-        let key = blake3::hash(id.as_str().as_bytes()).to_hex().to_string();
-        let marker = directory.join(format!("{key}.parsing"));
-        let prepared = (|| -> std::io::Result<()> {
-            std::fs::create_dir_all(directory)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
-            }
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&marker)?;
-            writeln!(file, "{RUST_PREPARATION_VERSION}\n{}", id.as_str())?;
-            file.sync_all()
-        })();
-        if prepared.is_err() {
-            if self
-                .warned
+        {
+            let mut ready = self
+                .directory_ready
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(key)
-            {
-                eprintln!(
-                    "warning: Rust parser recovery marker exists or is unavailable; using heading-free fallback"
-                );
+                .unwrap_or_else(|e| e.into_inner());
+            if !*ready {
+                let initialized = (|| -> std::io::Result<()> {
+                    std::fs::create_dir_all(directory)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            directory,
+                            std::fs::Permissions::from_mode(0o700),
+                        )?;
+                    }
+                    Ok(())
+                })();
+                if initialized.is_err() {
+                    return self.fallback(segmenter, source, true);
+                }
+                *ready = true;
             }
-            return render(segmenter, source, vec![Unit::gap(0..source.len())]);
+        }
+        let owner = self.owner.get().cloned().or_else(|| {
+            ProcessOwner::current().inspect(|owner| {
+                let _ = self.owner.set(owner.clone());
+            })
+        });
+        let Some(owner) = owner else {
+            return self.fallback(segmenter, source, true);
+        };
+        let marker = self
+            .marker_path(id, source)
+            .expect("persistent parser directory");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&marker) {
+            Ok(mut file) => {
+                let record = serde_json::to_vec(&owner).expect("process owner serializes");
+                if file.write_all(&record).is_err() {
+                    return self.fallback(segmenter, source, true);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let dead = std::fs::read(&marker)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<ProcessOwner>(&bytes).ok())
+                    .is_some_and(|owner| owner.is_alive() == Some(false));
+                return self.fallback(segmenter, source, !dead);
+            }
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    *self
+                        .directory_ready
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = false;
+                }
+                return self.fallback(segmenter, source, true);
+            }
         }
         let pieces = segment(segmenter, source);
-        // An abort leaves this marker behind. An ordinary unwind is handled in
-        // the parser thread; successfully returning evidence clears the marker.
+        // An abort leaves the owner marker behind. No fsync is needed for
+        // process-abort recovery: the page cache survives the parser process.
         let _ = std::fs::remove_file(marker);
-        pieces
+        PreparedSegments {
+            segments: pieces,
+            retry: false,
+        }
     }
 }
 
@@ -149,6 +242,7 @@ pub(crate) fn lexical_heading(id: &crate::ResourceId, label: &str) -> String {
                     | "type"
                     | "const"
                     | "static"
+                    | "for"
             )
         })
         .map(|word| word.strip_prefix("r#").unwrap_or(word))
@@ -180,10 +274,37 @@ pub(crate) fn segment(segmenter: &TextSegmenter, source: &str) -> Vec<TextSegmen
     render(segmenter, source, units)
 }
 
-fn render(segmenter: &TextSegmenter, source: &str, units: Vec<Unit>) -> Vec<TextSegment> {
+fn assemble_units(segmenter: &TextSegmenter, units: Vec<Unit>) -> Vec<Unit> {
+    let mut queue: std::collections::VecDeque<_> = units
+        .into_iter()
+        .map(|mut unit| {
+            unit.small &= unit.range.len() < segmenter.config.min_chars;
+            unit
+        })
+        .collect();
+    let mut attached: Vec<Unit> = Vec::new();
+    while let Some(unit) = queue.pop_front() {
+        if unit.role == UnitRole::Header {
+            if let Some(next) = queue.front_mut()
+                && next.range.end - unit.range.start <= segmenter.config.max_chars
+            {
+                next.range.start = unit.range.start;
+                if next.role == UnitRole::Footer {
+                    next.role = UnitRole::Item;
+                }
+                continue;
+            }
+        } else if unit.role == UnitRole::Footer
+            && let Some(previous) = attached.last_mut()
+            && unit.range.end - previous.range.start <= segmenter.config.max_chars
+        {
+            previous.range.end = unit.range.end;
+            continue;
+        }
+        attached.push(unit);
+    }
     let mut merged: Vec<Unit> = Vec::new();
-    for mut unit in units {
-        unit.small &= unit.range.len() < segmenter.config.min_chars;
+    for unit in attached {
         if let Some(previous) = merged.last_mut()
             && previous.small
             && unit.small
@@ -197,9 +318,19 @@ fn render(segmenter: &TextSegmenter, source: &str, units: Vec<Unit>) -> Vec<Text
         }
         merged.push(unit);
     }
+    merged
+}
+
+fn trim_range(source: &str, range: Range<usize>) -> Range<usize> {
+    let text = &source[range.clone()];
+    let start = range.start + text.len() - text.trim_start().len();
+    start..start + text.trim().len()
+}
+
+fn render(segmenter: &TextSegmenter, source: &str, units: Vec<Unit>) -> Vec<TextSegment> {
     let lines = LineIndex::new(source);
     let mut out = Vec::new();
-    for unit in merged {
+    for unit in assemble_units(segmenter, units) {
         let mut start = unit.range.start;
         while start < unit.range.end {
             let limit = start
@@ -224,12 +355,13 @@ fn render(segmenter: &TextSegmenter, source: &str, units: Vec<Unit>) -> Vec<Text
                     end = start + target + newline + 1;
                 }
             }
-            let text = &source[start..end];
-            if !text.trim().is_empty() {
+            let range = trim_range(source, start..end);
+            let text = &source[range.clone()];
+            if !text.is_empty() {
                 out.push(TextSegment {
-                    byte_range: start..end,
-                    line_start: lines.line_of(start),
-                    line_end: lines.line_of(end - 1),
+                    line_start: lines.line_of(range.start),
+                    line_end: lines.line_of(range.end - 1),
+                    byte_range: range,
                     heading: unit.heading.clone(),
                     text: text.to_owned(),
                 });
@@ -240,11 +372,19 @@ fn render(segmenter: &TextSegmenter, source: &str, units: Vec<Unit>) -> Vec<Text
     out
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnitRole {
+    Item,
+    Header,
+    Footer,
+}
+
 struct Unit {
     range: Range<usize>,
     heading: Option<String>,
     container: Option<String>,
     small: bool,
+    role: UnitRole,
 }
 
 impl Unit {
@@ -254,6 +394,7 @@ impl Unit {
             heading: None,
             container: None,
             small: false,
+            role: UnitRole::Item,
         }
     }
 }
@@ -283,6 +424,40 @@ fn type_name(ty: &syn::Type) -> Option<&syn::Ident> {
     }
 }
 
+fn comment_start(source: &str, gap: Range<usize>) -> usize {
+    let mut offset = gap.start;
+    let mut lines = Vec::new();
+    for line in source[gap.clone()].split_inclusive('\n') {
+        lines.push((offset, line));
+        offset += line.len();
+    }
+    if lines
+        .last()
+        .is_some_and(|(_, line)| !line.ends_with('\n') && line.trim().is_empty())
+    {
+        lines.pop();
+    }
+    let mut start = gap.end;
+    for (offset, line) in lines.into_iter().rev() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("//!") {
+            break;
+        }
+        let comment = offset + line.len() - trimmed.len();
+        if !source[..comment]
+            .rsplit('\n')
+            .next()
+            .unwrap()
+            .trim()
+            .is_empty()
+        {
+            break;
+        }
+        start = comment;
+    }
+    start
+}
+
 struct Parsed {
     file: syn::File,
     offset: usize,
@@ -304,7 +479,7 @@ impl Parsed {
 
     fn gap(&self, source: &str, range: Range<usize>, out: &mut Vec<Unit>) {
         if !source[range.clone()].trim().is_empty() {
-            out.push(Unit::gap(range));
+            out.push(Unit::gap(trim_range(source, range)));
         }
     }
 
@@ -314,6 +489,7 @@ impl Parsed {
             heading: heading(label),
             container: heading(context),
             small: false,
+            role: UnitRole::Item,
         });
     }
 
@@ -329,8 +505,13 @@ impl Parsed {
         for item in items {
             let range = self.range(item.span());
             assert!(range.start >= cursor && range.end <= bounds.end);
-            self.gap(source, cursor..range.start, out);
+            let start = comment_start(source, cursor..range.start);
+            self.gap(source, cursor..start, out);
+            let first = out.len();
             self.item(source, item, context, out);
+            if let Some(unit) = out.get_mut(first) {
+                unit.range.start = start;
+            }
             cursor = range.end;
         }
         self.gap(source, cursor..bounds.end, out);
@@ -353,8 +534,10 @@ impl Parsed {
                     let open = self.range(brace.span.open()).end;
                     let close = self.range(brace.span.close()).start;
                     self.leaf(range.start..open, context, &label, out);
+                    out.last_mut().unwrap().role = UnitRole::Header;
                     self.items(source, open..close, items, &label, out);
                     self.leaf(close..range.end, context, &label, out);
+                    out.last_mut().unwrap().role = UnitRole::Footer;
                     return;
                 }
                 Some(label)
@@ -362,7 +545,13 @@ impl Parsed {
             syn::Item::Impl(i) => {
                 let mut label = context.to_vec();
                 if let Some(name) = type_name(&i.self_ty) {
-                    label.push(format!("impl {name}"));
+                    let implementation = match &i.trait_ {
+                        Some((path, _)) => {
+                            format!("impl {} for {name}", path.segments.last().unwrap().ident)
+                        }
+                        None => format!("impl {name}"),
+                    };
+                    label.push(implementation);
                 }
                 self.children(
                     source,
@@ -444,18 +633,26 @@ impl Parsed {
         let open = self.range(brace.span.open()).end;
         let close = self.range(brace.span.close()).start;
         self.leaf(range.start..open, parent, context, out);
+        out.last_mut().unwrap().role = UnitRole::Header;
         let mut cursor = open;
         for item in items {
             let range = self.range(item.span());
             assert!(range.start >= cursor && range.end <= close);
-            self.gap(source, cursor..range.start, out);
+            let start = comment_start(source, cursor..range.start);
+            self.gap(source, cursor..start, out);
             cursor = range.end;
             let label = label(item);
-            self.leaf(range, context, label.as_deref().unwrap_or(&[]), out);
+            self.leaf(
+                start..range.end,
+                context,
+                label.as_deref().unwrap_or(&[]),
+                out,
+            );
             out.last_mut().unwrap().small = label.is_some();
         }
         self.gap(source, cursor..close, out);
         self.leaf(close..range.end, parent, context, out);
+        out.last_mut().unwrap().role = UnitRole::Footer;
     }
 }
 
@@ -471,6 +668,8 @@ mod tests {
         for piece in &segments {
             assert!(piece.byte_range.start >= previous_end);
             assert_eq!(piece.text, source[piece.byte_range.clone()]);
+            assert!(!piece.text.split('\n').next().unwrap().trim().is_empty());
+            assert!(!piece.text.rsplit('\n').next().unwrap().trim().is_empty());
             assert!(
                 piece.text.len() <= segmenter.config.max_chars || piece.text.chars().count() == 1
             );
@@ -534,26 +733,69 @@ mod tests {
         assert_eq!(caller_spans(true), caller_spans(false));
     }
 
+    fn seed_marker(
+        state: &ParserState,
+        id: &crate::ResourceId,
+        source: &str,
+        owner: &ProcessOwner,
+    ) -> PathBuf {
+        let marker = state.marker_path(id, source).unwrap();
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, serde_json::to_vec(owner).unwrap()).unwrap();
+        marker
+    }
+
     #[test]
-    fn interrupted_parser_markers_survive_restart_and_force_fallback() {
+    fn dead_owner_marker_survives_restart_but_edited_source_retries() {
         let temp = tempfile::tempdir().unwrap();
         let id = crate::ResourceId::from_path(temp.path().join("file.rs")).unwrap();
-        let key = blake3::hash(id.as_str().as_bytes()).to_hex().to_string();
-        let dir = temp.path().join(RUST_PREPARATION_VERSION);
-        std::fs::create_dir(&dir).unwrap();
-        let marker = dir.join(format!("{key}.parsing"));
-        std::fs::write(&marker, format!("{RUST_PREPARATION_VERSION}\n{id}")).unwrap();
+        let source = "fn recovered() {}";
+        let reused_pid = ProcessOwner {
+            start: "earlier-process-start".into(),
+            ..ProcessOwner::current().unwrap()
+        };
+        let state = ParserState::new(Some(temp.path().to_owned()));
+        let marker = seed_marker(&state, &id, source, &reused_pid);
         for _ in 0..2 {
             let state = ParserState::new(Some(temp.path().to_owned()));
-            let pieces = state.segment(&id, &no_merge(), "fn recovered() {}");
-            assert!(pieces.iter().all(|p| p.heading.is_none()));
+            let prepared = state.segment(&id, &no_merge(), source);
+            assert!(!prepared.retry);
+            assert!(prepared.segments.iter().all(|p| p.heading.is_none()));
             assert!(marker.exists());
         }
-        std::fs::remove_file(&marker).unwrap();
+        let edited = state.segment(&id, &no_merge(), "fn edited() {}");
+        assert!(!edited.retry);
+        assert_eq!(edited.segments[0].heading.as_deref(), Some("fn edited"));
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn live_owner_marker_returns_retryable_fallback_until_owner_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = crate::ResourceId::from_path(temp.path().join("file.rs")).unwrap();
+        let source = "fn active() {}";
         let state = ParserState::new(Some(temp.path().to_owned()));
-        let pieces = state.segment(&id, &no_merge(), "fn recovered() {}");
-        assert_eq!(pieces[0].heading.as_deref(), Some("fn recovered"));
-        assert!(!marker.exists());
+        let marker = seed_marker(&state, &id, source, &ProcessOwner::current().unwrap());
+        let prepared = state.segment(&id, &no_merge(), source);
+        assert!(prepared.retry);
+        assert!(prepared.segments.iter().all(|p| p.heading.is_none()));
+        std::fs::remove_file(marker).unwrap();
+        let prepared = state.segment(&id, &no_merge(), source);
+        assert!(!prepared.retry);
+        assert_eq!(prepared.segments[0].heading.as_deref(), Some("fn active"));
+    }
+
+    #[test]
+    fn two_failing_resources_emit_one_engine_wide_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("not-a-directory");
+        std::fs::write(&blocked, b"blocked").unwrap();
+        let state = ParserState::new(Some(blocked));
+        for name in ["a.rs", "b.rs"] {
+            let id = crate::ResourceId::from_path(temp.path().join(name)).unwrap();
+            assert!(state.segment(&id, &no_merge(), "fn failed() {}").retry);
+        }
+        assert_eq!(state.warning_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -640,7 +882,7 @@ mod café {
             .iter()
             .find(|p| p.heading.as_deref() == Some("mod café > impl Foo > fn r#type"))
             .unwrap();
-        assert!(method.text.starts_with("#[cfg(test)]"));
+        assert!(method.text.contains("#[cfg(test)]"));
         assert!(method.text.contains("Docs for a getter"));
     }
 
@@ -662,6 +904,61 @@ mod café {
             !check(source, &no_merge())
                 .iter()
                 .any(|p| p.text.contains("fn a") && p.text.contains("fn b"))
+        );
+    }
+
+    #[test]
+    fn container_scaffolding_attaches_to_children_within_the_budget() {
+        for source in [
+            "impl Foo { fn a() {} fn b() {} }",
+            "trait Foo { fn a(); fn b(); }",
+            "mod foo { fn a() {} fn b() {} }",
+            "unsafe extern \"C\" { fn a(); fn b(); }",
+            "mod foo { impl Foo { fn a() {} } }",
+        ] {
+            let pieces = check(source, &no_merge());
+            assert!(
+                pieces.iter().all(|p| p.text.contains("fn ")),
+                "{source}: {pieces:?}"
+            );
+        }
+        let constrained = TextSegmenter::new(TextSegmenterConfig {
+            max_chars: 12,
+            target_chars: 12,
+            min_chars: 0,
+            ..Default::default()
+        });
+        check("impl Foo { fn lengthy_method_name() {} }", &constrained);
+    }
+
+    #[test]
+    fn gaps_are_trimmed_and_plain_comment_runs_attach_to_the_next_item() {
+        let source = "impl Foo {\n fn a() {}\n\n // context for b\n // another line\n fn b() {}\n\n /* detached comment */\n\n fn c() {}\n}";
+        let pieces = check(source, &no_merge());
+        let b = pieces
+            .iter()
+            .find(|p| p.heading.as_deref() == Some("impl Foo > fn b"))
+            .unwrap();
+        assert!(b.text.starts_with("// context for b"));
+        let gap = pieces
+            .iter()
+            .find(|p| p.text.contains("/* detached"))
+            .unwrap();
+        assert_eq!(gap.heading, None);
+        assert_eq!(gap.text, "/* detached comment */");
+    }
+
+    #[test]
+    fn trait_implementations_name_the_trait_and_type() {
+        let source = "impl std::fmt::Display for Foo { fn fmt(&self) {} } impl Debug for Foo { fn fmt(&self) {} }";
+        let pieces = check(source, &no_merge());
+        assert_eq!(
+            pieces[0].heading.as_deref(),
+            Some("impl Display for Foo > fn fmt")
+        );
+        assert_eq!(
+            pieces[1].heading.as_deref(),
+            Some("impl Debug for Foo > fn fmt")
         );
     }
 
@@ -748,6 +1045,7 @@ mod café {
                     &[],
                     &mut units,
                 );
+                let units = assemble_units(&segmenter, units);
                 for piece in &pieces {
                     let Some(label) = &piece.heading else {
                         continue;

@@ -37,6 +37,7 @@ mod progress;
 pub mod provider;
 mod resource;
 pub use progress::{IndexProgress, KindProgress};
+mod process_owner;
 mod rust_segment;
 pub mod segment;
 #[cfg(feature = "watch")]

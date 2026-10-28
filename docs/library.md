@@ -135,7 +135,11 @@ who only wants the engine with their own embedder can use
 
 The engine uses Rust item boundaries for local `.rs` resources classified as
 code. Functions carry labels such as `mod worker > impl Endpoint > fn new`.
+Trait implementations include the trait, for example `impl Display for Foo > fn fmt`.
 Modules, impls, traits and extern blocks are decomposed even when short.
+Container headers attach to their first child and closing braces to their last
+child when the combined slice fits the byte limit. Plain comment runs directly
+before an item attach to that item; gap and chunk edges are trimmed.
 Consecutive sibling items smaller than `min_chars` may share a chunk within
 one container; that chunk carries the container label. Longer functions split
 at line boundaries when possible, and every piece retains the function label.
@@ -152,7 +156,7 @@ items use bounded chunks without a heading. Python, TypeScript and Go retain
 paragraph segmentation. The public `TextSegmenter::segment` method also retains
 its existing language-unspecified behavior, including for `TextFormat::Code`.
 Its `version()` identifies that legacy path. The engine versions Rust preparation
-separately as `rust-symbols-v1`, without changing the cache schema or profile.
+separately as `rust-symbols-v2`, without changing the cache schema or profile.
 Changing the pinned parser or Rust preparation policy requires a new preparation
 version, which also retries resources with older crash markers.
 
@@ -174,12 +178,22 @@ they do not establish a fixed bound for all AST allocations.
 
 An ordinary parser panic or thread creation failure uses heading-free fallback.
 A hostile file can still overflow the parser stack and abort the process once.
-SQLite caches write a private, versioned marker beside the cache before parsing
-and remove it after returning. A surviving marker disables parsing of that
-resource for this parser version and emits one warning per engine, preventing
-a restart loop. A concurrent engine that sees an in-progress marker also uses
-fallback. Custom persistent caches can supply `EmbeddingCache::parser_state_dir`;
-the default in-memory cache has no restart recovery state.
+SQLite caches append `.rust-parser` to the complete database filename for a
+private marker directory. Markers bind the preparation version, resource path
+and source content hash, and record the owner's PID and process start identity.
+PID reuse therefore does not make an old marker live. Directory permissions are
+set once on lazy initialization; parsing does not fsync each file.
+
+A marker with a confirmed dead owner selects heading-free fallback for those
+exact bytes. That fallback can remain cached until the file changes, the
+preparation version changes or the cache is cleared. An edited file gets a new
+marker key and retries symbols. A live owner, unreadable ownership state or an
+unavailable marker directory selects fallback under a separate retry descriptor.
+The chunks remain searchable, and the next sync retries symbol preparation.
+Seyk emits at most one generic parser-recovery warning per engine, regardless of
+how many resources need fallback. `SqliteCache::clear` removes its marker directory.
+Custom persistent caches can supply `EmbeddingCache::parser_state_dir`; the
+in-memory cache has no restart recovery state.
 
 ## PDF parser logs and panics
 
