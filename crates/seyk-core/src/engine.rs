@@ -2969,6 +2969,61 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    #[test]
+    fn rust_corpus_preparation_volume() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let segmenter = TextSegmenter::default();
+        let mut sizes: [Vec<usize>; 2] = Default::default();
+        let mut body_bytes = [0usize; 2];
+        let mut input_bytes = [0usize; 2];
+        let mut files = 0;
+        for entry in walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|e| !matches!(e.file_name().to_str(), Some("target" | ".git" | ".anvil")))
+        {
+            let entry = entry.unwrap();
+            if !entry.file_type().is_file()
+                || entry.path().extension().is_none_or(|ext| ext != "rs")
+            {
+                continue;
+            }
+            let source = std::fs::read_to_string(entry.path()).unwrap();
+            let stem = entry.path().file_stem().unwrap().to_str();
+            for (index, segments) in [
+                segmenter.segment(&source, TextFormat::Code),
+                crate::rust_segment::segment(&segmenter, &source),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for segment in segments {
+                    let title = segment_title(stem, segment.heading.as_deref());
+                    sizes[index].push(segment.text.len());
+                    body_bytes[index] += segment.text.len();
+                    input_bytes[index] +=
+                        segment.text.len() + title.as_ref().map_or(0, String::len);
+                }
+            }
+            files += 1;
+        }
+        let mut metrics = Vec::new();
+        for (index, chunks) in sizes.iter_mut().enumerate() {
+            chunks.sort_unstable();
+            assert!(!chunks.is_empty());
+            let middle = chunks.len() / 2;
+            let median = if chunks.len().is_multiple_of(2) {
+                (chunks[middle - 1] + chunks[middle]) as f64 / 2.0
+            } else {
+                chunks[middle] as f64
+            };
+            metrics.push(serde_json::json!({"mode": (["legacy", "symbols"][index]), "segments": chunks.len(), "body_bytes": body_bytes[index], "title_and_body_bytes": input_bytes[index], "median_chunk_bytes": median}));
+        }
+        eprintln!(
+            "RUST_CORPUS_VOLUME {}",
+            serde_json::json!({"files": files, "metrics": metrics})
+        );
+    }
+
     #[cfg(feature = "pdf")]
     #[test]
     fn clean_pdf_replacement_is_reused_without_stale_diagnostic_skips() {

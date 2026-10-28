@@ -349,3 +349,85 @@ fn uncached_lexical_fallback_uses_the_same_rust_preparation() {
         assert!(SOURCE.contains(&engine.extract(&hit).unwrap().text));
     }
 }
+
+#[test]
+fn unknown_versions_keep_cached_hits_then_reprepare_rust_during_sync() {
+    struct Unknown {
+        legacy: bool,
+    }
+    impl ResourceProvider for Unknown {
+        fn list(&self, scope: &ResourceScope) -> seyk_core::Result<Vec<ProvidedResource>> {
+            let mut resources = if self.legacy {
+                LegacyRust.list(scope)?
+            } else {
+                FsProvider.list(scope)?
+            };
+            for resource in &mut resources {
+                resource.version = ResourceVersion::unknown();
+            }
+            Ok(resources)
+        }
+        fn read(&self, id: &ResourceId) -> seyk_core::Result<Vec<u8>> {
+            FsProvider.read(id)
+        }
+        fn version(&self, _: &ResourceId) -> seyk_core::Result<ResourceVersion> {
+            Ok(ResourceVersion::unknown())
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let path = root.join("symbols.rs");
+    fs::write(&path, SOURCE).unwrap();
+    let db = root.join("cache.sqlite");
+    let fake = Arc::new(FakeEmbedder::new(Dimension::D128, "unknown-rust"));
+    let old = SearchEngine::builder()
+        .provider(Unknown { legacy: true })
+        .shared_embedder(fake.clone())
+        .cache(SqliteCache::open(&db).unwrap())
+        .build()
+        .unwrap();
+    old.index().paths([&path]).execute().unwrap();
+    let engine = SearchEngine::builder()
+        .provider(Unknown { legacy: false })
+        .shared_embedder(fake)
+        .cache(SqliteCache::open(&db).unwrap())
+        .build()
+        .unwrap();
+    let result = engine
+        .search("water_orchid")
+        .paths([&path])
+        .sync(false)
+        .lexical_fallback(true)
+        .execute()
+        .unwrap();
+    assert!(!result.hits.is_empty());
+    assert!(result.degraded.is_none());
+    assert!(result.hits.iter().all(|h| h.heading.is_none()));
+    for hit in result.hits {
+        assert!(SOURCE.contains(&engine.extract(&hit).unwrap().text));
+    }
+    let upgraded = engine.index().paths([&path]).execute().unwrap();
+    assert_eq!(upgraded.sync.resources_updated, 1);
+    let result = engine
+        .search("water_orchid")
+        .paths([&path])
+        .sync(false)
+        .execute()
+        .unwrap();
+    assert!(
+        result
+            .hits
+            .iter()
+            .any(|h| h.heading.as_deref() == Some("impl Garden > fn water_orchid"))
+    );
+    assert_eq!(
+        engine
+            .index()
+            .paths([&path])
+            .execute()
+            .unwrap()
+            .sync
+            .segments_embedded,
+        0
+    );
+}

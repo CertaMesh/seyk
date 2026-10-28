@@ -8,6 +8,8 @@ use syn::spanned::Spanned;
 
 use crate::segment::{LineIndex, TextSegment, TextSegmenter};
 
+// Bump for pinned parser or policy changes: this versions both cache bindings
+// and crash markers, so the new parser retries previously interrupted files.
 pub(crate) const RUST_PREPARATION_VERSION: &str = "rust-symbols-v1";
 const MAX_PARSE_BYTES: usize = 1024 * 1024;
 const MAX_DELIMITER_DEPTH: usize = 128;
@@ -421,8 +423,10 @@ impl Parsed {
             // Macro token trees and future syntax remain opaque, with no guessed label.
             _ => None,
         };
+        let mergeable =
+            leaf.is_some() || matches!(item, syn::Item::Use(_) | syn::Item::ExternCrate(_));
         self.leaf(range, context, leaf.as_deref().unwrap_or(&[]), out);
-        out.last_mut().unwrap().small = true;
+        out.last_mut().unwrap().small = mergeable;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -446,8 +450,9 @@ impl Parsed {
             assert!(range.start >= cursor && range.end <= close);
             self.gap(source, cursor..range.start, out);
             cursor = range.end;
-            self.leaf(range, context, label(item).as_deref().unwrap_or(&[]), out);
-            out.last_mut().unwrap().small = true;
+            let label = label(item);
+            self.leaf(range, context, label.as_deref().unwrap_or(&[]), out);
+            out.last_mut().unwrap().small = label.is_some();
         }
         self.gap(source, cursor..close, out);
         self.leaf(close..range.end, parent, context, out);
@@ -658,6 +663,17 @@ mod café {
                 .iter()
                 .any(|p| p.text.contains("fn a") && p.text.contains("fn b"))
         );
+    }
+
+    #[test]
+    fn opaque_items_never_inherit_a_sibling_heading() {
+        let pieces = check(
+            "impl Foo { fn a() {} opaque!(); fn b() {} }",
+            &TextSegmenter::default(),
+        );
+        let opaque = pieces.iter().find(|p| p.text.contains("opaque!")).unwrap();
+        assert_eq!(opaque.heading, None);
+        assert_eq!(opaque.text, "opaque!();");
     }
 
     #[test]
