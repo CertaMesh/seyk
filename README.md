@@ -20,7 +20,9 @@ library (pre-1.0).
 
 > **Status:** pre-1.0. Install from source for now; the model is a 0.5 GB
 > download. Indexing can use several GB of memory on dense files, and a fix is
-> in progress ([#95](https://github.com/CertaMesh/seyk/pull/95)).
+> in progress ([#95](https://github.com/CertaMesh/seyk/pull/95)). The first
+> [agent evaluation](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md#agent-evaluation)
+> shows no agent advantage yet.
 
 ## What you can do with it
 
