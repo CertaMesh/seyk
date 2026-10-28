@@ -1232,7 +1232,8 @@ impl SeykServer {
             open_world_hint = false
         ),
         description = "Hybrid search over local files (Markdown, text, code, PDF text, images, \
-        and audio once its models are installed) by meaning, keywords and file names. Returns \
+        and audio once its models are installed) by meaning, keywords and file names. \
+        Use for conceptual where/how/what-happens questions. Use grep for exact identifiers and every occurrence. Returns \
         ranked passages as path + location + preview. Read the files at those locations, or call \
         `extract`, before answering. lines reflect the indexed version; call extract for verified text. Compact hits are the default; detail: full restores descriptors and diagnostics. Pass one phrasing in `query`, or several phrasings of the same need in `queries` (never both)."
     )]
