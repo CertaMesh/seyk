@@ -131,6 +131,56 @@ re-indexing) and `pdf-render` (PDF text and page rendering). A library user
 who only wants the engine with their own embedder can use
 `default-features = false` and opt into `audio` or `audio-stt` separately.
 
+## Rust source segmentation
+
+The engine uses Rust item boundaries for local `.rs` resources classified as
+code. Functions carry labels such as `mod worker > impl Endpoint > fn new`.
+Modules, impls, traits and extern blocks are decomposed even when short.
+Consecutive sibling items smaller than `min_chars` may share a chunk within
+one container; that chunk carries the container label. Longer functions split
+at line boundaries when possible, and every piece retains the function label.
+Labels contain source identifiers, without name resolution or macro expansion.
+
+Every chunk is an original UTF-8 source slice with exact byte and line ranges.
+Rust chunks have no overlap and respect `max_chars`, including gaps. A budget
+smaller than one UTF-8 scalar consumes that scalar to ensure progress. The
+embedding title and hit heading keep the full label; the lexical heading field
+contains identifiers only. Extraction still verifies the whole-resource hash.
+
+Parsing is best effort. Invalid syntax, opaque macro bodies and unrecognized
+items use bounded chunks without a heading. Python, TypeScript and Go retain
+paragraph segmentation. The public `TextSegmenter::segment` method also retains
+its existing language-unspecified behavior, including for `TextFormat::Code`.
+Its `version()` identifies that legacy path. The engine versions Rust preparation
+separately as `rust-symbols-v1`, without changing the cache schema or profile.
+Changing the pinned parser or Rust preparation policy requires a new preparation
+version, which also retries resources with older crash markers.
+
+The first sync reparses Rust resources, retaining vectors only for byte-identical
+model inputs under the same profile. Cached searches can serve the previous
+valid chunks until sync replaces them atomically. After a binary downgrade, the
+older binary can likewise serve the newer chunks until its own sync. Vector
+input hashes and extraction checks remain in force in both directions.
+
+Rust parsing uses pinned `syn` and `proc-macro2` with `span-locations`. Cargo
+unifies that feature for library users too. Procedural macros continue to use
+compiler-provided spans. Each engine parse runs on a short-lived thread with
+an 8 MiB stack, releasing its source map at thread exit without changing the
+caller's spans. Files larger than 1 MiB skip parsing. A conservative preflight
+also skips delimiter nesting, prefix-operator runs or closure-bar runs beyond
+128. It counts source bytes, including strings and comments, so some valid
+files use fallback. These limits bound parser input and stack reservation;
+they do not establish a fixed bound for all AST allocations.
+
+An ordinary parser panic or thread creation failure uses heading-free fallback.
+A hostile file can still overflow the parser stack and abort the process once.
+SQLite caches write a private, versioned marker beside the cache before parsing
+and remove it after returning. A surviving marker disables parsing of that
+resource for this parser version and emits one warning per engine, preventing
+a restart loop. A concurrent engine that sees an in-progress marker also uses
+fallback. Custom persistent caches can supply `EmbeddingCache::parser_state_dir`;
+the default in-memory cache has no restart recovery state.
+
 ## PDF parser logs and panics
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
