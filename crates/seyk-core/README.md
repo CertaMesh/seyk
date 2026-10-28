@@ -9,7 +9,7 @@ Source content, queries and vectors stay local.
 
 ```toml
 [dependencies]
-seyk-core = "0.1.0"
+seyk-core = "0.2.0"
 ```
 
 [API documentation](https://docs.rs/seyk-core) ·

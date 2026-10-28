@@ -13,7 +13,7 @@ categories = ["multimedia::audio", "science"]
 include = ["/src/**", "/README.md", "/LICENSE*", "/NOTICE*", "/assets/**"]
 
 [dependencies]
-seyk-core = { path = "../seyk-core", version = "0.1.0", features = ["audio"] }
+seyk-core = { path = "../seyk-core", version = "0.2.0", features = ["audio"] }
 ort = "=2.0.0-rc.13"
 rustfft = "=6.4.1"
 sha2 = "0.10"

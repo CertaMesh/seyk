@@ -11,6 +11,8 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
 ### Added
 
 - Opt-in CPU allocator policies (`no-arena` and `arena-shrink`) and content-free
@@ -97,8 +99,8 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
   payloads keep their fields; only the shared `schema_version` label changes
   from 10 to 11. Installed v10 CLI extract rejects v11 documents; v11 extract
   accepts full CLI documents from v2 through v11. MCP documents remain invalid
-  CLI extraction input. Consumers pinning v10 or using `deny_unknown_fields`
-  must update explicitly; full restores fields, not exact-object compatibility.
+  CLI extraction input. Consumers pinning protocol 10 or earlier, or using
+  `deny_unknown_fields`, must update explicitly; full restores fields, not exact-object compatibility.
   See the [complete compatibility matrix](docs/mcp.md#protocol-compatibility).
 
 - Text embedding calls now default to budgets of 5120 padded tokens and 4194304
@@ -284,5 +286,6 @@ third-party licence notices; build this version from source.
 - Prebuilt binaries for macOS (Apple Silicon), Linux and Windows, with an
   install script.
 
-[Unreleased]: https://github.com/CertaMesh/seyk/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/CertaMesh/seyk/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/CertaMesh/seyk/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CertaMesh/seyk/releases/tag/v0.1.0

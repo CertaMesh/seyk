@@ -209,7 +209,7 @@ and paths only, not file contents, so a renamed secret is not detected. See [Sup
 
 ## Status and limitations
 
-Seyk is at version 0.1.0. Know these before you adopt it:
+Seyk is at version 0.2.0. Know these before you adopt it:
 
 - **CPU only.** No GPU or Neural Engine provider is enabled yet.
 - **The first search of a large folder is slow.** A historical measurement on a
