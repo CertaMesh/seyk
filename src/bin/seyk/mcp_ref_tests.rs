@@ -162,3 +162,30 @@ fn rejects_unknown_tags_noncanonical_media_and_size_boundary_inputs() {
         .unwrap();
     assert!(encode(&s, None).is_err());
 }
+
+#[test]
+fn literal_negative_vectors_are_rejected() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/mcp-refs-invalid.json"
+    )))
+    .unwrap();
+    for v in vectors.as_array().unwrap() {
+        assert!(
+            decode(v["ref"].as_str().unwrap(), v["path"].as_str()).is_err(),
+            "{}",
+            v["name"]
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_uri_is_lossless_even_when_path_would_allow_omission() {
+    let mut s = sample();
+    s.resource = ResourceId::from_path("/fixture/文 café/😀.txt").unwrap();
+    let explicit = encode(&s, None).unwrap();
+    let omitted = encode(&s, Some("/fixture/文 café/😀.txt")).unwrap();
+    assert_ne!(explicit, omitted);
+    assert!(decode(&explicit, Some("/fixture/文 café/😀.txt")).unwrap() == s);
+}

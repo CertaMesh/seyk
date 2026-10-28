@@ -1,0 +1,362 @@
+[
+  {
+    "name": "truncated-0",
+    "hex": "",
+    "ref": "seyk-ref-v1:",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-1",
+    "hex": "53",
+    "ref": "seyk-ref-v1:Uw",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-2",
+    "hex": "5352",
+    "ref": "seyk-ref-v1:U1I",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-3",
+    "hex": "535201",
+    "ref": "seyk-ref-v1:U1IB",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-4",
+    "hex": "53520101",
+    "ref": "seyk-ref-v1:U1IBAQ",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-5",
+    "hex": "5352010105",
+    "ref": "seyk-ref-v1:U1IBAQU",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-6",
+    "hex": "535201010501",
+    "ref": "seyk-ref-v1:U1IBAQUB",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-7",
+    "hex": "53520101050100",
+    "ref": "seyk-ref-v1:U1IBAQUBAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-8",
+    "hex": "5352010105010000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-9",
+    "hex": "535201010501000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-10",
+    "hex": "53520101050100000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-11",
+    "hex": "5352010105010000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-12",
+    "hex": "535201010501000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-13",
+    "hex": "53520101050100000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-14",
+    "hex": "5352010105010000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-15",
+    "hex": "535201010501000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-16",
+    "hex": "53520101050100000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-17",
+    "hex": "5352010105010000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-18",
+    "hex": "535201010501000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-19",
+    "hex": "53520101050100000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-20",
+    "hex": "5352010105010000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-21",
+    "hex": "535201010501000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-22",
+    "hex": "53520101050100000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-23",
+    "hex": "5352010105010000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-24",
+    "hex": "535201010501000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-25",
+    "hex": "53520101050100000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-26",
+    "hex": "5352010105010000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-27",
+    "hex": "535201010501000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-28",
+    "hex": "53520101050100000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-29",
+    "hex": "5352010105010000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-30",
+    "hex": "535201010501000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-31",
+    "hex": "53520101050100000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-32",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-33",
+    "hex": "535201010501000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-34",
+    "hex": "53520101050100000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-35",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-36",
+    "hex": "535201010501000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-37",
+    "hex": "53520101050100000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-38",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-39",
+    "hex": "535201010501000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "truncated-40",
+    "hex": "53520101050100000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "domain",
+    "hex": "0052010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:AFIBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "version",
+    "hex": "5352020105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1ICAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "flags",
+    "hex": "5352010205010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAgUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "locator",
+    "hex": "53520101ff010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAf8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "modality",
+    "hex": "5352010105ff0000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQX_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "option",
+    "hex": "5352010105010002000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "media",
+    "hex": "5352010105010000ff0000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAD_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "trailing-byte",
+    "hex": "535201010501000000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "overlong-size",
+    "hex": "535201010501800000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "overflow-size",
+    "hex": "535201010501ffffffffffffffffffff00000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUB_____________wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "noncanonical-pdf-media",
+    "hex": "5352010105010000020f6170706c69636174696f6e2f7064660000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAACD2FwcGxpY2F0aW9uL3BkZgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "invalid-utf8-media",
+    "hex": "53520101050100000201ff0000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAACAf8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "missing-path",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": null
+  },
+  {
+    "name": "relative-path",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "relative"
+  },
+  {
+    "name": "padding",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "whitespace",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "outer-version",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v2:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "invalid-base64",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA!",
+    "path": "/fixture/a"
+  },
+  {
+    "name": "unused-base64-bits",
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+    "path": "/fixture/a"
+  }
+]
