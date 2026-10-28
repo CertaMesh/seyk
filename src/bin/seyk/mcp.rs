@@ -834,11 +834,7 @@ impl SeykServer {
             req = req.exclude(g);
         }
         let result = req.execute()?;
-        let warnings = wire::query_warnings(&result.stats.sync, |resource| {
-            resource
-                .to_file_path()
-                .is_some_and(|path| self.confine(&path).is_ok())
-        });
+        let warnings = self.query_warnings(&result.stats.sync);
         let mut resp = to_response(result);
         resp.index_warnings = warnings;
         if loading {
@@ -850,6 +846,32 @@ impl SeykServer {
         resp.index_progress = self.root_progress();
         resp.index_diagnostics = self.diagnostics()?;
         Ok(resp)
+    }
+
+    fn query_warnings(&self, sync: &seyk::SyncStats) -> Option<wire::IndexWarnings> {
+        let roots: Vec<_> = self
+            .roots
+            .iter()
+            .flat_map(|root| {
+                [root.uri_path(), root.authorize_path()]
+                    .into_iter()
+                    .filter_map(|path| {
+                        ResourceId::from_path(path)
+                            .ok()
+                            .and_then(|id| id.to_file_path())
+                    })
+            })
+            .collect();
+        let mut allowed = std::collections::HashMap::new();
+        wire::query_warnings(sync, |resource| {
+            *allowed.entry(resource.clone()).or_insert_with(|| {
+                resource.to_file_path().is_some_and(|path| {
+                    // Diagnostics describe attempted inputs, including removed files.
+                    // Match pinned root components without resolving the resource.
+                    roots.iter().any(|root| path.starts_with(root))
+                })
+            })
+        })
     }
 
     fn resolve_search_path(&self, path: &Path) -> Result<PathBuf> {
@@ -1875,6 +1897,161 @@ mod tests {
                 .unwrap()
                 .starts_with(outer.path().canonicalize().unwrap())
         );
+    }
+
+    #[test]
+    fn query_warnings_retain_missing_resources_and_filter_by_root_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server =
+            SeykServer::new(vec![root.clone()], Hub::new(Box::new(fake_engine), false)).unwrap();
+        let missing = root.join("deleted.pdf");
+        let broken = root.join("broken.pdf");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("absent"), &broken).unwrap();
+        let mut sync = seyk::SyncStats::default();
+        for path in [
+            &missing,
+            &missing,
+            &broken,
+            &root.with_extension("sibling").join("outside.pdf"),
+        ] {
+            let resource = ResourceId::from_path(path).unwrap();
+            sync.skipped.push(seyk::SkippedResource {
+                code: Default::default(),
+                resource: resource.clone(),
+                path: Some(path.clone()),
+                reason: "synthetic".into(),
+            });
+            for page in 1..=200 {
+                sync.page_diagnostics.push(seyk::PageDiagnostic {
+                    code: Default::default(),
+                    resource: resource.clone(),
+                    page,
+                    reason: "synthetic".into(),
+                });
+            }
+        }
+        assert_eq!(
+            server.query_warnings(&sync).unwrap(),
+            wire::IndexWarnings {
+                skipped_resources: 2,
+                unindexed_pages: 400
+            }
+        );
+        assert!(server.confine(&missing).is_err());
+        assert!(server.confine(&broken).is_err());
+    }
+
+    fn assert_warning_projections(response: Response, expected: Option<(usize, usize)>) {
+        for detail in [wire::Detail::Slim, wire::Detail::Full] {
+            let projected =
+                wire::project(wire::response_value(&response).unwrap(), detail).unwrap();
+            match expected {
+                Some((resources, pages)) => assert_eq!(
+                    projected["index_warnings"],
+                    serde_json::json!({
+                        "skipped_resources": resources, "unindexed_pages": pages
+                    })
+                ),
+                None => assert!(projected.get("index_warnings").is_none()),
+            }
+            assert_eq!(
+                projected["index"],
+                serde_json::to_value(&response.index).unwrap()
+            );
+            assert_eq!(
+                projected.get("degraded"),
+                wire::response_value(&response).unwrap().get("degraded")
+            );
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn query_warnings_are_isolated_between_disjoint_shared_hub_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad");
+        let clean = dir.path().join("clean");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::create_dir_all(&clean).unwrap();
+        std::fs::write(
+            bad.join("bad.pdf"),
+            super::pdf_fixture::malformed_cmap(true),
+        )
+        .unwrap();
+        std::fs::write(clean.join("good.txt"), "quartz pebble").unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let a = SeykServer::new(vec![bad], hub.clone()).unwrap();
+        let b = SeykServer::new(vec![clean], hub).unwrap();
+        assert_warning_projections(search(&a, "quartz"), Some((1, 1)));
+        assert_warning_projections(search(&b, "quartz"), None);
+        assert_warning_projections(search(&a, "quartz"), Some((1, 1)));
+        assert_warning_projections(search(&b, "quartz"), None);
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn query_warnings_ignore_overlapping_watcher_inventory_and_follow_query_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        let child = parent.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(
+            child.join("bad.pdf"),
+            super::pdf_fixture::malformed_cmap(true),
+        )
+        .unwrap();
+        let good = parent.join("good.txt");
+        std::fs::write(&good, "quartz pebble").unwrap();
+        let hub = Hub::new(Box::new(fake_engine), false);
+        let server = SeykServer::new(vec![parent.clone()], hub.clone()).unwrap();
+        let sibling = SeykServer::new(vec![child.clone()], hub.clone()).unwrap();
+        let indexed = hub
+            .engine()
+            .unwrap()
+            .index()
+            .paths([&parent])
+            .execute()
+            .unwrap();
+        for root in [&parent, &child] {
+            hub.diagnostics
+                .lock()
+                .unwrap()
+                .insert(root.clone(), WatcherDiagnostics::from_sync(&indexed.sync));
+        }
+        let cells = [parent.clone(), child.clone()]
+            .map(|root| (root, Arc::new(Mutex::new(IndexStatus::Ready))));
+        *hub.watched.lock().unwrap() = cells.to_vec();
+        let mut server = server;
+        server.watchers = Arc::new(cells.iter().map(|(_, cell)| cell.clone()).collect());
+        for state in [
+            IndexStatus::Ready,
+            IndexStatus::LoadingModel,
+            IndexStatus::Indexing {
+                segments_done: 1,
+                segments_total: 2,
+            },
+            IndexStatus::PassFailed {
+                error: "synthetic".into(),
+            },
+            stopped(),
+        ] {
+            for (_, cell) in &cells {
+                *cell.lock().unwrap() = state.clone();
+            }
+            let active = !matches!(state, IndexStatus::Stopped { .. });
+            let response = search(&server, "quartz");
+            assert!(response.index_diagnostics.pages_total > 0);
+            assert_warning_projections(response, if active { None } else { Some((1, 1)) });
+            assert_warning_projections(
+                server
+                    .run_search(params(std::slice::from_ref(&good)))
+                    .unwrap(),
+                None,
+            );
+        }
+        assert_warning_projections(search(&sibling, "quartz"), Some((1, 1)));
     }
 
     #[cfg(unix)]

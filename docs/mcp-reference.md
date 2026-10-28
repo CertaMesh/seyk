@@ -24,8 +24,8 @@ of Rust enum layout or JSON field ordering.
 
 All five original metadata fields survive decoding. Extraction uses modality
 and media type for dispatch, verifies content_hash, and returns the original
-metadata including size_bytes and modified_ns. None is replaced by current
-file metadata.
+metadata including size_bytes and modified_ns.
+No field is replaced by current file metadata.
 
 | Locator tag | Payload in order |
 |---|---|
@@ -59,7 +59,9 @@ filesystem access. Otherwise it stores the complete canonical URI, including
 percent-encoded non-UTF8 file paths. URI decoding must round-trip canonically.
 An omitted-URI reference requires the original absolute path; there is no
 working-directory, tilde or root fallback. With an explicit URI, display path
-is ignored. All display ranges are ignored for selection.
+is ignored. The decoder also accepts an explicit URI when the encoder would
+omit it for the supplied path; decoding remains lossless, but does not enforce
+that choice of representation. All display ranges are ignored for selection.
 
 | Bound | Maximum |
 |---|---|
@@ -83,6 +85,7 @@ hashes are never inferred from current bytes.
 
 Literal synthetic vectors in `tests/fixtures/mcp-refs.json` contain descriptor,
 binary hex and exact base64url values. Their independent stdlib generator is
-`scripts/test/make_mcp_ref_vectors.py`. Codec and selection tests check them at
+`scripts/test/make_mcp_ref_vectors.py`; it also freezes rejected inputs in
+`tests/fixtures/mcp-refs-invalid.json`. Codec and selection tests check them at
 separate layers. The [MCP input contract](mcp.md#extract-selection) defines the
 strict selection table and access checks.
