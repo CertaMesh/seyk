@@ -32,14 +32,6 @@ retrieval benchmark before it merges.
   claim about agents only if it wins on one of those without losing on the
   other.
 
-### Install in one step
-
-- **For:** everyone; today Seyk is built from source.
-- **Gap:** prebuilt binaries and an install script are not released yet.
-- **Done when:** signed release binaries exist for macOS (Apple Silicon), Linux
-  (x86_64, ARM64) and Windows (x86_64), and the README quickstart works on a
-  clean machine without a Rust toolchain.
-
 ## Next
 
 ### Agent results fit the context budget
@@ -52,10 +44,9 @@ retrieval benchmark before it merges.
 ### Embed Seyk from crates.io with a stable contract
 
 - **For:** Rust developers building Seyk into an application.
-- **Gap:** Git dependency only; several public types are marked unstable; the
-  extraction output has no stability promise yet.
-- **Done when:** the crates are published, a stability and migration policy is
-  documented, and the [embedding example](../examples/embed_search.rs) runs in
+- **Gap:** the crates are on crates.io at 0.2.0, but several public types are
+  marked unstable and the extraction output has no stability promise yet.
+- **Done when:** a stability and migration policy is documented, and the [embedding example](../examples/embed_search.rs) runs in
   CI.
 
 ### Model files are checked by content
@@ -83,6 +74,13 @@ retrieval benchmark before it merges.
   adopted only if the public benchmark improves.
 - **PDF parser isolation:** run the PDF parser in a separate process once a
   library integration needs it.
+
+## Done
+
+- **Install in one step (v0.2.0):** release archives for macOS (Apple
+  Silicon), Linux (x86_64, ARM64) and Windows (x86_64) ship with SHA-256 files
+  and build provenance attestations. `scripts/install.sh` installs them without
+  a Rust toolchain, and `cargo install --locked seyk` works from crates.io.
 
 ## Not planned
 

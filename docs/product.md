@@ -111,8 +111,9 @@ Treat it as sensitive. See [Caching and storage](caching-and-storage.md).
 
 ## Status
 
-Seyk is at 0.2.0. Install from source; prebuilt binaries return with the next
-release. The crates are not on crates.io yet. Video and OCR are not
+Seyk is at 0.2.0. Prebuilt binaries are on the
+[release page](https://github.com/CertaMesh/seyk/releases/tag/v0.2.0), and the
+crates are on crates.io. Video and OCR are not
 implemented. Vector search is an exact comparison against every cached f32
 vector by default. An experimental, opt-in Photo Anchor scan for standalone
 images shortlists candidates from compressed codes and reranks them with f32;

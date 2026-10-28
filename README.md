@@ -18,8 +18,8 @@ changed since indexing. It never writes answers; your agent reads the evidence
 and decides what it means. Seyk runs as an MCP server, a CLI, and a Rust
 library (pre-1.0).
 
-> **Status:** pre-1.0. Install from source for now; the model is a 0.5 GB
-> download. Indexing can use several GB of memory on dense files, and a fix is
+> **Status:** pre-1.0. Install a prebuilt binary or with Cargo; the model is a
+> 0.5 GB download. Indexing can use several GB of memory on dense files, and a fix is
 > in progress ([#95](https://github.com/CertaMesh/seyk/pull/95)). The first
 > [agent evaluation](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md#agent-evaluation)
 > shows no agent advantage yet.
@@ -34,8 +34,8 @@ library (pre-1.0).
   meeting recordings and get back a line range, a page, or a time window. For
   code, Seyk complements grep; it does not parse functions yet.
 - **Embed retrieval in a Rust application.** Link the library, point it at a
-  folder, get hits with byte ranges, with no server to run. Pre-1.0 and not on
-  crates.io yet; see [examples/embed_search.rs](https://github.com/CertaMesh/seyk/blob/main/examples/embed_search.rs).
+  folder, get hits with byte ranges, with no server to run. Pre-1.0, on
+  crates.io; see [examples/embed_search.rs](https://github.com/CertaMesh/seyk/blob/main/examples/embed_search.rs).
 
 ## See it work
 
@@ -96,15 +96,27 @@ if a customer outgrows one machine.
 
 ## Quickstart
 
-Build and install from source (Rust 1.89 or newer):
+Install the prebuilt binary on macOS (Apple Silicon) or Linux (x86_64 and
+ARM64). It goes to `~/.local/bin` and needs no Rust toolchain:
 
 ```bash
-cargo install --locked --git https://github.com/CertaMesh/seyk
+SEYK_VERSION=v0.2.0
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+  "https://raw.githubusercontent.com/CertaMesh/seyk/refs/tags/$SEYK_VERSION/scripts/install.sh" \
+  | env SEYK_VERSION="$SEYK_VERSION" sh
 ```
 
-Prebuilt binaries for macOS (Apple Silicon), Linux (x86_64 and ARM64) and
-Windows (x86_64) return with the next release. Linux needs glibc 2.38 or newer,
-and there is no Intel Mac build.
+Linux needs glibc 2.38 or newer, and there is no Intel Mac build. Windows
+(x86_64) archives are on the [release page](https://github.com/CertaMesh/seyk/releases/tag/v0.2.0).
+
+Or install with Cargo (Rust 1.89 or newer):
+
+```bash
+cargo install --locked seyk
+```
+
+To build the latest source instead, run
+`cargo install --locked --git https://github.com/CertaMesh/seyk`.
 
 Download the model weights once (about 0.5 GB):
 
@@ -159,11 +171,11 @@ happy for that agent to read. See [Use Seyk from an agent (MCP)](https://github.
 
 ## Use Seyk as a Rust library
 
-The crates are **not on crates.io yet**. Use a Git dependency:
+The crates are on crates.io. Add the library:
 
 ```toml
 [dependencies]
-seyk = { git = "https://github.com/CertaMesh/seyk" }
+seyk = "0.2"
 ```
 
 ```rust
