@@ -366,6 +366,9 @@ impl SearchEngineBuilder {
         let profile_id = profile.id();
         let mut cache = self.cache.unwrap_or_else(|| Box::new(MemoryCache::new()));
         cache.register_profile(&profile_id, &profile)?;
+        let rust_parser = Arc::new(crate::rust_segment::ParserState::new(
+            cache.parser_state_dir(),
+        ));
         Ok(SearchEngine {
             provider: self.provider,
             extractors: self.extractors,
@@ -381,6 +384,7 @@ impl SearchEngineBuilder {
             #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
             scrubber_stop: Arc::new(ScrubStop::default()),
+            rust_parser,
             segmenter: self.segmenter,
             profile,
             profile_id,
@@ -416,6 +420,7 @@ pub struct SearchEngine {
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
     scrubber_stop: Arc<ScrubStop>,
+    rust_parser: Arc<crate::rust_segment::ParserState>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
     profile_id: String,
@@ -550,6 +555,7 @@ impl SearchEngine {
     fn lexical_fallback(&self) -> Result<Self> {
         let mut engine = Self::lexical_with_provider(self.provider.clone())?;
         engine.segmenter = self.segmenter.clone();
+        engine.rust_parser = self.rust_parser.clone();
         engine.max_audio_duration_secs = self.max_audio_duration_secs;
         Ok(engine)
     }
@@ -838,6 +844,13 @@ impl SearchEngine {
                 crate::pdf::TEXT_VERSION,
                 crate::pdf::PREPARATION_VERSION,
                 &self.pdf_capabilities(),
+            ]));
+        }
+        if is_rust_resource(r) {
+            return Ok(input_hash(&[
+                &r.fingerprint(),
+                crate::rust_segment::RUST_PREPARATION_VERSION,
+                &self.segmenter.version(),
             ]));
         }
         Ok(r.fingerprint())
@@ -1692,9 +1705,13 @@ impl SearchEngine {
                 }
                 let text = String::from_utf8(bytes).map_err(|_| "not valid UTF-8".to_string())?;
                 let stem = &r.title;
+                let segments = if is_rust_resource(r) {
+                    self.rust_parser.segment(&r.id, &self.segmenter, &text)
+                } else {
+                    self.segmenter.segment(&text, format)
+                };
                 Ok((
-                    self.segmenter
-                        .segment(&text, format)
+                    segments
                         .into_iter()
                         .map(|s| {
                             let title = segment_title(stem.as_deref(), s.heading.as_deref());
@@ -1726,6 +1743,10 @@ impl SearchEngine {
             )),
         }
     }
+}
+
+fn is_rust_resource(r: &ProvidedResource) -> bool {
+    r.kind == ResourceKind::Text(TextFormat::Code) && crate::rust_segment::is_rust_file(&r.id)
 }
 
 #[cfg(feature = "pdf")]

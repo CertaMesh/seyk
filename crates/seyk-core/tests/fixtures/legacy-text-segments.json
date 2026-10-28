@@ -1,0 +1,223 @@
+{
+  "base": "2e1a1077d78e1d12fc69f1a14b1d537a504aa225",
+  "cases": [
+    {
+      "config": {
+        "max_chars": 1800,
+        "min_chars": 60,
+        "overlap_chars": 300,
+        "target_chars": 1000
+      },
+      "format": "plain",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 155,
+            "start": 2
+          },
+          "heading": null,
+          "line_end": 5,
+          "line_start": 1,
+          "text": "café first line. Second sentence has enough content to split. Third sentence ends here.\r\n\r\nA short label\r\n\r\nFinal paragraph is another separate thought."
+        }
+      ],
+      "source": "  café first line. Second sentence has enough content to split. Third sentence ends here.\r\n\r\nA short label\r\n\r\nFinal paragraph is another separate thought.\r\n",
+      "version": "text-v2:n60:t1000:m1800:o300"
+    },
+    {
+      "config": {
+        "max_chars": 60,
+        "min_chars": 12,
+        "overlap_chars": 12,
+        "target_chars": 30
+      },
+      "format": "plain",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 57,
+            "start": 2
+          },
+          "heading": null,
+          "line_end": 1,
+          "line_start": 1,
+          "text": "café first line. Second sentence has enough content to"
+        },
+        {
+          "byte_range": {
+            "end": 90,
+            "start": 58
+          },
+          "heading": null,
+          "line_end": 1,
+          "line_start": 1,
+          "text": "split. Third sentence ends here."
+        },
+        {
+          "byte_range": {
+            "end": 107,
+            "start": 94
+          },
+          "heading": null,
+          "line_end": 3,
+          "line_start": 3,
+          "text": "A short label"
+        },
+        {
+          "byte_range": {
+            "end": 155,
+            "start": 111
+          },
+          "heading": null,
+          "line_end": 5,
+          "line_start": 5,
+          "text": "Final paragraph is another separate thought."
+        }
+      ],
+      "source": "  café first line. Second sentence has enough content to split. Third sentence ends here.\r\n\r\nA short label\r\n\r\nFinal paragraph is another separate thought.\r\n",
+      "version": "text-v2:n12:t30:m60:o12"
+    },
+    {
+      "config": {
+        "max_chars": 1800,
+        "min_chars": 60,
+        "overlap_chars": 300,
+        "target_chars": 1000
+      },
+      "format": "markdown",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 24,
+            "start": 0
+          },
+          "heading": "Garden",
+          "line_end": 3,
+          "line_start": 1,
+          "text": "# Garden\n\nA short intro."
+        },
+        {
+          "byte_range": {
+            "end": 148,
+            "start": 26
+          },
+          "heading": "Garden > Water",
+          "line_end": 14,
+          "line_start": 5,
+          "text": "## Water\n\nKeep the soil moist. Give roots enough water in summer heat.\n\n```rust\nfn water() {\n\n    println!(\"café\");\n}\n```"
+        }
+      ],
+      "source": "# Garden\n\nA short intro.\n\n## Water\n\nKeep the soil moist. Give roots enough water in summer heat.\n\n```rust\nfn water() {\n\n    println!(\"café\");\n}\n```\n",
+      "version": "text-v2:n60:t1000:m1800:o300"
+    },
+    {
+      "config": {
+        "max_chars": 60,
+        "min_chars": 12,
+        "overlap_chars": 12,
+        "target_chars": 30
+      },
+      "format": "markdown",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 24,
+            "start": 0
+          },
+          "heading": "Garden",
+          "line_end": 3,
+          "line_start": 1,
+          "text": "# Garden\n\nA short intro."
+        },
+        {
+          "byte_range": {
+            "end": 96,
+            "start": 26
+          },
+          "heading": "Garden > Water",
+          "line_end": 7,
+          "line_start": 5,
+          "text": "## Water\n\nKeep the soil moist. Give roots enough water in summer heat."
+        },
+        {
+          "byte_range": {
+            "end": 148,
+            "start": 98
+          },
+          "heading": "Garden > Water",
+          "line_end": 14,
+          "line_start": 9,
+          "text": "```rust\nfn water() {\n\n    println!(\"café\");\n}\n```"
+        }
+      ],
+      "source": "# Garden\n\nA short intro.\n\n## Water\n\nKeep the soil moist. Give roots enough water in summer heat.\n\n```rust\nfn water() {\n\n    println!(\"café\");\n}\n```\n",
+      "version": "text-v2:n12:t30:m60:o12"
+    },
+    {
+      "config": {
+        "max_chars": 1800,
+        "min_chars": 60,
+        "overlap_chars": 300,
+        "target_chars": 1000
+      },
+      "format": "code",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 100,
+            "start": 0
+          },
+          "heading": null,
+          "line_end": 8,
+          "line_start": 1,
+          "text": "#[cfg(test)]\nfn café() {\r\n    let flower = \"🙂\";\r\n\r\n    println!(\"{flower}\");\r\n}\r\n\r\nfn other() {}"
+        }
+      ],
+      "source": "#[cfg(test)]\nfn café() {\r\n    let flower = \"🙂\";\r\n\r\n    println!(\"{flower}\");\r\n}\r\n\r\nfn other() {}\n",
+      "version": "text-v2:n60:t1000:m1800:o300"
+    },
+    {
+      "config": {
+        "max_chars": 60,
+        "min_chars": 12,
+        "overlap_chars": 12,
+        "target_chars": 30
+      },
+      "format": "code",
+      "segments": [
+        {
+          "byte_range": {
+            "end": 51,
+            "start": 0
+          },
+          "heading": null,
+          "line_end": 3,
+          "line_start": 1,
+          "text": "#[cfg(test)]\nfn café() {\r\n    let flower = \"🙂\";"
+        },
+        {
+          "byte_range": {
+            "end": 83,
+            "start": 59
+          },
+          "heading": null,
+          "line_end": 6,
+          "line_start": 5,
+          "text": "println!(\"{flower}\");\r\n}"
+        },
+        {
+          "byte_range": {
+            "end": 100,
+            "start": 87
+          },
+          "heading": null,
+          "line_end": 8,
+          "line_start": 8,
+          "text": "fn other() {}"
+        }
+      ],
+      "source": "#[cfg(test)]\nfn café() {\r\n    let flower = \"🙂\";\r\n\r\n    println!(\"{flower}\");\r\n}\r\n\r\nfn other() {}\n",
+      "version": "text-v2:n12:t30:m60:o12"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-use std::ops::Range;
 use proc_macro2::Span;
+use std::ops::Range;
 
 struct Parsed {
     file: syn::File,
@@ -19,7 +19,6 @@ impl Parsed {
         let range = span.byte_range();
         range.start + self.offset..range.end + self.offset
     }
-
 }
 
 #[cfg(test)]
@@ -29,7 +28,12 @@ mod tests {
 
     #[test]
     fn parser_spans_preserve_original_bytes() {
-        for prefix in ["", "\u{feff}", "#!/usr/bin/env rustx\n", "\u{feff}#!/é/rustx\r\n"] {
+        for prefix in [
+            "",
+            "\u{feff}",
+            "#!/usr/bin/env rustx\n",
+            "\u{feff}#!/é/rustx\r\n",
+        ] {
             for newline in ["\n", "\r\n"] {
                 let item = format!("pub fn café() {{{newline}    let s = \"été\";{newline}}}");
                 let source = format!("{prefix}// café{newline}{item}{newline}");
@@ -37,10 +41,18 @@ mod tests {
                 assert_eq!(parsed.file.items.len(), 1);
                 let range = parsed.range(parsed.file.items[0].span());
                 assert_eq!(&source[range.clone()], item, "{source:?}: {range:?}");
-                let syn::Item::Fn(function) = &parsed.file.items[0] else { panic!() };
+                let syn::Item::Fn(function) = &parsed.file.items[0] else {
+                    panic!()
+                };
                 assert_eq!(&source[parsed.range(function.sig.ident.span())], "café");
-                assert_eq!(&source[parsed.range(function.block.brace_token.span.open())], "{");
-                assert_eq!(&source[parsed.range(function.block.brace_token.span.close())], "}");
+                assert_eq!(
+                    &source[parsed.range(function.block.brace_token.span.open())],
+                    "{"
+                );
+                assert_eq!(
+                    &source[parsed.range(function.block.brace_token.span.close())],
+                    "}"
+                );
             }
         }
     }

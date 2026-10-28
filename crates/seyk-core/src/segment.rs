@@ -65,7 +65,8 @@ pub struct TextSegment {
     /// 1-based, inclusive line numbers.
     pub line_start: u64,
     pub line_end: u64,
-    /// Markdown heading path, for example `Part One > The Kitchen`.
+    /// Structural heading path, for example `Part One > The Kitchen` or,
+    /// when prepared by the engine, `impl Endpoint > fn new`.
     pub heading: Option<String>,
     pub text: String,
 }
@@ -96,7 +97,8 @@ impl TextSegmenter {
         Self { config }
     }
 
-    /// Identifies the algorithm and its parameters. Stored with cached vectors.
+    /// Identifies the legacy algorithm and its parameters. Stored with cached vectors.
+    /// The engine versions its Rust-specific preparation separately.
     pub fn version(&self) -> String {
         let c = &self.config;
         format!(
