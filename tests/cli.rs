@@ -409,6 +409,9 @@ fn mcp_server_lists_search_tool_without_loading_the_model() {
         .iter()
         .find(|t| t["name"] == "search")
         .unwrap();
+    assert!(search["description"].as_str().unwrap().contains(
+        "Use for conceptual where/how/what-happens questions. Use grep for exact identifiers and every occurrence."
+    ));
     #[cfg(feature = "audio-stt")]
     assert!(
         tools
