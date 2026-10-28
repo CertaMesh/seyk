@@ -11,10 +11,10 @@ retrieval benchmark before it merges.
 
 - **For:** anyone running Seyk in the background, especially the shared MCP
   daemon.
-- **Gap:** embedding batches have no token budget. Files that tokenize densely
-  (for example numeric JSON) can push indexing memory to several GB, and the
-  ONNX Runtime arena keeps that peak. Work in progress:
-  [#95](https://github.com/CertaMesh/seyk/pull/95).
+- **Gap:** since 0.2.0, embedding batches have a token budget
+  ([#95](https://github.com/CertaMesh/seyk/pull/95)), and the benchmark corpus
+  peaks at about 2.8 GB instead of 5.7 GB. That is one measurement, not a
+  documented bound, and the ONNX Runtime arena still keeps its peak.
 - **Done when:** peak memory (measured as process footprint, not RSS) stays
   under a documented bound on a corpus that includes dense files, across
   repeated daemon starts, with no loss in benchmark quality.

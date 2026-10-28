@@ -3,7 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="https://crates.io/crates/seyk"><img src="https://img.shields.io/crates/v/seyk.svg" alt="crates.io"></a>
+  <a href="#license"><img src="https://img.shields.io/crates/l/seyk.svg" alt="License"></a>
+  <a href="https://docs.rs/seyk-core"><img src="https://docs.rs/seyk-core/badge.svg" alt="docs.rs"></a>
+  <a href="https://github.com/CertaMesh/seyk/actions/workflows/ci.yml"><img src="https://github.com/CertaMesh/seyk/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/CertaMesh/seyk/stargazers"><img src="https://img.shields.io/github/stars/CertaMesh/seyk?style=social" alt="GitHub stars"></a>
   <a href="https://github.com/CertaMesh/seyk/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.89%2B-orange.svg" alt="Rust 1.89+"></a>
 </p>
 
@@ -18,9 +22,7 @@ changed since indexing. It never writes answers; your agent reads the evidence
 and decides what it means. Seyk runs as an MCP server, a CLI, and a Rust
 library (pre-1.0).
 
-> **Status:** pre-1.0. Install a prebuilt binary or with Cargo; the model is a
-> 0.5 GB download. Indexing can use several GB of memory on dense files, and a fix is
-> in progress ([#95](https://github.com/CertaMesh/seyk/pull/95)). The first
+> **Status:** pre-1.0. The model is a 0.5 GB download. The first
 > [agent evaluation](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md#agent-evaluation)
 > shows no agent advantage yet.
 
@@ -230,9 +232,10 @@ Seyk is at version 0.2.0. Know these before you adopt it:
   After that, Seyk embeds only what changed.
 - **Hybrid can push a good meaning match down.** Use `--mode semantic` for
   purely thematic queries.
-- **Indexing can use several GB of memory.** Files that tokenize densely, such
-  as numeric JSON, make embedding batches large. A fix is in progress
-  ([#95](https://github.com/CertaMesh/seyk/pull/95)).
+- **Indexing can still use a few GB of memory.** Embedding batches now have a
+  token budget by default. The full benchmark corpus peaked at about 2.8 GB,
+  down from about 5.7 GB. This is not a fixed cap for other corpora; see
+  [Benchmarks](https://github.com/CertaMesh/seyk/blob/main/docs/benchmarks.md#text-batch-memory-budgets).
 - **Video and scanned-page OCR are not implemented.**
 - **Search is exact by default.** Every query is compared with every cached
   vector. An opt-in image scan (`--image-scan q4`) is experimental and has no

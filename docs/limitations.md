@@ -18,11 +18,13 @@
   only as opt-in, on-demand extraction (`audio-stt`). See
   [the multimodal status](multimodal.md) for current support and remaining
   work, including [PDF extraction limits](multimodal.md#pdf-retrieval-done-ocr-deferred).
-- **Indexing can use several GB of memory.** Embedding batches have no token
-  budget, so files that tokenize densely (numeric JSON, tables) fill a batch with
-  long inputs, and ONNX Runtime keeps its peak allocation. A long-running daemon
-  stays at its highest batch so far. A fix is in progress
-  ([#95](https://github.com/CertaMesh/seyk/pull/95)).
+- **Indexing can still use a few GB of memory.** Since 0.2.0, text embedding
+  batches default to a budget of 5120 padded tokens and 4194304 attention cells,
+  with a 16-row cap. On the full SciFact and NFCorpus runs, peak physical
+  footprint was about 2.8 GB, down from about 5.7 GB. This is not a fixed cap:
+  other corpora can use more, and ONNX Runtime keeps its peak allocation, so a
+  long-running daemon stays at its highest batch so far. See
+  [the measurements](benchmarks.md#text-batch-memory-budgets).
 - **CPU only.** ONNX Runtime runs on the CPU. No GPU or Neural Engine provider is
   enabled yet.
 - **Start-up cost is per process**, not per file: mostly ONNX graph optimisation

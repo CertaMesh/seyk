@@ -106,7 +106,7 @@ Treat it as sensitive. See [Caching and storage](caching-and-storage.md).
 | Check before returning text | Holds for extraction of text, PDF text and audio samples, with the scope described above. |
 | Search and extraction stay separate | Holds. A hit exists without extraction; expensive extraction runs on demand. |
 | Explicit trait seams, concrete implementations for current needs | Holds. Providers, extractors, embedders, caches and the vector index are traits, each with implementations Seyk actually uses. |
-| Predictable resource use | **Not yet.** Indexing dense files can use several GB of memory ([#95](https://github.com/CertaMesh/seyk/pull/95)). |
+| Predictable resource use | Partly. Batch token budgets cut peak indexing memory on the benchmark corpus to about 2.8 GB ([#95](https://github.com/CertaMesh/seyk/pull/95)), but there is no documented bound for other corpora yet. |
 | Stable interfaces | Partly. CLI and MCP JSON carry a `schema_version`, and extraction accepts older versions. The Rust API can change before 1.0. |
 
 ## Status
