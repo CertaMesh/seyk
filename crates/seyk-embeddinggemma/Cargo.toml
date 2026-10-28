@@ -19,7 +19,7 @@ image = ["dep:image", "dep:fast_image_resize"]
 [dependencies]
 rayon = "1.11"
 rustfft = { version = "=6.4.1", optional = true }
-seyk-embed = { path = "../seyk-embed", version = "0.1.0" }
+seyk-embed = { path = "../seyk-embed", version = "0.2.0" }
 ort = "=2.0.0-rc.13"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 dirs = "6"

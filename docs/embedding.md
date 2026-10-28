@@ -1,7 +1,7 @@
 # Standalone embeddings and API migration
 
 Seyk's embedding layer works without search. The crates are not
-on crates.io yet; all workspace packages currently have version `0.1.0`.
+on crates.io yet; all workspace packages currently have version `0.2.0`.
 
 ```toml
 [dependencies]

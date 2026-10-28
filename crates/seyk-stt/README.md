@@ -10,7 +10,7 @@ ONNX Runtime is downloaded by the `ort` dependency during a normal build.
 
 ```toml
 [dependencies]
-seyk-stt = "0.1.0"
+seyk-stt = "0.2.0"
 ```
 
 [API documentation](https://docs.rs/seyk-stt) ·

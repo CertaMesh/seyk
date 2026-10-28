@@ -3113,11 +3113,11 @@ dependencies = [
 
 [[package]]
 name = "seyk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "assert_cmd",
+ "base64 0.22.1",
  "blake3",
  "clap",
  "dirs",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "caseless",
@@ -3169,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-embed"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3178,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-embeddinggemma"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "dirs",
@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "seyk-stt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "flate2",

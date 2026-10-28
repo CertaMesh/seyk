@@ -1,0 +1,2 @@
+# SHA-256 fixture provenance digest, not an API key.
+296fbc13bfa348df3c48afd4bc5edec0d74c74dc:crates/seyk-stt/tests/fixtures/token-goldens.provenance.json:generic-api-key:13

@@ -8,7 +8,7 @@ or model downloads.
 
 ```toml
 [dependencies]
-seyk-embed = "0.1.0"
+seyk-embed = "0.2.0"
 ```
 
 [API documentation](https://docs.rs/seyk-embed) ·
