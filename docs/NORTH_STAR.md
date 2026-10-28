@@ -1,6 +1,6 @@
 # Project north star — Seyk
 
-> Last reviewed: 2026-10-26 by krishan.
+> Last reviewed: 2026-10-28 by krishan.
 > Source-of-truth for autonomous-agent decisions. When two valid paths fork, pick the one that serves the mission for the target users without violating non-goals or constraints; principles break remaining ties.
 
 ## Mission
@@ -26,7 +26,7 @@ Find where relevant information is in any collection of unstructured content, an
 ## Hard constraints
 
 - **Tech:** Rust; MSRV 1.89, toolchain pinned to 1.99.0; CPU inference via ONNX Runtime; prebuilt binaries for macOS ARM, Linux x86_64/ARM64 and Windows x86_64.
-- **Legal / privacy:** Content, queries and vectors are never sent to a third-party service. Network use is limited to an explicit model download and, in later phases, sources the operator configures. The cache never stores source text in a readable order. Private content used for evaluation never appears in the repo, PRs, docs or shared notes.
+- **Legal / privacy:** Content, queries and vectors are never sent to a third-party service. Network use is limited to an explicit model download and, in later phases, sources the operator configures. The cache never stores source text in a readable order. The one exception is file paths and section headings, kept readable as cache metadata and disclosed in the docs. Private content used for evaluation never appears in the repo, PRs, docs or shared notes.
 - **Correctness:** A vector is reused only for byte-identical model input under the same profile. Returned text is checked against the whole-resource hash recorded at indexing; a mismatch is an error, never a guess.
 - **Compatibility:** `seyk search "…" <paths>` keeps working. The EmbeddingGemma 2 parity tests stay green. Cache schema changes migrate and keep embeddings where they are still valid.
 
@@ -51,7 +51,7 @@ Find where relevant information is in any collection of unstructured content, an
 
 **Going wrong:**
 - A ranking or segmentation change merged without an evaluation run.
-- The cache or logs hold readable source text, or content is sent to a third-party service.
+- The cache or logs hold readable source text beyond paths and headings, or content is sent to a third-party service.
 - Seyk starts producing prose (answers, summaries) or imports a privacy/LLM stack.
 - A phase leaves main un-releasable, or an abstraction ships with no real implementation behind it.
 - Public docs claim a quality, speed or agent-outcome advantage that no committed benchmark shows.
