@@ -156,7 +156,7 @@ items use bounded chunks without a heading. Python, TypeScript and Go retain
 paragraph segmentation. The public `TextSegmenter::segment` method also retains
 its existing language-unspecified behavior, including for `TextFormat::Code`.
 Its `version()` identifies that legacy path. The engine versions Rust preparation
-separately as `rust-symbols-v2`, without changing the cache schema or profile.
+separately as `rust-symbols-v3`, without changing the cache schema or profile.
 Changing the pinned parser or Rust preparation policy requires a new preparation
 version, which also retries resources with older crash markers.
 
@@ -176,13 +176,19 @@ also skips delimiter nesting, prefix-operator runs or closure-bar runs beyond
 files use fallback. These limits bound parser input and stack reservation;
 they do not establish a fixed bound for all AST allocations.
 
-An ordinary parser panic or thread creation failure uses heading-free fallback.
+An ordinary parser panic uses stable heading-free fallback. Thread creation
+failure uses retryable fallback, so the next sync retries parsing.
 A hostile file can still overflow the parser stack and abort the process once.
 SQLite caches append `.rust-parser` to the complete database filename for a
 private marker directory. Markers bind the preparation version, resource path
 and source content hash, and record the owner's PID and process start identity.
 PID reuse therefore does not make an old marker live. Directory permissions are
 set once on lazy initialization; parsing does not fsync each file.
+
+An empty or malformed marker records an interrupted write and counts as dead.
+A failed marker write removes the incomplete marker. If process creation identity
+is unavailable, parsing still runs with a PID-only marker; readers treat that
+owner as unknown and retry safely.
 
 A marker with a confirmed dead owner selects heading-free fallback for those
 exact bytes. That fallback can remain cached until the file changes, the
@@ -193,7 +199,9 @@ The chunks remain searchable, and the next sync retries symbol preparation.
 Seyk emits at most one generic parser-recovery warning per engine, regardless of
 how many resources need fallback. `SqliteCache::clear` removes its marker directory.
 Custom persistent caches can supply `EmbeddingCache::parser_state_dir`; the
-in-memory cache has no restart recovery state.
+in-memory cache has no restart recovery state. Sharing a cache across containers
+or PID namespaces is unsupported for parser crash recovery: process identities
+must be visible in the same namespace.
 
 ## PDF parser logs and panics
 

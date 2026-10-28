@@ -18,7 +18,7 @@ use crate::segment::{LineIndex, TextSegment, TextSegmenter};
 
 // Bump for pinned parser or policy changes: this versions both cache bindings
 // and crash markers, so the new parser retries previously interrupted files.
-pub(crate) const RUST_PREPARATION_VERSION: &str = "rust-symbols-v2";
+pub(crate) const RUST_PREPARATION_VERSION: &str = "rust-symbols-v3";
 const MAX_PARSE_BYTES: usize = 1024 * 1024;
 const MAX_DELIMITER_DEPTH: usize = 128;
 
@@ -91,10 +91,7 @@ impl ParserState {
             };
         }
         let Some(directory) = &self.directory else {
-            return PreparedSegments {
-                segments: segment(segmenter, source),
-                retry: false,
-            };
+            return prepare(segmenter, source);
         };
         {
             let mut ready = self
@@ -125,9 +122,10 @@ impl ParserState {
                 let _ = self.owner.set(owner.clone());
             })
         });
-        let Some(owner) = owner else {
-            return self.fallback(segmenter, source, true);
-        };
+        let owner = owner.unwrap_or_else(|| ProcessOwner {
+            pid: std::process::id(),
+            start: String::new(),
+        });
         let marker = self
             .marker_path(id, source)
             .expect("persistent parser directory");
@@ -142,14 +140,16 @@ impl ParserState {
             Ok(mut file) => {
                 let record = serde_json::to_vec(&owner).expect("process owner serializes");
                 if file.write_all(&record).is_err() {
+                    drop(file);
+                    let _ = std::fs::remove_file(&marker);
                     return self.fallback(segmenter, source, true);
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let dead = std::fs::read(&marker)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<ProcessOwner>(&bytes).ok())
-                    .is_some_and(|owner| owner.is_alive() == Some(false));
+                let dead = std::fs::read(&marker).is_ok_and(|bytes| {
+                    serde_json::from_slice::<ProcessOwner>(&bytes)
+                        .map_or(true, |owner| owner.is_alive() == Some(false))
+                });
                 return self.fallback(segmenter, source, !dead);
             }
             Err(error) => {
@@ -162,14 +162,11 @@ impl ParserState {
                 return self.fallback(segmenter, source, true);
             }
         }
-        let pieces = segment(segmenter, source);
+        let prepared = prepare(segmenter, source);
         // An abort leaves the owner marker behind. No fsync is needed for
         // process-abort recovery: the page cache survives the parser process.
         let _ = std::fs::remove_file(marker);
-        PreparedSegments {
-            segments: pieces,
-            retry: false,
-        }
+        prepared
     }
 }
 
@@ -250,28 +247,47 @@ pub(crate) fn lexical_heading(id: &crate::ResourceId, label: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
 pub(crate) fn segment(segmenter: &TextSegmenter, source: &str) -> Vec<TextSegment> {
+    prepare(segmenter, source).segments
+}
+
+fn prepare(segmenter: &TextSegmenter, source: &str) -> PreparedSegments {
+    prepare_with_stack(segmenter, source, 8 * 1024 * 1024)
+}
+
+fn prepare_with_stack(
+    segmenter: &TextSegmenter,
+    source: &str,
+    stack_size: usize,
+) -> PreparedSegments {
     // span-locations retains source text in thread-local storage. Thread exit
     // releases it without invalidating spans owned by a library caller.
-    let units = within_parse_budget(source)
-        .then(|| {
-            std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .name("seyk-rust-parse".into())
-                    .stack_size(8 * 1024 * 1024)
-                    .spawn_scoped(scope, || {
-                        let parsed = Parsed::new(source).ok()?;
-                        let mut units = Vec::new();
-                        parsed.items(source, 0..source.len(), &parsed.file.items, &[], &mut units);
-                        Some(units)
-                    })
-                    .ok()
-                    .and_then(|thread| thread.join().ok().flatten())
-            })
+    let parsed = if within_parse_budget(source) {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("seyk-rust-parse".into())
+                .stack_size(stack_size)
+                .spawn_scoped(scope, || {
+                    let parsed = Parsed::new(source).ok()?;
+                    let mut units = Vec::new();
+                    parsed.items(source, 0..source.len(), &parsed.file.items, &[], &mut units);
+                    Some(units)
+                })
+                .map(|thread| thread.join().ok().flatten())
         })
+    } else {
+        Ok(None)
+    };
+    let retry = parsed.is_err();
+    let units = parsed
+        .ok()
         .flatten()
         .unwrap_or_else(|| vec![Unit::gap(0..source.len())]);
-    render(segmenter, source, units)
+    PreparedSegments {
+        segments: render(segmenter, source, units),
+        retry,
+    }
 }
 
 fn assemble_units(segmenter: &TextSegmenter, units: Vec<Unit>) -> Vec<Unit> {
@@ -289,6 +305,9 @@ fn assemble_units(segmenter: &TextSegmenter, units: Vec<Unit>) -> Vec<Unit> {
                 && next.range.end - unit.range.start <= segmenter.config.max_chars
             {
                 next.range.start = unit.range.start;
+                if next.heading.is_none() {
+                    next.heading = unit.heading;
+                }
                 if next.role == UnitRole::Footer {
                     next.role = UnitRole::Item;
                 }
@@ -783,6 +802,72 @@ mod tests {
         let prepared = state.segment(&id, &no_merge(), source);
         assert!(!prepared.retry);
         assert_eq!(prepared.segments[0].heading.as_deref(), Some("fn active"));
+    }
+
+    #[test]
+    fn empty_and_malformed_markers_recover_to_stable_fallback() {
+        for record in [b"".as_slice(), b"{partial"] {
+            let temp = tempfile::tempdir().unwrap();
+            let state = ParserState::new(Some(temp.path().to_owned()));
+            let id = crate::ResourceId::from_path(temp.path().join("file.rs")).unwrap();
+            let source = "fn interrupted() {}";
+            let marker = state.marker_path(&id, source).unwrap();
+            std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+            std::fs::write(&marker, record).unwrap();
+            let prepared = state.segment(&id, &no_merge(), source);
+            assert!(!prepared.retry);
+            assert!(!prepared.segments.is_empty());
+            assert!(
+                prepared
+                    .segments
+                    .iter()
+                    .all(|piece| piece.heading.is_none())
+            );
+            assert!(marker.exists());
+        }
+    }
+
+    #[test]
+    fn unknown_own_identity_still_parses_and_unknown_marker_retries() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = ParserState::new(Some(temp.path().to_owned()));
+        let owner = ProcessOwner {
+            pid: std::process::id(),
+            start: String::new(),
+        };
+        assert_eq!(owner.is_alive(), None);
+        state.owner.set(owner.clone()).unwrap();
+        let id = crate::ResourceId::from_path(temp.path().join("file.rs")).unwrap();
+        let source = "fn available() {}";
+        let prepared = state.segment(&id, &no_merge(), source);
+        assert!(!prepared.retry);
+        assert_eq!(
+            prepared.segments[0].heading.as_deref(),
+            Some("fn available")
+        );
+        let marker = seed_marker(&state, &id, source, &owner);
+        assert!(state.segment(&id, &no_merge(), source).retry);
+        std::fs::remove_file(marker).unwrap();
+    }
+
+    #[test]
+    fn thread_spawn_failure_is_retryable_but_invalid_syntax_is_stable() {
+        let failed = prepare_with_stack(&no_merge(), "fn valid() {}", usize::MAX);
+        assert!(failed.retry);
+        assert!(!failed.segments.is_empty());
+        assert!(failed.segments.iter().all(|piece| piece.heading.is_none()));
+        assert!(!prepare(&no_merge(), "fn invalid(").retry);
+    }
+
+    #[test]
+    fn gap_absorbing_container_header_inherits_its_heading() {
+        let source = "impl Foo {\n\n // TODO\n\n fn a() {}\n}";
+        let pieces = check(source, &no_merge());
+        let header = pieces
+            .iter()
+            .find(|p| source[p.byte_range.clone()].contains("TODO"))
+            .unwrap();
+        assert_eq!(header.heading.as_deref(), Some("impl Foo"));
     }
 
     #[test]

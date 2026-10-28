@@ -19,6 +19,9 @@ impl ProcessOwner {
 
     /// Unknown access is transient; only a known absent/different owner is dead.
     pub(crate) fn is_alive(&self) -> Option<bool> {
+        if self.start.is_empty() {
+            return None;
+        }
         Some(process_start(self.pid).ok()?.as_ref() == Some(&self.start))
     }
 }
@@ -84,14 +87,35 @@ fn process_start(pid: u32) -> std::io::Result<Option<String>> {
 #[cfg(windows)]
 fn process_start(pid: u32) -> std::io::Result<Option<String>> {
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME},
-        System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
+        },
     };
     // SAFETY: the returned handle is queried read-only and closed below.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
     if handle.is_null() {
         let error = std::io::Error::last_os_error();
         return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    // SAFETY: the handle has synchronization access; a zero timeout never blocks.
+    let status = unsafe { WaitForSingleObject(handle, 0) };
+    if status != WAIT_TIMEOUT {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: this handle came from OpenProcess and is no longer used.
+        unsafe { CloseHandle(handle) };
+        return if status == WAIT_OBJECT_0 {
             Ok(None)
         } else {
             Err(error)
@@ -107,9 +131,6 @@ fn process_start(pid: u32) -> std::io::Result<Option<String>> {
     unsafe { CloseHandle(handle) };
     if success == 0 {
         return Err(error);
-    }
-    if times[1].dwHighDateTime != 0 || times[1].dwLowDateTime != 0 {
-        return Ok(None);
     }
     Ok(Some(format!(
         "{}:{}",
