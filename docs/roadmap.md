@@ -22,8 +22,10 @@ retrieval benchmark before it merges.
 ### Know whether Seyk helps an agent
 
 - **For:** agent developers deciding whether to add Seyk.
-- **Gap:** retrieval quality is measured on public datasets, but there is no
-  finished evaluation of agents doing real tasks.
+- **Gap:** the [first agent evaluation](benchmarks.md#agent-evaluation)
+  makes no claim: all answers were correct and cited in both setups, and where
+  Claude chose Seyk it was faster but used 5% more tokens. It used one small
+  corpus and predates compact results and code chunking; a rerun is planned.
 - **Done when:** an evaluation compares agents with their built-in tools alone
   against the same agents with Seyk added, on correct and cited answers and on
   tokens per task, and the result is published either way. Seyk makes a public
