@@ -378,5 +378,25 @@
     "valid_selection": false,
     "hex": "535201001b68747470733a2f2f6578616d706c652e6f72672f6669787475726500000001000100027f01010210617564696f2f637573746f6d2de69687000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "ref": "seyk-ref-v1:U1IBABtodHRwczovL2V4YW1wbGUub3JnL2ZpeHR1cmUAAAABAAEAAn8BAQIQYXVkaW8vY3VzdG9tLeaWhwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+  },
+  {
+    "name": "unicode-omitted-uri",
+    "selection": {
+      "resource": "file:///fixture/%E6%96%87%20caf%C3%A9/%F0%9F%98%80.txt",
+      "locator": {
+        "kind": "whole_resource"
+      },
+      "metadata": {
+        "modality": "text",
+        "size_bytes": 0,
+        "modified_ns": null,
+        "content_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "path": "/fixture/文 café/😀.txt",
+    "omit_resource": true,
+    "valid_selection": true,
+    "hex": "5352010105010000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref": "seyk-ref-v1:U1IBAQUBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
   }
 ]

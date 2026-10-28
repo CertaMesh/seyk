@@ -585,6 +585,123 @@ score output record that count.
 See [the current published comparison](#published-retrieval-comparison) for
 full measured results, source links and setup differences.
 
+## Agent evaluation
+
+This evaluation, run on 2026-10-26 and 2026-10-27, compares coding agents with
+grep only against the same agents with grep + Seyk. It asks whether Seyk helps
+them answer questions with correct citations. **Verdict: Seyk makes no agent-advantage claim from it.**
+Every run was correct and cited, so accuracy did not separate the setups.
+Where Claude used Seyk it saved time and tool calls but used more tokens.
+
+### Method
+
+- **Corpus (public or invented only).** A snapshot of this repository's
+  `docs/`, `README.md`, `src/` and `crates/` at `b140e7a` (183 files, binary
+  fixtures removed), plus 30 synthetic Markdown notes with invented facts. Every
+  question has a known answer: a file and line range. A script checked that each
+  range contains its key text.
+- **Agents.** Both ran headless, one run at a time:
+  - Claude Code 2.1.310 on `claude-opus-5-5`.
+  - Codex CLI 0.164.0 on `gpt-6.1-sol` at medium reasoning effort.
+- **Seyk.** Version 0.1.0 (`c93268f`), `--text-only`, q8, 256 dimensions,
+  with an isolated cache and daemon directory.
+- **Code arm, A/B (13 questions per agent).** Ten conceptual questions ("Which
+  function stops a burst of file-system change events from triggering many
+  re-index passes?") and three exact-identifier questions (for example `MAX_QUERIES`).
+  - **A, grep only:** the agent's built-in tools. For Claude: Read, Grep and
+    Glob. For Codex: its shell (`rg`, `sed`) in a read-only sandbox.
+  - **B, grep + Seyk:** the same tools plus the Seyk MCP server. The prompt
+    says to use whichever tools work best, so the agent chooses freely.
+- **Notes arm (20 questions per agent, Seyk only, not A/B).** Paraphrase,
+  exact-ID, multi-hop, file-name and two unanswerable questions, plus six
+  questions about Seyk's own docs and code.
+- **Codex approval mode.** Headless `codex exec` uses the approval policy
+  "never". At this binary, Seyk's tools had no MCP annotations, so Codex blocked
+  every Seyk call with "MCP tool call requires approval, but approval policy is
+  never". All scored Codex Seyk runs used
+  `-c mcp_servers.seyk.default_tools_approval_mode="approve"`, recorded per run.
+  Two earlier blocked runs were discarded and rerun.
+- **Grading.** Each answer was labelled correct, partial, wrong, hallucinated or
+  refused by hand. "Cited" means at least one `path:line` citation overlaps the
+  known range, with 3 lines of slack. The headline metric is correct and cited.
+  Wall time, tool calls and tokens were recorded per run.
+- **Tokens.** For Claude: input + cache creation + cache read + output. For
+  Codex: input + output. The two are not comparable across agents.
+
+### Results
+
+**Accuracy: 92 of 92 runs were correct and cited.** That is a ceiling effect.
+No run was wrong, hallucinated or refused, and both agents answered NOT FOUND
+to both unanswerable questions. This small corpus with direct questions cannot
+show Seyk raising correctness.
+
+| Agent | Arm | Runs | Used Seyk | Correct + cited | Median s | Mean tool calls | Median tokens |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Claude | code A (grep only) | 13 | 0% | 100% | 33 | 6.0 | 57,870 |
+| Claude | code B (grep + Seyk) | 13 | 62% | 100% | 29 | 5.0 | 72,929 |
+| Codex | code A (grep only) | 13 | 0% | 100% | 24 | 3.5 | 106,122 |
+| Codex | code B (grep + Seyk) | 13 | 0% | 100% | 21 | 3.5 | 87,900 |
+| Claude | notes (Seyk) | 20 | 100% | 100% | 22 | 2.9 | 36,082 |
+| Codex | notes (Seyk) | 20 | 100% | 100% | 18 | 2.5 | 97,332 |
+
+**Claude chose Seyk on 8 of 10 conceptual questions and 0 of 3 identifier
+questions.** On those 8 questions, compared with the same questions in arm A:
+
+- Wall time: 301 s to 250 s (**−17%**).
+- Tool calls: 56 to 44 (**−21%**).
+- Tokens: 643k to 673k (**+5%**).
+- Seyk's first hit was the right function in 6 of 8, and in the top 3 in all 8.
+
+For exact identifiers, Claude used grep, which found them in one call. There,
+the Seyk tool definitions alone added about 11% tokens.
+
+**Codex chose Seyk on 0 of 13 code questions**, even with approval working. Its
+A/B differences in time and tokens are noise.
+
+**`extract` was never used:** 0 calls across 63 searches. Both agents read the
+cited lines with their own file tools.
+
+**Results were heavy.** The median search response for 10 hits was 9,535
+characters, about 2.4k tokens.
+
+### Verdict
+
+**No agent-advantage claim.** The roadmap rule is that Seyk claims an agent
+benefit only if it wins on correct and cited answers or on tokens per task
+without losing on the other. Here accuracy tied at the ceiling and tokens rose
+5% where Claude used Seyk. The time and tool-call savings on conceptual
+questions are a signal worth retesting, not a claim.
+
+### Limits
+
+- **Small n:** 13 code questions per arm and 20 notes questions per agent.
+- **One corpus:** a 213-file snapshot of this repository plus invented notes.
+  Larger or unfamiliar codebases may behave differently.
+- **One machine, one run per question,** on a shared Mac. Some Codex arm A runs
+  ran under memory pressure, which skews its p90 time.
+- **Model and tool versions matter.** Results hold only for the agent, model and
+  Seyk versions listed above, on 2026-10-26 and 2026-10-27.
+- **User instructions loaded in both arms.** Both agents still read the
+  operator's global instruction files. This adds tokens and time equally to A
+  and B.
+- **Ground truth was widened after grading for 5 notes runs,** where an
+  equivalent passage elsewhere in the docs or code was cited.
+
+### Since this run
+
+These results predate changes aimed at the token cost:
+
+- **Compact search results** ([#120](https://github.com/CertaMesh/seyk/pull/120)):
+  recorded payloads are about 1.99× smaller.
+- **MCP tool annotations** ([#119](https://github.com/CertaMesh/seyk/pull/119))
+  and **relative path fixes** ([#121](https://github.com/CertaMesh/seyk/pull/121)).
+- **Planned:** symbol-aware code chunks, so code hits name the enclosing
+  function.
+
+A rerun of the same method is planned once code chunking lands, to see whether
+the token picture changes. Transcripts and per-run data stay private and are
+not published.
+
 ## Photo Anchor quality gate (P2, 2026-10-16)
 
 This offline experiment compares the P1 Photo Anchor codec with exact f32 image

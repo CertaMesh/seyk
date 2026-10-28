@@ -2,6 +2,7 @@
 import base64
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 
 def var(n):
@@ -79,9 +80,52 @@ def vectors():
                          'selection': s, 'path': '/fixture/a' if omit else '/edited/ignored',
                          'omit_resource': omit, 'valid_selection': i != 7,
                          'hex': raw.hex(), 'ref': 'seyk-ref-v1:' + base64.urlsafe_b64encode(raw).decode().rstrip('=')})
+    path = '/fixture/文 café/😀.txt'
+    selection = {'resource': 'file://' + quote(path), 'locator': locators[0],
+                 'metadata': rows[0]['selection']['metadata']}
+    raw = encode(selection, True)
+    rows.append({'name': 'unicode-omitted-uri', 'selection': selection,
+                 'path': path, 'omit_resource': True, 'valid_selection': True,
+                 'hex': raw.hex(), 'ref': reference(raw)})
     return rows
+
+
+def reference(raw):
+    return 'seyk-ref-v1:' + base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+
+def negative_vectors():
+    seed = bytes.fromhex(vectors()[0]['hex'])
+    cases = []
+    def add(name, raw, ref=None, path='/fixture/a'):
+        cases.append({'name': name, 'hex': raw.hex(),
+                      'ref': reference(raw) if ref is None else ref, 'path': path})
+    for n in range(len(seed)):
+        add(f'truncated-{n}', seed[:n])
+    for name, index, value in [('domain', 0, 0), ('version', 2, 2),
+                                ('flags', 3, 2), ('locator', 4, 255),
+                                ('modality', 5, 255), ('option', 7, 2),
+                                ('media', 8, 255)]:
+        raw = bytearray(seed)
+        raw[index] = value
+        add(name, raw)
+    add('trailing-byte', seed + b'\x00')
+    add('overlong-size', seed[:6] + b'\x80\x00' + seed[7:])
+    add('overflow-size', seed[:6] + b'\xff' * 10 + seed[7:])
+    add('noncanonical-pdf-media', seed[:8] + b'\x02' + string('application/pdf') + seed[9:])
+    add('invalid-utf8-media', seed[:8] + b'\x02\x01\xff' + seed[9:])
+    add('missing-path', seed, path=None)
+    add('relative-path', seed, path='relative')
+    good = reference(seed)
+    for name, ref in [('padding', good + '='), ('whitespace', good + '\n'),
+                      ('outer-version', good.replace('-v1:', '-v2:')),
+                      ('invalid-base64', good + '!'),
+                      ('unused-base64-bits', good[:-1] + 'B')]:
+        add(name, seed, ref)
+    return cases
 
 
 if __name__ == '__main__':
     dest = Path(__file__).resolve().parents[2] / 'tests/fixtures/mcp-refs.json'
     dest.write_text(json.dumps(vectors(), indent=2, ensure_ascii=False) + '\n')
+    dest.with_name('mcp-refs-invalid.json').write_text(json.dumps(negative_vectors(), indent=2, ensure_ascii=False) + '\n')
