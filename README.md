@@ -211,7 +211,7 @@ weights: `cargo run --example embed_search`.
 
 | Kind | Status |
 |---|---|
-| Markdown, plain text, source code | ✅ heading-, paragraph- or block-aware segments |
+| Markdown, plain text, source code | ✅ headings and paragraphs; Rust symbols with best-effort fallback |
 | Images | ✅ found by meaning, one vector per image |
 | PDF | ✅ embedded text; scanned pages found by meaning, text extraction needs OCR |
 | Audio | Included in the default CLI; `seyk setup audio` installs audio search and speech-to-text models |

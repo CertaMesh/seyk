@@ -366,6 +366,9 @@ impl SearchEngineBuilder {
         let profile_id = profile.id();
         let mut cache = self.cache.unwrap_or_else(|| Box::new(MemoryCache::new()));
         cache.register_profile(&profile_id, &profile)?;
+        let rust_parser = Arc::new(crate::rust_segment::ParserState::new(
+            cache.parser_state_dir(),
+        ));
         Ok(SearchEngine {
             provider: self.provider,
             extractors: self.extractors,
@@ -381,6 +384,7 @@ impl SearchEngineBuilder {
             #[cfg(all(feature = "test-support", debug_assertions))]
             lease_observer: Mutex::new(None),
             scrubber_stop: Arc::new(ScrubStop::default()),
+            rust_parser,
             segmenter: self.segmenter,
             profile,
             profile_id,
@@ -416,6 +420,7 @@ pub struct SearchEngine {
     #[cfg(all(feature = "test-support", debug_assertions))]
     lease_observer: Mutex<Option<LeaseObserver>>,
     scrubber_stop: Arc<ScrubStop>,
+    rust_parser: Arc<crate::rust_segment::ParserState>,
     segmenter: TextSegmenter,
     profile: CacheProfile,
     profile_id: String,
@@ -550,6 +555,7 @@ impl SearchEngine {
     fn lexical_fallback(&self) -> Result<Self> {
         let mut engine = Self::lexical_with_provider(self.provider.clone())?;
         engine.segmenter = self.segmenter.clone();
+        engine.rust_parser = self.rust_parser.clone();
         engine.max_audio_duration_secs = self.max_audio_duration_secs;
         Ok(engine)
     }
@@ -840,6 +846,13 @@ impl SearchEngine {
                 &self.pdf_capabilities(),
             ]));
         }
+        if is_rust_resource(r) {
+            return Ok(input_hash(&[
+                &r.fingerprint(),
+                crate::rust_segment::RUST_PREPARATION_VERSION,
+                &self.segmenter.version(),
+            ]));
+        }
         Ok(r.fingerprint())
     }
 
@@ -1084,13 +1097,17 @@ impl SearchEngine {
             }
             let prepared = self.prepare(r, bytes);
             match prepared {
-                Ok((jobs, page_diagnostics)) => pending.push(Pending {
+                Ok(prepared) => pending.push(Pending {
                     resource: r.id.clone(),
                     metadata,
                     version,
-                    descriptor_hash,
-                    jobs,
-                    page_diagnostics,
+                    descriptor_hash: if prepared.retry {
+                        input_hash(&[&descriptor_hash, "rust-retry-fallback-v1"])
+                    } else {
+                        descriptor_hash
+                    },
+                    jobs: prepared.jobs,
+                    page_diagnostics: prepared.page_diagnostics,
                 }),
                 Err(reason) => stats.skipped.push(skip(&r.id, reason)),
             }
@@ -1671,7 +1688,7 @@ impl SearchEngine {
         &self,
         r: &ProvidedResource,
         bytes: Vec<u8>,
-    ) -> std::result::Result<(Vec<Job>, Vec<PageDiagnostic>), String> {
+    ) -> std::result::Result<PreparedJobs, String> {
         match r.kind {
             ResourceKind::Audio => {
                 Err("audio requires the streaming preparation path (feature `audio`)".into())
@@ -1692,9 +1709,14 @@ impl SearchEngine {
                 }
                 let text = String::from_utf8(bytes).map_err(|_| "not valid UTF-8".to_string())?;
                 let stem = &r.title;
-                Ok((
-                    self.segmenter
-                        .segment(&text, format)
+                let (segments, retry) = if is_rust_resource(r) {
+                    let prepared = self.rust_parser.segment(&r.id, &self.segmenter, &text);
+                    (prepared.segments, prepared.retry)
+                } else {
+                    (self.segmenter.segment(&text, format), false)
+                };
+                Ok(PreparedJobs {
+                    jobs: segments
                         .into_iter()
                         .map(|s| {
                             let title = segment_title(stem.as_deref(), s.heading.as_deref());
@@ -1717,15 +1739,21 @@ impl SearchEngine {
                             )
                         })
                         .collect(),
-                    Vec::new(),
-                ))
+                    page_diagnostics: Vec::new(),
+                    retry,
+                })
             }
-            ResourceKind::Image => Ok((
-                vec![Job::image(ResourceLocator::WholeResource, bytes)],
-                Vec::new(),
-            )),
+            ResourceKind::Image => Ok(PreparedJobs {
+                jobs: vec![Job::image(ResourceLocator::WholeResource, bytes)],
+                page_diagnostics: Vec::new(),
+                retry: false,
+            }),
         }
     }
+}
+
+fn is_rust_resource(r: &ProvidedResource) -> bool {
+    r.kind == ResourceKind::Text(TextFormat::Code) && crate::rust_segment::is_rust_file(&r.id)
 }
 
 #[cfg(feature = "pdf")]
@@ -1764,6 +1792,12 @@ struct Pending {
     metadata: ResourceMetadata,
     jobs: Vec<Job>,
     page_diagnostics: Vec<PageDiagnostic>,
+}
+
+struct PreparedJobs {
+    jobs: Vec<Job>,
+    page_diagnostics: Vec<PageDiagnostic>,
+    retry: bool,
 }
 
 struct Job {
@@ -2948,6 +2982,192 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    #[test]
+    fn rust_live_marker_indexes_fallback_and_retries_without_losing_hits() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("active.rs");
+        let source = "fn active() {}";
+        std::fs::write(&path, source).unwrap();
+        let id = ResourceId::from_path(&path).unwrap();
+        let mut engine = SearchEngine::lexical().unwrap();
+        engine.rust_parser = Arc::new(crate::rust_segment::ParserState::new(Some(
+            root.join("markers"),
+        )));
+        let marker = engine.rust_parser.marker_path(&id, source).unwrap();
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(
+            &marker,
+            serde_json::to_vec(&crate::process_owner::ProcessOwner::current().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let indexed = engine.index().paths([&path]).execute().unwrap();
+        assert_eq!(indexed.sync.resources_updated, 1);
+        assert!(indexed.sync.skipped.is_empty());
+        let fallback = engine
+            .with_cache(|cache| cache.resource(engine.profile_id(), &id))
+            .unwrap()
+            .unwrap();
+        let hits = engine
+            .search("active")
+            .paths([&path])
+            .sync(false)
+            .execute()
+            .unwrap()
+            .hits;
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.heading.is_none()));
+        for hit in hits {
+            assert_eq!(engine.extract(&hit).unwrap().text, source);
+        }
+        std::fs::remove_file(marker).unwrap();
+        assert_eq!(
+            engine
+                .index()
+                .paths([&path])
+                .execute()
+                .unwrap()
+                .sync
+                .resources_updated,
+            1
+        );
+        let symbols = engine
+            .with_cache(|cache| cache.resource(engine.profile_id(), &id))
+            .unwrap()
+            .unwrap();
+        assert_ne!(symbols.descriptor_hash, fallback.descriptor_hash);
+        let hits = engine
+            .search("active")
+            .paths([&path])
+            .sync(false)
+            .execute()
+            .unwrap()
+            .hits;
+        assert!(
+            hits.iter()
+                .any(|h| h.heading.as_deref() == Some("fn active"))
+        );
+        assert_eq!(
+            engine
+                .index()
+                .paths([&path])
+                .execute()
+                .unwrap()
+                .sync
+                .resources_updated,
+            0
+        );
+    }
+
+    #[test]
+    fn rust_crashed_version_does_not_disable_an_edited_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("recovered.rs");
+        let original = "fn original() {}";
+        std::fs::write(&path, original).unwrap();
+        let id = ResourceId::from_path(&path).unwrap();
+        let mut engine = SearchEngine::lexical().unwrap();
+        engine.rust_parser = Arc::new(crate::rust_segment::ParserState::new(Some(
+            root.join("markers"),
+        )));
+        let marker = engine.rust_parser.marker_path(&id, original).unwrap();
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        let mut reused = crate::process_owner::ProcessOwner::current().unwrap();
+        reused.start.push_str("-old");
+        std::fs::write(&marker, serde_json::to_vec(&reused).unwrap()).unwrap();
+        engine.index().paths([&path]).execute().unwrap();
+        assert!(
+            engine
+                .search("original")
+                .paths([&path])
+                .sync(false)
+                .execute()
+                .unwrap()
+                .hits
+                .iter()
+                .all(|h| h.heading.is_none())
+        );
+        std::fs::write(&path, "fn edited_after_crash() {}").unwrap();
+        assert_eq!(
+            engine
+                .index()
+                .paths([&path])
+                .execute()
+                .unwrap()
+                .sync
+                .resources_updated,
+            1
+        );
+        assert!(
+            engine
+                .search("edited_after_crash")
+                .paths([&path])
+                .sync(false)
+                .execute()
+                .unwrap()
+                .hits
+                .iter()
+                .any(|h| h.heading.as_deref() == Some("fn edited_after_crash"))
+        );
+    }
+
+    #[test]
+    #[ignore = "model-free corpus volume measurement; run explicitly"]
+    fn rust_corpus_preparation_volume() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let segmenter = TextSegmenter::default();
+        let mut sizes: [Vec<usize>; 2] = Default::default();
+        let mut body_bytes = [0usize; 2];
+        let mut input_bytes = [0usize; 2];
+        let mut files = 0;
+        for entry in walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|e| !matches!(e.file_name().to_str(), Some("target" | ".git" | ".anvil")))
+        {
+            let entry = entry.unwrap();
+            if !entry.file_type().is_file()
+                || entry.path().extension().is_none_or(|ext| ext != "rs")
+            {
+                continue;
+            }
+            let source = std::fs::read_to_string(entry.path()).unwrap();
+            let stem = entry.path().file_stem().unwrap().to_str();
+            for (index, segments) in [
+                segmenter.segment(&source, TextFormat::Code),
+                crate::rust_segment::segment(&segmenter, &source),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for segment in segments {
+                    let title = segment_title(stem, segment.heading.as_deref());
+                    sizes[index].push(segment.text.len());
+                    body_bytes[index] += segment.text.len();
+                    input_bytes[index] +=
+                        segment.text.len() + title.as_ref().map_or(0, String::len);
+                }
+            }
+            files += 1;
+        }
+        let mut metrics = Vec::new();
+        for (index, chunks) in sizes.iter_mut().enumerate() {
+            chunks.sort_unstable();
+            assert!(!chunks.is_empty());
+            let middle = chunks.len() / 2;
+            let median = if chunks.len().is_multiple_of(2) {
+                (chunks[middle - 1] + chunks[middle]) as f64 / 2.0
+            } else {
+                chunks[middle] as f64
+            };
+            metrics.push(serde_json::json!({"mode": (["legacy", "symbols"][index]), "segments": chunks.len(), "body_bytes": body_bytes[index], "title_and_body_bytes": input_bytes[index], "median_chunk_bytes": median}));
+        }
+        eprintln!(
+            "RUST_CORPUS_VOLUME {}",
+            serde_json::json!({"files": files, "metrics": metrics})
+        );
+    }
+
     #[cfg(feature = "pdf")]
     #[test]
     fn clean_pdf_replacement_is_reused_without_stale_diagnostic_skips() {
@@ -3677,7 +3897,7 @@ mod pre_split_golden {
                 version: ResourceVersion::unknown(),
                 title: title.map(String::from),
             };
-            let (jobs, _) = engine.prepare(&resource, bytes.to_vec()).unwrap();
+            let jobs = engine.prepare(&resource, bytes.to_vec()).unwrap().jobs;
             assert_eq!(jobs.len(), 1);
             assert_eq!(
                 jobs[0].segment.input_hash,

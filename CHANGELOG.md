@@ -11,6 +11,10 @@ Before 1.0, a minor release (0.x) may contain breaking changes. They are marked
 
 ## [Unreleased]
 
+### Added
+
+- Rust symbol-aware source chunks with function and container headings. ([#126](https://github.com/CertaMesh/seyk/pull/126))
+
 ## [0.2.0] - 2026-10-29
 
 ### Added

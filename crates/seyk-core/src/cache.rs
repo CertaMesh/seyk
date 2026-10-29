@@ -161,6 +161,12 @@ impl CacheCleanup {
 /// Unstable: exposes ResourceVersion and CachedResourceState, which may change
 /// before 1.0; filesystem is the only supported production provider.
 pub trait EmbeddingCache: Send {
+    /// Optional directory for parser crash markers, outside database transactions.
+    /// Persistent caches should return a private directory owned by this cache.
+    fn parser_state_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// Erase stale FTS postings and historical WAL frames. Busy readers leave work pending.
     fn scrub(&mut self) -> Result<CacheCleanup> {
         Ok(CacheCleanup::default())
@@ -545,7 +551,13 @@ fn lexical_docs(path: &ResourceId, resource: &ResourceWrite<'_>) -> Vec<LexicalD
     resource
         .segments
         .iter()
-        .map(|s| LexicalDoc::new(&name, &full, s.segment.heading.as_deref(), s.lexical_body))
+        .map(|s| {
+            let heading = crate::rust_segment::lexical_heading(
+                path,
+                s.segment.heading.as_deref().unwrap_or(""),
+            );
+            LexicalDoc::new(&name, &full, Some(&heading), s.lexical_body)
+        })
         .collect()
 }
 
@@ -1190,6 +1202,12 @@ fn json_err(e: serde_json::Error) -> Error {
 }
 
 impl EmbeddingCache for SqliteCache {
+    fn parser_state_dir(&self) -> Option<PathBuf> {
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(".rust-parser");
+        Some(path.into())
+    }
+
     fn scrub(&mut self) -> Result<CacheCleanup> {
         self.run_scrub()
     }
@@ -1394,7 +1412,10 @@ impl EmbeddingCache for SqliteCache {
                     tx.last_insert_rowid(),
                     name,
                     full,
-                    order_free_text(s.segment.heading.as_deref().unwrap_or("")),
+                    order_free_text(&crate::rust_segment::lexical_heading(
+                        path,
+                        s.segment.heading.as_deref().unwrap_or(""),
+                    )),
                     order_free_text(s.lexical_body)
                 ])?;
             }
@@ -1772,6 +1793,13 @@ impl EmbeddingCache for SqliteCache {
         tx.execute_batch("INSERT OR IGNORE INTO meta VALUES('compact_pending','1');")?;
         mark_cleanup(&tx, None)?;
         tx.commit()?;
+        if let Some(directory) = self.parser_state_dir() {
+            match std::fs::remove_dir_all(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::io(&directory, error)),
+            }
+        }
         if self.run_scrub()?.pending {
             return Err(Error::CacheCleanupPending);
         }

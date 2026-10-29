@@ -3154,17 +3154,20 @@ dependencies = [
  "libc",
  "notify",
  "pdf-extract",
+ "proc-macro2",
  "rusqlite",
  "serde",
  "serde_json",
  "seyk-core",
  "seyk-embed",
  "symphonia",
+ "syn 3.0.6",
  "tempfile",
  "thiserror",
  "unicode-normalization",
  "url",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

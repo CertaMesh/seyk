@@ -131,6 +131,78 @@ re-indexing) and `pdf-render` (PDF text and page rendering). A library user
 who only wants the engine with their own embedder can use
 `default-features = false` and opt into `audio` or `audio-stt` separately.
 
+## Rust source segmentation
+
+The engine uses Rust item boundaries for local `.rs` resources classified as
+code. Functions carry labels such as `mod worker > impl Endpoint > fn new`.
+Trait implementations include the trait, for example `impl Display for Foo > fn fmt`.
+Modules, impls, traits and extern blocks are decomposed even when short.
+Container headers attach to their first child and closing braces to their last
+child when the combined slice fits the byte limit. Plain comment runs directly
+before an item attach to that item; gap and chunk edges are trimmed.
+Consecutive sibling items smaller than `min_chars` may share a chunk within
+one container; that chunk carries the container label. Longer functions split
+at line boundaries when possible, and every piece retains the function label.
+Labels contain source identifiers, without name resolution or macro expansion.
+
+Every chunk is an original UTF-8 source slice with exact byte and line ranges.
+Rust chunks have no overlap and respect `max_chars`, including gaps. A budget
+smaller than one UTF-8 scalar consumes that scalar to ensure progress. The
+embedding title and hit heading keep the full label; the lexical heading field
+contains identifiers only. Extraction still verifies the whole-resource hash.
+
+Parsing is best effort. Invalid syntax, opaque macro bodies and unrecognized
+items use bounded chunks without a heading. Python, TypeScript and Go retain
+paragraph segmentation. The public `TextSegmenter::segment` method also retains
+its existing language-unspecified behavior, including for `TextFormat::Code`.
+Its `version()` identifies that legacy path. The engine versions Rust preparation
+separately as `rust-symbols-v3`, without changing the cache schema or profile.
+Changing the pinned parser or Rust preparation policy requires a new preparation
+version, which also retries resources with older crash markers.
+
+The first sync reparses Rust resources, retaining vectors only for byte-identical
+model inputs under the same profile. Cached searches can serve the previous
+valid chunks until sync replaces them atomically. After a binary downgrade, the
+older binary can likewise serve the newer chunks until its own sync. Vector
+input hashes and extraction checks remain in force in both directions.
+
+Rust parsing uses pinned `syn` and `proc-macro2` with `span-locations`. Cargo
+unifies that feature for library users too. Procedural macros continue to use
+compiler-provided spans. Each engine parse runs on a short-lived thread with
+an 8 MiB stack, releasing its source map at thread exit without changing the
+caller's spans. Files larger than 1 MiB skip parsing. A conservative preflight
+also skips delimiter nesting, prefix-operator runs or closure-bar runs beyond
+128. It counts source bytes, including strings and comments, so some valid
+files use fallback. These limits bound parser input and stack reservation;
+they do not establish a fixed bound for all AST allocations.
+
+An ordinary parser panic uses stable heading-free fallback. Thread creation
+failure uses retryable fallback, so the next sync retries parsing.
+A hostile file can still overflow the parser stack and abort the process once.
+SQLite caches append `.rust-parser` to the complete database filename for a
+private marker directory. Markers bind the preparation version, resource path
+and source content hash, and record the owner's PID and process start identity.
+PID reuse therefore does not make an old marker live. Directory permissions are
+set once on lazy initialization; parsing does not fsync each file.
+
+An empty or malformed marker records an interrupted write and counts as dead.
+A failed marker write removes the incomplete marker. If process creation identity
+is unavailable, parsing still runs with a PID-only marker; readers treat that
+owner as unknown and retry safely.
+
+A marker with a confirmed dead owner selects heading-free fallback for those
+exact bytes. That fallback can remain cached until the file changes, the
+preparation version changes or the cache is cleared. An edited file gets a new
+marker key and retries symbols. A live owner, unreadable ownership state or an
+unavailable marker directory selects fallback under a separate retry descriptor.
+The chunks remain searchable, and the next sync retries symbol preparation.
+Seyk emits at most one generic parser-recovery warning per engine, regardless of
+how many resources need fallback. `SqliteCache::clear` removes its marker directory.
+Custom persistent caches can supply `EmbeddingCache::parser_state_dir`; the
+in-memory cache has no restart recovery state. Sharing a cache across containers
+or PID namespaces is unsupported for parser crash recovery: process identities
+must be visible in the same namespace.
+
 ## PDF parser logs and panics
 
 Library integrations that install a `log` logger **must filter `pdf_extract`,
