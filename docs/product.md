@@ -106,13 +106,14 @@ Treat it as sensitive. See [Caching and storage](caching-and-storage.md).
 | Check before returning text | Holds for extraction of text, PDF text and audio samples, with the scope described above. |
 | Search and extraction stay separate | Holds. A hit exists without extraction; expensive extraction runs on demand. |
 | Explicit trait seams, concrete implementations for current needs | Holds. Providers, extractors, embedders, caches and the vector index are traits, each with implementations Seyk actually uses. |
-| Predictable resource use | **Not yet.** Indexing dense files can use several GB of memory ([#95](https://github.com/CertaMesh/seyk/pull/95)). |
+| Predictable resource use | Partly. Batch token budgets cut peak indexing memory on the benchmark corpus to about 2.8 GB ([#95](https://github.com/CertaMesh/seyk/pull/95)), but there is no documented bound for other corpora yet. |
 | Stable interfaces | Partly. CLI and MCP JSON carry a `schema_version`, and extraction accepts older versions. The Rust API can change before 1.0. |
 
 ## Status
 
-Seyk is at 0.1.0. Install from source; prebuilt binaries return with the next
-release. The crates are not on crates.io yet. Video and OCR are not
+Seyk is at 0.2.0. Prebuilt binaries are on the
+[release page](https://github.com/CertaMesh/seyk/releases/tag/v0.2.0), and the
+crates are on crates.io. Video and OCR are not
 implemented. Vector search is an exact comparison against every cached f32
 vector by default. An experimental, opt-in Photo Anchor scan for standalone
 images shortlists candidates from compressed codes and reranks them with f32;

@@ -1,15 +1,16 @@
 # Standalone embeddings and API migration
 
-Seyk's embedding layer works without search. The crates are not
-on crates.io yet; all workspace packages currently have version `0.1.0`.
+Seyk's embedding layer works without search. The crates are on crates.io;
+all workspace packages currently have version `0.2.0`.
 
 ```toml
 [dependencies]
-seyk-embed = { git = "https://github.com/CertaMesh/seyk" }
-seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk" }
+seyk-embed = "0.2"
+seyk-embeddinggemma = "0.2"
 ```
 
-For reproducible applications, pin both dependencies to the same Git `rev`.
+Keep both dependencies on the same version, and commit `Cargo.lock` for
+reproducible applications.
 `seyk-embed` owns the model-independent interface. `seyk-embeddinggemma` implements
 it using synchronous local ONNX CPU inference. Neither depends on Seyk search.
 There is no network access during model loading or embedding. Async applications
@@ -154,7 +155,7 @@ it does not establish a general RAM budget, a leak, or a speed change.
 For images, opt into preprocessing and provision the vision weights:
 
 ```toml
-seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk", features = ["image"] }
+seyk-embeddinggemma = { version = "0.2", features = ["image"] }
 ```
 
 The backend has two optional features, `image` and `audio` (audio is described above). Without `image` the default is text
@@ -207,11 +208,11 @@ SQLite, resource discovery or agent integration.
 `use seyk::SearchEngine` and search module paths remain supported. The root
 `seyk` package is the compatibility facade and CLI/MCP composition package.
 There is no separate `seyk-cli` crate because keeping the root package preserves
-`use seyk::SearchEngine`, `cargo install --git https://github.com/CertaMesh/seyk seyk`,
+`use seyk::SearchEngine`, `cargo install --locked seyk`,
 the release `--bin seyk` path and the existing install script.
 `seyk::embedder::gemma::{GemmaConfig, GemmaEmbedder, ...}` remains available under
 `onnx`; `GemmaEmbedder` is an alias for `EmbeddingGemma2`. Source installation
-still uses `cargo install --locked --git https://github.com/CertaMesh/seyk seyk`.
+uses `cargo install --locked --git https://github.com/CertaMesh/seyk seyk`.
 The binary remains `seyk`, and the existing command without the package name
 still resolves the repository's only binary package.
 

@@ -3,11 +3,11 @@
 Seyk is a Rust library first. The `seyk` CLI is a thin layer over it, so other
 applications can embed the same engine.
 
-The crates are **not on crates.io yet**. Use a Git dependency:
+The crates are on crates.io. Add the library:
 
 ```toml
 [dependencies]
-seyk = { git = "https://github.com/CertaMesh/seyk" }
+seyk = "0.2"
 ```
 
 ## Use Seyk as a search engine
@@ -220,12 +220,12 @@ aborts, out-of-memory failures, hangs or hostile allocation behaviour.
 
 ## Use only the EmbeddingGemma 2 backend
 
-The crates are **not on crates.io yet**. Use Git dependencies:
+Add only the embedding crates:
 
 ```toml
 [dependencies]
-seyk-embed = { git = "https://github.com/CertaMesh/seyk" }
-seyk-embeddinggemma = { git = "https://github.com/CertaMesh/seyk" }
+seyk-embed = "0.2"
+seyk-embeddinggemma = "0.2"
 ```
 
 ```rust

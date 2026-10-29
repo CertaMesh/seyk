@@ -11,7 +11,7 @@ The separate model weights are not bundled in this crate.
 
 ```toml
 [dependencies]
-seyk-embeddinggemma = "0.1.0"
+seyk-embeddinggemma = "0.2.0"
 ```
 
 [API documentation](https://docs.rs/seyk-embeddinggemma) ·
